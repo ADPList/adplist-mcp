@@ -1,6 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "adplist-mcp",
+	"name": "remote-mcp-server",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-03-10",
 	"compatibility_flags": [
@@ -8,10 +8,19 @@
 	],
 	"migrations": [
 		{
+			"tag": "v1",
 			"new_sqlite_classes": [
-				"AdplistMcp"
-			],
-			"tag": "v1"
+				"MyMCP"
+			]
+		},
+		{
+			"tag": "v2",
+			"renamed_classes": [
+				{
+					"from": "MyMCP",
+					"to": "AdplistMcp"
+				}
+			]
 		}
 	],
 	"durable_objects": {
