@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"scripts": {
-		"deploy": "wrangler deploy",
+		"deploy": "node scripts/deploy.mjs",
 		"dev": "wrangler dev",
 		"format": "oxfmt --write .",
 		"start": "wrangler dev",
