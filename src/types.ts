@@ -25,6 +25,11 @@ export type StoredOAuthRequest = {
 	createdAt: number;
 };
 
+export type PendingConsent = StoredOAuthRequest & {
+	tokens: CognitoTokenResponse;
+	userInfo: CognitoUserInfo;
+};
+
 export type McpUserProps = {
 	userId: string;
 	email: string | null;

@@ -26,3 +26,11 @@ test("Cognito auth uses authorization-code flow", () => {
 	assert.match(cognitoSource, /\/oauth2\/token/);
 	assert.match(cognitoSource, /\/oauth2\/userInfo/);
 });
+
+const appSource = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8");
+
+test("Cognito callback requires explicit user consent before completing MCP authorization", () => {
+	assert.match(appSource, /oauth_consent:/);
+	assert.match(appSource, /app\.post\("\/oauth\/consent"/);
+	assert.match(appSource, /completeAuthorization/);
+});
