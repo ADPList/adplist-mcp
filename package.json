@@ -9,7 +9,8 @@
 		"start": "wrangler dev",
 		"cf-typegen": "wrangler types",
 		"type-check": "tsc --noEmit",
-		"test": "node --test"
+		"test": "node --test",
+		"deploy:live": "ALLOW_WORKER_DEPLOY=1 node scripts/deploy.mjs"
 	},
 	"dependencies": {
 		"@cloudflare/workers-oauth-provider": "^0.4.0",
