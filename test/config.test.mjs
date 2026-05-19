@@ -6,12 +6,13 @@ const configSource = readFileSync(new URL("../src/config.ts", import.meta.url), 
 const cognitoSource = readFileSync(new URL("../src/cognito.ts", import.meta.url), "utf8");
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 
-test("M1 exposes OAuth and SSE routes without demo tool code", () => {
+const appSource = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8");
+
+test("MCP exposes OAuth and SSE routes", () => {
 	assert.match(indexSource, /authorizeEndpoint:\s*"\/oauth\/authorize"/);
 	assert.match(indexSource, /tokenEndpoint:\s*"\/oauth\/token"/);
 	assert.match(indexSource, /clientRegistrationEndpoint:\s*"\/oauth\/register"/);
 	assert.match(indexSource, /apiRoute:\s*"\/sse"/);
-	assert.doesNotMatch(indexSource, /server\.tool\(/);
 });
 
 test("Cognito callback defaults to the Worker origin", () => {
@@ -19,15 +20,15 @@ test("Cognito callback defaults to the Worker origin", () => {
 	assert.match(configSource, /\/oauth\/callback/);
 });
 
-test("Cognito auth uses authorization-code flow", () => {
+test("Cognito auth uses authorization-code flow with PKCE fallback for public clients", () => {
 	assert.match(cognitoSource, /response_type", "code"/);
 	assert.match(cognitoSource, /grant_type:\s*"authorization_code"/);
+	assert.match(cognitoSource, /code_challenge_method", "S256"/);
+	assert.match(cognitoSource, /code_verifier/);
 	assert.match(cognitoSource, /\/oauth2\/authorize/);
 	assert.match(cognitoSource, /\/oauth2\/token/);
 	assert.match(cognitoSource, /\/oauth2\/userInfo/);
 });
-
-const appSource = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8");
 
 test("Cognito callback requires explicit user consent before completing MCP authorization", () => {
 	assert.match(appSource, /oauth_consent:/);
