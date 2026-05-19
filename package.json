@@ -2,6 +2,7 @@
 	"name": "adplist-mcp",
 	"version": "0.0.0",
 	"private": true,
+	"description": "ADPList remote MCP server",
 	"scripts": {
 		"deploy": "node scripts/deploy.mjs",
 		"dev": "wrangler dev",
@@ -16,7 +17,8 @@
 		"@cloudflare/workers-oauth-provider": "^0.4.0",
 		"@modelcontextprotocol/sdk": "^1.29.0",
 		"agents": "^0.9.0",
-		"hono": "^4.12.9"
+		"hono": "^4.12.9",
+		"zod": "^4.4.3"
 	},
 	"devDependencies": {
 		"@types/node": "^25.9.0",
@@ -24,6 +26,5 @@
 		"oxlint": "^1.58.0",
 		"typescript": "6.0.2",
 		"wrangler": "^4.79.0"
-	},
-	"description": "ADPList remote MCP server"
+	}
 }

@@ -85,6 +85,7 @@ app.post("/oauth/consent", async (c) => {
 		email,
 		scopes: [...MCP_SCOPES],
 		cognitoRefreshTokenKey: tokens.refresh_token ? refreshTokenKey : undefined,
+		cognitoAccessToken: tokens.access_token,
 	};
 
 	const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({

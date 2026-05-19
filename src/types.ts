@@ -35,4 +35,5 @@ export type McpUserProps = {
 	email: string | null;
 	scopes: string[];
 	cognitoRefreshTokenKey?: string;
+	cognitoAccessToken?: string;
 };

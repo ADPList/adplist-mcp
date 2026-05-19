@@ -6,12 +6,11 @@ const configSource = readFileSync(new URL("../src/config.ts", import.meta.url), 
 const cognitoSource = readFileSync(new URL("../src/cognito.ts", import.meta.url), "utf8");
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 
-test("M1 exposes OAuth and SSE routes without demo tool code", () => {
+test("MCP exposes OAuth and SSE routes", () => {
 	assert.match(indexSource, /authorizeEndpoint:\s*"\/oauth\/authorize"/);
 	assert.match(indexSource, /tokenEndpoint:\s*"\/oauth\/token"/);
 	assert.match(indexSource, /clientRegistrationEndpoint:\s*"\/oauth\/register"/);
 	assert.match(indexSource, /apiRoute:\s*"\/sse"/);
-	assert.doesNotMatch(indexSource, /server\.tool\(/);
 });
 
 test("Cognito callback defaults to the Worker origin", () => {
