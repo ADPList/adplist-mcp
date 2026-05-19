@@ -23,6 +23,7 @@ export type CognitoUserInfo = {
 export type StoredOAuthRequest = {
 	oauthReqInfo: Awaited<ReturnType<OAuthHelpers["parseAuthRequest"]>>;
 	createdAt: number;
+	pkceVerifier?: string;
 };
 
 export type PendingConsent = StoredOAuthRequest & {

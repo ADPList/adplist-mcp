@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { html } from "hono/html";
 import { MCP_SCOPES } from "./config";
-import { buildCognitoAuthorizeUrl, exchangeCognitoCode, fetchCognitoUserInfo } from "./cognito";
+import { buildCognitoAuthorizeUrl, createPkceVerifier, exchangeCognitoCode, fetchCognitoUserInfo } from "./cognito";
 import type { Bindings, McpUserProps, PendingConsent, StoredOAuthRequest } from "./types";
 
 const OAUTH_STATE_TTL_SECONDS = 10 * 60;
@@ -15,13 +15,14 @@ app.get("/health", (c) => c.json({ ok: true }));
 app.get("/oauth/authorize", async (c) => {
 	const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);
 	const state = crypto.randomUUID();
-	const storedRequest: StoredOAuthRequest = { oauthReqInfo, createdAt: Date.now() };
+	const pkceVerifier = createPkceVerifier();
+	const storedRequest: StoredOAuthRequest = { oauthReqInfo, createdAt: Date.now(), pkceVerifier };
 
 	await c.env.OAUTH_KV.put(`oauth_state:${state}`, JSON.stringify(storedRequest), {
 		expirationTtl: OAUTH_STATE_TTL_SECONDS,
 	});
 
-	return c.redirect(buildCognitoAuthorizeUrl(c.env, c.req.url, state), 302);
+	return c.redirect(await buildCognitoAuthorizeUrl(c.env, c.req.url, state, pkceVerifier), 302);
 });
 
 app.get("/oauth/callback", async (c) => {
@@ -38,7 +39,7 @@ app.get("/oauth/callback", async (c) => {
 	await c.env.OAUTH_KV.delete(`oauth_state:${state}`);
 
 	const storedRequest = JSON.parse(storedValue) as StoredOAuthRequest;
-	const tokens = await exchangeCognitoCode(c.env, c.req.url, code);
+	const tokens = await exchangeCognitoCode(c.env, c.req.url, code, storedRequest.pkceVerifier);
 	const userInfo = await fetchCognitoUserInfo(c.env, tokens.access_token);
 	const consentId = crypto.randomUUID();
 	const pendingConsent: PendingConsent = { ...storedRequest, tokens, userInfo };
