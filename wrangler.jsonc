@@ -6,27 +6,10 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
-	"migrations": [
-		{
-			"tag": "v1",
-			"new_sqlite_classes": [
-				"MyMCP"
-			]
-		},
-		{
-			"tag": "v2",
-			"renamed_classes": [
-				{
-					"from": "MyMCP",
-					"to": "AdplistMcp"
-				}
-			]
-		}
-	],
 	"durable_objects": {
 		"bindings": [
 			{
-				"class_name": "AdplistMcp",
+				"class_name": "MyMCP",
 				"name": "MCP_OBJECT"
 			}
 		]

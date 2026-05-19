@@ -5,7 +5,7 @@ import app from "./app";
 import { MCP_SCOPES } from "./config";
 import type { McpUserProps } from "./types";
 
-export class AdplistMcp extends McpAgent<Env, unknown, McpUserProps> {
+export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 	server = new McpServer({
 		name: "adplist-mcp",
 		version: "0.1.0",
@@ -18,7 +18,7 @@ export class AdplistMcp extends McpAgent<Env, unknown, McpUserProps> {
 
 export default new OAuthProvider({
 	apiRoute: "/sse",
-	apiHandler: AdplistMcp.serveSSE("/sse"),
+	apiHandler: MyMCP.serveSSE("/sse"),
 	defaultHandler: app,
 	authorizeEndpoint: "/oauth/authorize",
 	tokenEndpoint: "/oauth/token",
