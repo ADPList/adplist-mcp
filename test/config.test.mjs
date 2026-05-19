@@ -6,6 +6,8 @@ const configSource = readFileSync(new URL("../src/config.ts", import.meta.url), 
 const cognitoSource = readFileSync(new URL("../src/cognito.ts", import.meta.url), "utf8");
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 
+const appSource = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8");
+
 test("MCP exposes OAuth and SSE routes", () => {
 	assert.match(indexSource, /authorizeEndpoint:\s*"\/oauth\/authorize"/);
 	assert.match(indexSource, /tokenEndpoint:\s*"\/oauth\/token"/);
@@ -27,8 +29,6 @@ test("Cognito auth uses authorization-code flow with PKCE fallback for public cl
 	assert.match(cognitoSource, /\/oauth2\/token/);
 	assert.match(cognitoSource, /\/oauth2\/userInfo/);
 });
-
-const appSource = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8");
 
 test("Cognito callback requires explicit user consent before completing MCP authorization", () => {
 	assert.match(appSource, /oauth_consent:/);
