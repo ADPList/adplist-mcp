@@ -146,6 +146,45 @@ test("bookSession refreshes availability and posts source mcp plus queryID", asy
 	}
 });
 
+test("bookSession validates against full availability even when list output would truncate", async () => {
+	const calls = [];
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (url, init = {}) => {
+		calls.push({ url: String(url), init });
+		if (String(url).includes("/availability/")) {
+			return Response.json({
+				timezone: "UTC",
+				sessions: [
+					{
+						sessionId: "dense-session",
+						slots: Array.from({ length: 25 }, (_, index) => ({
+							startEpoch: 1_700_000_000 + index * 1_800,
+							endEpoch: 1_700_001_800 + index * 1_800,
+						})),
+					},
+				],
+			});
+		}
+		return Response.json({ meetingId: "meeting-25", status: "AWAITING_CONFIRMATION" });
+	};
+	try {
+		const result = await bookSession(
+			{ MEETINGS_SERVICE_URL: "https://meetings.example" },
+			{ userId: "u1", email: null, scopes: [], cognitoAccessToken: "token" },
+			{
+				mentor_slug: "mentor",
+				slot_iso: new Date((1_700_000_000 + 24 * 1_800) * 1000).toISOString(),
+				note: "Help",
+			},
+		);
+		assert.equal(result.session_id, "meeting-25");
+		const createCall = calls.find((call) => call.init.method === "POST");
+		assert.equal(JSON.parse(createCall.init.body).sessionId, "dense-session");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("bookSession refuses stale slots before creating a booking", async () => {
 	const originalFetch = globalThis.fetch;
 	let postCount = 0;

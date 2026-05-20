@@ -116,21 +116,8 @@ export async function listAvailability(
 	props: McpUserProps | undefined,
 	input: ListAvailabilityInput,
 ): Promise<ListAvailabilityOutput> {
-	const baseUrl = env.MEETINGS_SERVICE_URL;
-	if (!baseUrl) throw new Error("MEETINGS_SERVICE_URL is not configured");
-
-	const response = await fetch(buildAvailabilityUrl(baseUrl, input.mentor_slug, input.days), {
-		headers: buildHeaders(props),
-	});
-
-	if (!response.ok) {
-		throw new Error(`meetings-service availability returned HTTP ${response.status}`);
-	}
-
-	return mapAvailabilityResponse(
-		input.mentor_slug,
-		(await response.json()) as AvailabilityResponse,
-	);
+	const response = await fetchAvailability(env, props, input);
+	return mapAvailabilityResponse(input.mentor_slug, response);
 }
 
 export async function bookSession(
@@ -187,19 +174,43 @@ async function findSessionIdForSlot(
 	slotIso: string,
 ): Promise<string> {
 	const targetEpoch = Math.floor(new Date(slotIso).getTime() / 1000);
-	const availability = await listAvailability(env, props, {
+	const availability = await fetchAvailability(env, props, {
 		mentor_slug: mentorSlug,
 		days: MAX_DAYS,
 	});
-	const exactSlot = availability.slots.find(
-		(slot) => slot.slot_iso === new Date(targetEpoch * 1000).toISOString(),
-	);
+	const exactSlot = (availability.sessions ?? [])
+		.flatMap((session) => (session.slots ?? []).map((slot) => ({ session, slot })))
+		.find(
+			({ session, slot }) =>
+				session.sessionId &&
+				isFiniteEpoch(slot.startEpoch) &&
+				Number(slot.startEpoch) === targetEpoch,
+		);
 	if (!exactSlot) {
 		throw new Error(
 			"Selected slot is no longer available. Ask the user to choose a fresh slot from list_availability.",
 		);
 	}
-	return exactSlot.session_id;
+	return exactSlot.session.sessionId!;
+}
+
+async function fetchAvailability(
+	env: Env,
+	props: McpUserProps | undefined,
+	input: ListAvailabilityInput,
+): Promise<AvailabilityResponse> {
+	const baseUrl = env.MEETINGS_SERVICE_URL;
+	if (!baseUrl) throw new Error("MEETINGS_SERVICE_URL is not configured");
+
+	const response = await fetch(buildAvailabilityUrl(baseUrl, input.mentor_slug, input.days), {
+		headers: buildHeaders(props),
+	});
+
+	if (!response.ok) {
+		throw new Error(`meetings-service availability returned HTTP ${response.status}`);
+	}
+
+	return (await response.json()) as AvailabilityResponse;
 }
 
 function buildHeaders(props: McpUserProps | undefined): HeadersInit {
