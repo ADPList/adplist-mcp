@@ -7,6 +7,7 @@ import { MCP_SCOPES } from "./config";
 import { bookSession, listAvailability } from "./booking";
 import { manageMyContext } from "./profile";
 import { searchMentors } from "./searchMentors";
+import { cancelSession, listMySessions } from "./sessions";
 import type { McpUserProps } from "./types";
 
 export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
@@ -130,6 +131,57 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			},
 			async (input) => {
 				const result = await bookSession(this.env, this.props, input);
+				return { content: [{ type: "text", text: JSON.stringify(result) }] };
+			},
+		);
+
+		this.server.registerTool(
+			"list_my_sessions",
+			{
+				description:
+					"List the authenticated user's ADPList mentorship sessions. Defaults to upcoming sessions to keep chat context compact. Use scope: 'past' only when the user asks for previous sessions, and scope: 'all' only when they explicitly ask for everything. Returns a trimmed list with mentor, time, duration, status, source, and dashboard URL.",
+				inputSchema: {
+					scope: z
+						.enum(["upcoming", "past", "all"])
+						.optional()
+						.describe("Defaults to upcoming."),
+					limit: z
+						.number()
+						.int()
+						.min(1)
+						.max(50)
+						.optional()
+						.describe("Defaults to 20; max 50."),
+				},
+			},
+			async (input) => {
+				const result = await listMySessions(this.env, this.props, input);
+				return { content: [{ type: "text", text: JSON.stringify(result) }] };
+			},
+		);
+
+		this.server.registerTool(
+			"cancel_session",
+			{
+				description:
+					"Cancel an ADPList mentorship session for the authenticated user. IMPORTANT: This changes the user's booking and notifies the mentor. Before calling this tool, always confirm the exact session, mentor, and scheduled time with the user in chat (for example: 'Just to confirm, cancel your Tuesday 3 PM session with Sarah? Mentors get notified.'). Pass an optional reason string so the mentor knows why. If the user asks to reschedule, call cancel_session only after confirmation, then use list_availability and book_session for the new slot; there is no native reschedule_session tool in v1.",
+				inputSchema: {
+					session_id: z
+						.string()
+						.trim()
+						.min(1)
+						.describe("Session ID returned by list_my_sessions or book_session."),
+					reason: z
+						.string()
+						.trim()
+						.min(1)
+						.max(1000)
+						.optional()
+						.describe("Optional cancellation reason to share with the mentor."),
+				},
+			},
+			async (input) => {
+				const result = await cancelSession(this.env, this.props, input);
 				return { content: [{ type: "text", text: JSON.stringify(result) }] };
 			},
 		);
