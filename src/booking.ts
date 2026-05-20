@@ -56,6 +56,7 @@ export type BookSessionOutput = {
 	status: "requested" | "confirmed";
 	session_id: string;
 	session_url: string;
+	expected_confirmation_time: string;
 };
 
 const DEFAULT_DAYS = 14;
@@ -168,10 +169,14 @@ export async function bookSession(
 		throw new Error("meetings-service booking response did not include meetingId");
 	if (created.checkoutUrl) throw new Error("Paid sessions are out of scope for ADPList MCP v1");
 
+	const status =
+		created.autoAccepted || created.status === "CONFIRMED" ? "confirmed" : "requested";
 	return {
-		status: created.autoAccepted || created.status === "CONFIRMED" ? "confirmed" : "requested",
+		status,
 		session_id: created.meetingId,
 		session_url: `https://adplist.org/meetings/${created.meetingId}`,
+		expected_confirmation_time:
+			status === "confirmed" ? "confirmed immediately" : "typically within 24 hours",
 	};
 }
 
