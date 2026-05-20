@@ -124,7 +124,7 @@ export async function searchMentors(
 	const baseUrl = env.SEARCH_SERVICE_URL;
 	if (!baseUrl) throw new Error("SEARCH_SERVICE_URL is not configured");
 
-	const profileText = await getProfileTextForSearch(env, props);
+	const profileText = await getProfileTextForSearch(env, props).catch(() => "");
 	const searchInput = {
 		...input,
 		intent: combineIntentWithProfile(input.intent, profileText),
