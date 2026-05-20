@@ -20,6 +20,13 @@
 			"id": "cf4e12c1471a4be59dd1cf6c1f7f6de3"
 		}
 	],
+	"d1_databases": [
+		{
+			"binding": "PROFILE_DB",
+			"database_name": "adplist-mcp-profile",
+			"database_id": "bf3eddaf-3e63-4b26-8008-9ee111a010ea"
+		}
+	],
 	"observability": {
 		"enabled": true
 	},

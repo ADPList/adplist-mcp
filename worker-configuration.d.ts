@@ -3,6 +3,7 @@
 // Runtime types generated with workerd@1.20260515.1 2025-03-10 nodejs_compat
 interface __BaseEnv_Env {
 	OAUTH_KV: KVNamespace;
+	PROFILE_DB: D1Database;
 	COGNITO_DOMAIN: string;
 	COGNITO_CLIENT_ID: string;
 	COGNITO_SCOPES: string;
