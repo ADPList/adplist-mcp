@@ -19,6 +19,8 @@ Set these before deploying from CI/reviewed release flow:
 - `COGNITO_CLIENT_SECRET` — optional if the Cognito app client is public/PKCE-only
 - `COGNITO_REDIRECT_URI` — optional; defaults to `<worker-origin>/oauth/callback`
 - `COGNITO_SCOPES` — optional; defaults to `openid email profile`
+- `SEARCH_SERVICE_URL` — search-service base URL for `search_mentors`
+- `MEETINGS_SERVICE_URL` — meetings-service base URL for `list_availability` and `book_session`
 - `OAUTH_KV` KV namespace binding
 - `MCP_OBJECT` Durable Object binding
 
