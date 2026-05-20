@@ -74,6 +74,21 @@ test("mapMeetingToSession trims full meeting shape into M4 response", () => {
 	});
 });
 
+test("mapMeetingToSession uses the current active instance for rescheduled meetings", () => {
+	const result = mapMeetingToSession({
+		meetingId: "meeting-1",
+		status: "CONFIRMED",
+		initialStartDateTime: 1_700_000_000,
+		mentor: { fullName: "Sarah Mentor", slug: "sarah" },
+		session: { duration: 30 },
+		meetingInstances: [
+			{ scheduledDate: 1_700_000_000, status: "RESCHEDULED" },
+			{ scheduledDate: 1_700_086_400, status: "CONFIRMED" },
+		],
+	});
+	assert.equal(result.scheduled_at_iso, "2023-11-15T22:13:20.000Z");
+});
+
 test("listMySessions passes Cognito bearer and returns compact sessions", async () => {
 	const calls = [];
 	const originalFetch = globalThis.fetch;

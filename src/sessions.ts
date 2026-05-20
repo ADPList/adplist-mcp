@@ -177,11 +177,25 @@ export function mapMeetingToSession(meeting: MeetingRecord): MySession {
 }
 
 function getScheduledEpoch(meeting: MeetingRecord): number {
-	const instanceEpochs = (meeting.meetingInstances ?? [])
-		.map((instance) => instance.scheduledDate)
-		.filter(isFiniteNumber)
-		.sort((a, b) => a - b);
-	return instanceEpochs[0] ?? meeting.initialStartDateTime ?? meeting.createdAt ?? 0;
+	const instances = (meeting.meetingInstances ?? [])
+		.filter((instance) => isFiniteNumber(instance.scheduledDate))
+		.sort((a, b) => Number(a.scheduledDate) - Number(b.scheduledDate));
+	const currentInstance = instances.find((instance) => isCurrentInstanceStatus(instance.status));
+	return (
+		currentInstance?.scheduledDate ??
+		instances[0]?.scheduledDate ??
+		meeting.initialStartDateTime ??
+		meeting.createdAt ??
+		0
+	);
+}
+
+function isCurrentInstanceStatus(status: string | undefined): boolean {
+	return (
+		status === "AWAITING_CONFIRMATION" ||
+		status === "CONFIRMED" ||
+		status === "AWAITING_PAYMENT"
+	);
 }
 
 function mapMeetingStatus(status: MeetingStatus | undefined): MySession["status"] {
