@@ -1,3 +1,4 @@
+import { combineIntentWithProfile, getProfileTextForSearch } from "./profile";
 import type { McpUserProps } from "./types";
 
 export type SearchMentorsFilters = {
@@ -123,7 +124,13 @@ export async function searchMentors(
 	const baseUrl = env.SEARCH_SERVICE_URL;
 	if (!baseUrl) throw new Error("SEARCH_SERVICE_URL is not configured");
 
-	const response = await fetch(buildSearchMentorsUrl(baseUrl, input), {
+	const profileText = await getProfileTextForSearch(env, props).catch(() => "");
+	const searchInput = {
+		...input,
+		intent: combineIntentWithProfile(input.intent, profileText),
+	};
+
+	const response = await fetch(buildSearchMentorsUrl(baseUrl, searchInput), {
 		headers: {
 			Accept: "application/json",
 			...(props?.cognitoAccessToken

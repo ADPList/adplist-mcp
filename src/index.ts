@@ -4,6 +4,7 @@ import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 import app from "./app";
 import { MCP_SCOPES } from "./config";
+import { manageMyContext } from "./profile";
 import { searchMentors } from "./searchMentors";
 import type { McpUserProps } from "./types";
 
@@ -14,6 +15,25 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 	});
 
 	async init() {
+		this.server.registerTool(
+			"manage_my_context",
+			{
+				description:
+					"Read, update, or clear the user's stored career context on ADPList. This profile persists across sessions and improves mentor recommendations. Call with no arguments to show the user what's currently stored. Call with action: 'merge' and an updates object when the user explicitly asks you to remember something about their career (role, focus area, skills they want to develop, etc.). Call with action: 'clear' when they ask to forget everything. Do not proactively store things the user did not explicitly ask you to remember — this is an explicit-only memory in v1.",
+				inputSchema: {
+					action: z.enum(["read", "merge", "clear"]).optional().describe("Defaults to read when omitted."),
+					updates: z
+						.record(z.string(), z.unknown())
+						.optional()
+						.describe("Career context fields to shallow-merge when action is merge."),
+				},
+			},
+			async (input) => {
+				const result = await manageMyContext(this.env, this.props, input);
+				return { content: [{ type: "text", text: JSON.stringify(result) }] };
+			},
+		);
+
 		this.server.registerTool(
 			"search_mentors",
 			{
