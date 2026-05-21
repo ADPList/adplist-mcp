@@ -5,6 +5,7 @@ import { z } from "zod";
 import app from "./app";
 import { MCP_SCOPES } from "./config";
 import { bookSession, listAvailability } from "./booking";
+import { listJournals, readJournal } from "./journals";
 import { manageMyContext } from "./profile";
 import { searchMentors } from "./searchMentors";
 import { cancelSession, listMySessions } from "./sessions";
@@ -156,6 +157,58 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			},
 			async (input) => {
 				const result = await listMySessions(this.env, this.props, input);
+				return { content: [{ type: "text", text: JSON.stringify(result) }] };
+			},
+		);
+
+		this.server.registerTool(
+			"list_journals",
+			{
+				description:
+					"List the authenticated user's ADPList AI-generated post-session summaries from past mentorship sessions. Use this when the user asks what they discussed, learned, committed to, or covered with mentors across past sessions. These are not user-authored free-form journals, so never frame results as 'what you wrote in your journal'; say 'your session summary covered' or 'you and your mentor discussed'. Returns compact metadata by default. Set with_content: true only when the user needs the actual structured summary fields in the list.",
+				inputSchema: {
+					limit: z
+						.number()
+						.int()
+						.min(1)
+						.max(100)
+						.optional()
+						.describe("Defaults to 30; max 100."),
+					since_iso: z
+						.string()
+						.trim()
+						.min(1)
+						.optional()
+						.describe("Optional ISO 8601 lower bound for journal created time."),
+					with_content: z
+						.boolean()
+						.optional()
+						.describe(
+							"Defaults to false. When true, includes full structured summary fields for each returned journal.",
+						),
+				},
+			},
+			async (input) => {
+				const result = await listJournals(this.env, this.props, input);
+				return { content: [{ type: "text", text: JSON.stringify(result) }] };
+			},
+		);
+
+		this.server.registerTool(
+			"read_journal",
+			{
+				description:
+					"Read one ADPList AI-generated post-session summary for the authenticated user. Use this after list_journals or when the user asks about a specific past mentorship session. The content is generated from the AI Note Taker transcript summary (tldr, insights, highlights, action items), not something the user wrote manually. Journal content is sensitive; fetch it only when needed for the user's request and do not imply it is stored in MCP infrastructure.",
+				inputSchema: {
+					journal_id: z
+						.string()
+						.trim()
+						.min(1)
+						.describe("Journal ID returned by list_journals."),
+				},
+			},
+			async (input) => {
+				const result = await readJournal(this.env, this.props, input);
 				return { content: [{ type: "text", text: JSON.stringify(result) }] };
 			},
 		);
