@@ -67,7 +67,7 @@ export function normalizeMaxResults(value: number | undefined): number {
 export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput): string {
 	const url = new URL("/search", baseUrl);
 	const filters = input.filters ?? {};
-	url.searchParams.set("provider", "v2");
+	url.searchParams.set("provider", "explore");
 	url.searchParams.set("q", input.intent.trim());
 	url.searchParams.set("page", "1");
 	url.searchParams.set("pageSize", String(normalizeMaxResults(filters.max_results)));
@@ -83,36 +83,33 @@ export function mapSearchMentorsResponse(
 	input: SearchMentorsInput,
 ): SearchMentorsOutput {
 	const maxResults = normalizeMaxResults(input.filters?.max_results);
-	const mentors = (response.results ?? [])
-		.slice(0, maxResults)
-		.map((mentor) => {
-			const expertise = Array.isArray(mentor.expertise)
-				? mentor.expertise.filter(Boolean).slice(0, 3)
-				: [];
-			const company = mentor.employer ?? mentor.company ?? "";
-			const sessions = numberOrZero(mentor.total_sessions);
-			const slots = numberOrZero(mentor.next_7_day_slots_count);
-			return {
-				name: mentor.name ?? "",
-				slug: mentor.slug ?? "",
-				title: mentor.title ?? "",
-				company,
-				expertise,
-				rating:
-					typeof mentor.average_rating === "number" &&
-					Number.isFinite(mentor.average_rating)
-						? mentor.average_rating
-						: null,
-				sessions_count: sessions,
-				next_7_day_slots_count: slots,
-				profile_url: mentor.slug
-					? `https://adplist.org/mentors/${mentor.slug}`
-					: "https://adplist.org/explore",
-				why_match: buildWhyMatch(mentor, input),
-				queryID: response.queryID,
-				position: mentor.position,
-			};
-		});
+	const mentors = (response.results ?? []).slice(0, maxResults).map((mentor) => {
+		const expertise = Array.isArray(mentor.expertise)
+			? mentor.expertise.filter(Boolean).slice(0, 3)
+			: [];
+		const company = mentor.employer ?? mentor.company ?? "";
+		const sessions = numberOrZero(mentor.total_sessions);
+		const slots = numberOrZero(mentor.next_7_day_slots_count);
+		return {
+			name: mentor.name ?? "",
+			slug: mentor.slug ?? "",
+			title: mentor.title ?? "",
+			company,
+			expertise,
+			rating:
+				typeof mentor.average_rating === "number" && Number.isFinite(mentor.average_rating)
+					? mentor.average_rating
+					: null,
+			sessions_count: sessions,
+			next_7_day_slots_count: slots,
+			profile_url: mentor.slug
+				? `https://adplist.org/mentors/${mentor.slug}`
+				: "https://adplist.org/explore",
+			why_match: buildWhyMatch(mentor, input),
+			queryID: response.queryID,
+			position: mentor.position,
+		};
+	});
 	return { mentors, queryID: response.queryID, indexUsed: response.indexUsed };
 }
 
