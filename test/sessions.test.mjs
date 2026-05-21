@@ -51,28 +51,22 @@ test("buildCancelSessionUrl uses existing cancellation endpoint", () => {
 	);
 });
 
-test("mapInstanceToSession maps a mentee-role instance to the counterpart mentor", () => {
-	const result = mapInstanceToSession(
-		{
-			meetingId: "meeting-1",
-			scheduledDate: 1_700_003_600,
-			status: "AWAITING_CONFIRMATION",
-			duration: 45,
-			mentorUserId: "mentor-9",
-			menteeUserId: "u1",
-			meeting: {
-				metadata: { source: "mcp" },
-				mentor: { userId: "mentor-9", fullName: "Sarah Mentor", slug: "sarah" },
-				mentee: { userId: "u1", fullName: "Me", slug: "me" },
-			},
+test("mapInstanceToSession returns both the mentor and the mentee on every session", () => {
+	const result = mapInstanceToSession({
+		meetingId: "meeting-1",
+		scheduledDate: 1_700_003_600,
+		status: "AWAITING_CONFIRMATION",
+		duration: 45,
+		meeting: {
+			metadata: { source: "mcp" },
+			mentor: { fullName: "Sarah Mentor", slug: "sarah" },
+			mentee: { fullName: "Riley Mentee", slug: "riley" },
 		},
-		"u1",
-	);
+	});
 	assert.deepEqual(result, {
 		session_id: "meeting-1",
-		my_role: "mentee",
-		counterpart_name: "Sarah Mentor",
-		counterpart_slug: "sarah",
+		mentor: { name: "Sarah Mentor", slug: "sarah" },
+		mentee: { name: "Riley Mentee", slug: "riley" },
 		scheduled_at_iso: "2023-11-14T23:13:20.000Z",
 		scheduled_at_local_display: "Tue, Nov 14, 11:13 PM UTC",
 		duration_minutes: 45,
@@ -82,30 +76,21 @@ test("mapInstanceToSession maps a mentee-role instance to the counterpart mentor
 	});
 });
 
-test("mapInstanceToSession identifies the caller as mentor and shows the mentee counterpart", () => {
-	const result = mapInstanceToSession(
-		{
-			meetingId: "meeting-2",
-			scheduledDate: 1_700_086_400,
-			status: "CONFIRMED",
-			duration: 30,
-			mentorUserId: "u1",
-			menteeUserId: "mentee-5",
-			meeting: {
-				mentor: { userId: "u1", fullName: "Me Mentor", slug: "me" },
-				mentee: { userId: "mentee-5", fullName: "Booked Mentee", slug: "booked" },
-			},
-		},
-		"u1",
-	);
-	assert.equal(result.my_role, "mentor");
-	assert.equal(result.counterpart_name, "Booked Mentee");
-	assert.equal(result.counterpart_slug, "booked");
+test("mapInstanceToSession degrades gracefully when a party is missing", () => {
+	const result = mapInstanceToSession({
+		meetingId: "meeting-2",
+		scheduledDate: 1_700_086_400,
+		status: "CONFIRMED",
+		duration: 30,
+		meeting: { mentor: { fullName: "Solo Mentor", slug: "solo" } },
+	});
+	assert.deepEqual(result.mentor, { name: "Solo Mentor", slug: "solo" });
+	assert.deepEqual(result.mentee, { name: "", slug: "" });
 	assert.equal(result.status, "confirmed");
 	assert.equal(result.scheduled_at_iso, "2023-11-15T22:13:20.000Z");
 });
 
-test("listMySessions passes Cognito bearer and returns both-role sessions", async () => {
+test("listMySessions passes Cognito bearer and returns both-party sessions", async () => {
 	const calls = [];
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async (url, init) => {
@@ -117,12 +102,10 @@ test("listMySessions passes Cognito bearer and returns both-role sessions", asyn
 					scheduledDate: 1_700_000_000,
 					status: "CONFIRMED",
 					duration: 30,
-					mentorUserId: "mentor-9",
-					menteeUserId: "u1",
 					meeting: {
 						metadata: { source: "WEB" },
-						mentor: { userId: "mentor-9", fullName: "Sarah Mentor", slug: "sarah" },
-						mentee: { userId: "u1", fullName: "Me", slug: "me" },
+						mentor: { fullName: "Sarah Mentor", slug: "sarah" },
+						mentee: { fullName: "Riley Mentee", slug: "riley" },
 					},
 				},
 			],
@@ -140,8 +123,8 @@ test("listMySessions passes Cognito bearer and returns both-role sessions", asyn
 		assert.match(calls[0].url, /filter=upcoming/);
 		assert.equal(result.sessions[0].status, "confirmed");
 		assert.equal(result.sessions[0].source, "web");
-		assert.equal(result.sessions[0].my_role, "mentee");
-		assert.equal(result.sessions[0].counterpart_name, "Sarah Mentor");
+		assert.equal(result.sessions[0].mentor.name, "Sarah Mentor");
+		assert.equal(result.sessions[0].mentee.name, "Riley Mentee");
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

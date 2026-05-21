@@ -21,8 +21,6 @@ type MeetingStatus =
 	| string;
 
 type InstanceParty = {
-	userId?: string;
-	legacyId?: string;
 	fullName?: string;
 	slug?: string;
 };
@@ -34,13 +32,10 @@ type InstanceMeeting = {
 };
 
 type MeetingInstanceRecord = {
-	meetingInstanceId?: string;
 	meetingId?: string;
 	scheduledDate?: number;
 	status?: MeetingStatus;
 	duration?: number;
-	mentorUserId?: string;
-	menteeUserId?: string;
 	meeting?: InstanceMeeting;
 };
 
@@ -54,11 +49,15 @@ type CancelMeetingResponse = {
 	error?: string;
 };
 
+export type SessionParty = {
+	name: string;
+	slug: string;
+};
+
 export type MySession = {
 	session_id: string;
-	my_role: "mentee" | "mentor";
-	counterpart_name: string;
-	counterpart_slug: string;
+	mentor: SessionParty;
+	mentee: SessionParty;
 	scheduled_at_iso: string;
 	scheduled_at_local_display: string;
 	duration_minutes: number;
@@ -113,12 +112,9 @@ export async function listMySessions(
 	props: McpUserProps | undefined,
 	input: ListMySessionsInput = {},
 ): Promise<ListMySessionsOutput> {
-	const callerUserId = props?.userId ?? "";
 	const response = await fetchMeetingInstances(env, props, input);
 	return {
-		sessions: (response.instances ?? []).map((instance) =>
-			mapInstanceToSession(instance, callerUserId),
-		),
+		sessions: (response.instances ?? []).map(mapInstanceToSession),
 		scope: normalizeSessionScope(input.scope),
 		limit: normalizeSessionLimit(input.limit),
 	};
@@ -159,21 +155,16 @@ export async function cancelSession(
 	};
 }
 
-export function mapInstanceToSession(
-	instance: MeetingInstanceRecord,
-	callerUserId: string,
-): MySession {
+// Returns both parties on every session. The MCP host already knows which user
+// it is helping, so it can frame each session correctly without the MCP having
+// to resolve the caller's role from mismatched user-id forms.
+export function mapInstanceToSession(instance: MeetingInstanceRecord): MySession {
 	const meetingId = instance.meetingId || "";
-	const mentor = instance.meeting?.mentor;
-	const mentee = instance.meeting?.mentee;
-	const callerIsMentor = callerMatchesMentor(instance, callerUserId);
-	const counterpart = callerIsMentor ? mentee : mentor;
 	const scheduledEpoch = isFiniteNumber(instance.scheduledDate) ? instance.scheduledDate : 0;
 	return {
 		session_id: meetingId,
-		my_role: callerIsMentor ? "mentor" : "mentee",
-		counterpart_name: counterpart?.fullName || "",
-		counterpart_slug: counterpart?.slug || "",
+		mentor: toParty(instance.meeting?.mentor),
+		mentee: toParty(instance.meeting?.mentee),
 		scheduled_at_iso: new Date(scheduledEpoch * 1000).toISOString(),
 		scheduled_at_local_display: formatLocalDisplay(scheduledEpoch),
 		duration_minutes: normalizeDuration(instance.duration),
@@ -183,17 +174,8 @@ export function mapInstanceToSession(
 	};
 }
 
-// Each instance carries both parties; the caller is the mentor only if their id
-// matches one of the mentor id forms (hex userId or numeric legacyId). Anything
-// else is treated as the mentee, so the counterpart shown is the mentor.
-function callerMatchesMentor(instance: MeetingInstanceRecord, callerUserId: string): boolean {
-	if (!callerUserId) return false;
-	const mentorIds = [
-		instance.mentorUserId,
-		instance.meeting?.mentor?.userId,
-		instance.meeting?.mentor?.legacyId,
-	].filter((id): id is string => typeof id === "string" && id.length > 0);
-	return mentorIds.includes(callerUserId);
+function toParty(party: InstanceParty | undefined): SessionParty {
+	return { name: party?.fullName || "", slug: party?.slug || "" };
 }
 
 function mapMeetingStatus(status: MeetingStatus | undefined): MySession["status"] {
