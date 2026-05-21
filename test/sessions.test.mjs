@@ -6,7 +6,7 @@ import {
 	buildListMySessionsUrl,
 	cancelSession,
 	listMySessions,
-	mapMeetingToSession,
+	mapInstanceToSession,
 	normalizeSessionLimit,
 	normalizeSessionScope,
 } from "../src/sessions.ts";
@@ -33,12 +33,12 @@ test("session scope defaults to upcoming and limit defaults to 20", () => {
 	assert.equal(normalizeSessionLimit(7.9), 7);
 });
 
-test("buildListMySessionsUrl uses existing meetings-service endpoint with full=true for source", () => {
+test("buildListMySessionsUrl targets /meetings/instances so both roles are returned", () => {
 	const url = new URL(
 		buildListMySessionsUrl("https://meetings.example", { scope: "past", limit: 3 }),
 	);
 	assert.equal(url.origin, "https://meetings.example");
-	assert.equal(url.pathname, "/meetings");
+	assert.equal(url.pathname, "/meetings/instances");
 	assert.equal(url.searchParams.get("filter"), "past");
 	assert.equal(url.searchParams.get("limit"), "3");
 	assert.equal(url.searchParams.get("full"), "true");
@@ -51,20 +51,28 @@ test("buildCancelSessionUrl uses existing cancellation endpoint", () => {
 	);
 });
 
-test("mapMeetingToSession trims full meeting shape into M4 response", () => {
-	const result = mapMeetingToSession({
-		meetingId: "meeting-1",
-		status: "AWAITING_CONFIRMATION",
-		initialStartDateTime: 1_700_000_000,
-		source: "mcp",
-		mentor: { fullName: "Sarah Mentor", slug: "sarah" },
-		session: { duration: 45 },
-		meetingInstances: [{ scheduledDate: 1_700_003_600, status: "CONFIRMED" }],
-	});
+test("mapInstanceToSession maps a mentee-role instance to the counterpart mentor", () => {
+	const result = mapInstanceToSession(
+		{
+			meetingId: "meeting-1",
+			scheduledDate: 1_700_003_600,
+			status: "AWAITING_CONFIRMATION",
+			duration: 45,
+			mentorUserId: "mentor-9",
+			menteeUserId: "u1",
+			meeting: {
+				metadata: { source: "mcp" },
+				mentor: { userId: "mentor-9", fullName: "Sarah Mentor", slug: "sarah" },
+				mentee: { userId: "u1", fullName: "Me", slug: "me" },
+			},
+		},
+		"u1",
+	);
 	assert.deepEqual(result, {
 		session_id: "meeting-1",
-		mentor_name: "Sarah Mentor",
-		mentor_slug: "sarah",
+		my_role: "mentee",
+		counterpart_name: "Sarah Mentor",
+		counterpart_slug: "sarah",
 		scheduled_at_iso: "2023-11-14T23:13:20.000Z",
 		scheduled_at_local_display: "Tue, Nov 14, 11:13 PM UTC",
 		duration_minutes: 45,
@@ -74,35 +82,48 @@ test("mapMeetingToSession trims full meeting shape into M4 response", () => {
 	});
 });
 
-test("mapMeetingToSession uses the current active instance for rescheduled meetings", () => {
-	const result = mapMeetingToSession({
-		meetingId: "meeting-1",
-		status: "CONFIRMED",
-		initialStartDateTime: 1_700_000_000,
-		mentor: { fullName: "Sarah Mentor", slug: "sarah" },
-		session: { duration: 30 },
-		meetingInstances: [
-			{ scheduledDate: 1_700_000_000, status: "RESCHEDULED" },
-			{ scheduledDate: 1_700_086_400, status: "CONFIRMED" },
-		],
-	});
+test("mapInstanceToSession identifies the caller as mentor and shows the mentee counterpart", () => {
+	const result = mapInstanceToSession(
+		{
+			meetingId: "meeting-2",
+			scheduledDate: 1_700_086_400,
+			status: "CONFIRMED",
+			duration: 30,
+			mentorUserId: "u1",
+			menteeUserId: "mentee-5",
+			meeting: {
+				mentor: { userId: "u1", fullName: "Me Mentor", slug: "me" },
+				mentee: { userId: "mentee-5", fullName: "Booked Mentee", slug: "booked" },
+			},
+		},
+		"u1",
+	);
+	assert.equal(result.my_role, "mentor");
+	assert.equal(result.counterpart_name, "Booked Mentee");
+	assert.equal(result.counterpart_slug, "booked");
+	assert.equal(result.status, "confirmed");
 	assert.equal(result.scheduled_at_iso, "2023-11-15T22:13:20.000Z");
 });
 
-test("listMySessions passes Cognito bearer and returns compact sessions", async () => {
+test("listMySessions passes Cognito bearer and returns both-role sessions", async () => {
 	const calls = [];
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async (url, init) => {
 		calls.push({ url: String(url), init });
 		return Response.json({
-			meetings: [
+			instances: [
 				{
 					meetingId: "meeting-1",
+					scheduledDate: 1_700_000_000,
 					status: "CONFIRMED",
-					initialStartDateTime: 1_700_000_000,
-					metadata: { source: "WEB" },
-					mentor: { fullName: "Sarah Mentor", slug: "sarah" },
-					session: { duration: 30 },
+					duration: 30,
+					mentorUserId: "mentor-9",
+					menteeUserId: "u1",
+					meeting: {
+						metadata: { source: "WEB" },
+						mentor: { userId: "mentor-9", fullName: "Sarah Mentor", slug: "sarah" },
+						mentee: { userId: "u1", fullName: "Me", slug: "me" },
+					},
 				},
 			],
 		});
@@ -115,30 +136,23 @@ test("listMySessions passes Cognito bearer and returns compact sessions", async 
 		);
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0].init.headers.Authorization, "Bearer token");
+		assert.match(calls[0].url, /\/meetings\/instances/);
 		assert.match(calls[0].url, /filter=upcoming/);
 		assert.equal(result.sessions[0].status, "confirmed");
 		assert.equal(result.sessions[0].source, "web");
+		assert.equal(result.sessions[0].my_role, "mentee");
+		assert.equal(result.sessions[0].counterpart_name, "Sarah Mentor");
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
 });
 
-test("cancelSession posts optional reason and returns cancelled session", async () => {
+test("cancelSession posts optional reason and returns cancellation time", async () => {
 	const calls = [];
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async (url, init) => {
 		calls.push({ url: String(url), init });
-		return Response.json({
-			meeting: {
-				meetingId: "meeting-1",
-				status: "CANCELLED",
-				updatedAt: 1_700_004_000,
-				initialStartDateTime: 1_700_000_000,
-				source: "mcp",
-				mentor: { fullName: "Sarah Mentor", slug: "sarah" },
-				session: { duration: 30 },
-			},
-		});
+		return Response.json({ meeting: { updatedAt: 1_700_004_000 } });
 	};
 	try {
 		const result = await cancelSession(
@@ -150,9 +164,10 @@ test("cancelSession posts optional reason and returns cancelled session", async 
 		assert.equal(calls[0].init.method, "POST");
 		assert.equal(calls[0].init.headers.Authorization, "Bearer token");
 		assert.deepEqual(JSON.parse(calls[0].init.body), { message: "rescheduling" });
-		assert.equal(result.cancelled, true);
-		assert.equal(result.cancelled_at_iso, "2023-11-14T23:20:00.000Z");
-		assert.equal(result.session.status, "cancelled");
+		assert.deepEqual(result, {
+			cancelled: true,
+			cancelled_at_iso: "2023-11-14T23:20:00.000Z",
+		});
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
