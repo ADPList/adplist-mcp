@@ -4,7 +4,7 @@ import { MCP_SCOPES } from "./config";
 import { sendOtp, verifyOtp } from "./adplistAuth";
 import type { Bindings, McpUserProps, StoredLogin } from "./types";
 
-const LOGIN_TTL_SECONDS = 10 * 60;
+const LOGIN_TTL_SECONDS = 60 * 60;
 const OTP_RATE_LIMIT = 5;
 const OTP_RATE_WINDOW_SECONDS = 15 * 60;
 
