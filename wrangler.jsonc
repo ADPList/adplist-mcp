@@ -6,6 +6,10 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"vars": {
+		"SEARCH_SERVICE_URL": "https://api.adplist.org",
+		"MEETINGS_SERVICE_URL": "https://api.adplist.org"
+	},
 	"durable_objects": {
 		"bindings": [
 			{
