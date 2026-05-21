@@ -139,7 +139,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"list_my_sessions",
 			{
 				description:
-					"List the authenticated user's ADPList mentorship sessions. Defaults to upcoming sessions to keep chat context compact. Use scope: 'past' only when the user asks for previous sessions, and scope: 'all' only when they explicitly ask for everything. Returns every session the user is part of, whether they booked it as the mentee or are the mentor. Each item includes both the mentor and the mentee (name and slug), time, duration, status, source, and dashboard URL — frame each session relative to whichever of the two parties is the user you are helping.",
+					"List the authenticated user's ADPList mentorship sessions. Defaults to upcoming sessions to keep chat context compact. Use scope: 'past' only when the user asks for previous sessions, and scope: 'all' only when they explicitly ask for everything. Returns every session the user is part of, whether they booked it as the mentee or are the mentor. Each item includes both the mentor and the mentee (name, slug, title, organization), the scheduled time, duration, status, source, the booking_notes and booking_questions exchanged when the session was booked, and the dashboard URL — frame each session relative to whichever of the two parties is the user you are helping.",
 				inputSchema: {
 					scope: z
 						.enum(["upcoming", "past", "all"])

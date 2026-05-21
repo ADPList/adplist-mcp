@@ -23,10 +23,20 @@ type MeetingStatus =
 type InstanceParty = {
 	fullName?: string;
 	slug?: string;
+	title?: string;
+	organization?: string;
+};
+
+type BookingNote = {
+	description?: string;
 };
 
 type InstanceMeeting = {
-	metadata?: { source?: string };
+	metadata?: {
+		source?: string;
+		questions?: unknown[];
+		bookingNotes?: BookingNote[];
+	};
 	mentor?: InstanceParty;
 	mentee?: InstanceParty;
 };
@@ -52,6 +62,8 @@ type CancelMeetingResponse = {
 export type SessionParty = {
 	name: string;
 	slug: string;
+	title: string;
+	organization: string;
 };
 
 export type MySession = {
@@ -63,6 +75,8 @@ export type MySession = {
 	duration_minutes: number;
 	status: "requested" | "confirmed" | "completed" | "cancelled" | "declined";
 	source: string;
+	booking_notes: string;
+	booking_questions: string[];
 	session_url: string;
 };
 
@@ -170,12 +184,51 @@ export function mapInstanceToSession(instance: MeetingInstanceRecord): MySession
 		duration_minutes: normalizeDuration(instance.duration),
 		status: mapMeetingStatus(instance.status),
 		source: normalizeSource(instance.meeting?.metadata?.source),
+		booking_notes: extractBookingNotes(instance.meeting),
+		booking_questions: extractBookingQuestions(instance.meeting),
 		session_url: `https://adplist.org/meetings/${meetingId}`,
 	};
 }
 
 function toParty(party: InstanceParty | undefined): SessionParty {
-	return { name: party?.fullName || "", slug: party?.slug || "" };
+	return {
+		name: party?.fullName || "",
+		slug: party?.slug || "",
+		title: party?.title || "",
+		organization: party?.organization || "",
+	};
+}
+
+// The note from the booking form (and what book_session sends as `message`) is
+// persisted as meetings-service metadata.bookingNotes entries.
+function extractBookingNotes(meeting: InstanceMeeting | undefined): string {
+	return (meeting?.metadata?.bookingNotes ?? [])
+		.map((note) => (typeof note?.description === "string" ? note.description.trim() : ""))
+		.filter(Boolean)
+		.join("\n");
+}
+
+// metadata.questions shape varies (form definitions vs answered responses), so
+// extract text defensively rather than assuming a fixed shape.
+function extractBookingQuestions(meeting: InstanceMeeting | undefined): string[] {
+	return (meeting?.metadata?.questions ?? []).map(questionToText).filter(Boolean);
+}
+
+function questionToText(entry: unknown): string {
+	if (typeof entry === "string") return entry.trim();
+	if (entry && typeof entry === "object") {
+		const obj = entry as Record<string, unknown>;
+		const question = typeof obj.question === "string" ? obj.question.trim() : "";
+		const answer =
+			typeof obj.answer === "string"
+				? obj.answer.trim()
+				: typeof obj.response === "string"
+					? obj.response.trim()
+					: "";
+		if (question && answer) return `${question} — ${answer}`;
+		return question || answer;
+	}
+	return "";
 }
 
 function mapMeetingStatus(status: MeetingStatus | undefined): MySession["status"] {
