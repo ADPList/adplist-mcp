@@ -7,6 +7,7 @@
 		"nodejs_compat"
 	],
 	"vars": {
+		"AUTH_SERVICE_URL": "https://api.adplist.org",
 		"SEARCH_SERVICE_URL": "https://api.adplist.org",
 		"MEETINGS_SERVICE_URL": "https://api.adplist.org"
 	},
