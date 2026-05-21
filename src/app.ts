@@ -1,140 +1,231 @@
 import { Hono } from "hono";
-import { html } from "hono/html";
+import { html, raw } from "hono/html";
 import { MCP_SCOPES } from "./config";
-import { buildCognitoAuthorizeUrl, createPkceVerifier, exchangeCognitoCode, fetchCognitoUserInfo } from "./cognito";
-import type { Bindings, McpUserProps, PendingConsent, StoredOAuthRequest } from "./types";
+import { sendOtp, verifyOtp } from "./adplistAuth";
+import type { Bindings, McpUserProps, StoredLogin } from "./types";
 
-const OAUTH_STATE_TTL_SECONDS = 10 * 60;
-const COGNITO_REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
+const LOGIN_TTL_SECONDS = 10 * 60;
+const OTP_RATE_LIMIT = 5;
+const OTP_RATE_WINDOW_SECONDS = 15 * 60;
 
 const app = new Hono<{ Bindings: Bindings }>();
 
 app.get("/", (c) => c.json({ name: "adplist-mcp", status: "ok" }));
 app.get("/health", (c) => c.json({ ok: true }));
 
+// Step 1 — an MCP client (e.g. Claude) starts the OAuth flow. Render the email page.
 app.get("/oauth/authorize", async (c) => {
 	const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);
-	const state = crypto.randomUUID();
-	const pkceVerifier = createPkceVerifier();
-	const storedRequest: StoredOAuthRequest = { oauthReqInfo, createdAt: Date.now(), pkceVerifier };
-
-	await c.env.OAUTH_KV.put(`oauth_state:${state}`, JSON.stringify(storedRequest), {
-		expirationTtl: OAUTH_STATE_TTL_SECONDS,
+	const client = await c.env.OAUTH_PROVIDER.lookupClient(oauthReqInfo.clientId);
+	const loginId = crypto.randomUUID();
+	await putLogin(c.env, loginId, {
+		oauthReqInfo,
+		clientName: client?.clientName,
+		createdAt: Date.now(),
 	});
-
-	return c.redirect(await buildCognitoAuthorizeUrl(c.env, c.req.url, state, pkceVerifier), 302);
+	return c.html(renderEmailPage(loginId, client?.clientName));
 });
 
-app.get("/oauth/callback", async (c) => {
-	const code = c.req.query("code");
-	const state = c.req.query("state");
-	if (!code || !state) {
-		return c.json({ error: "Missing Cognito callback code or state" }, 400);
-	}
-
-	const storedValue = await c.env.OAUTH_KV.get(`oauth_state:${state}`);
-	if (!storedValue) {
-		return c.json({ error: "OAuth state expired or invalid" }, 400);
-	}
-	await c.env.OAUTH_KV.delete(`oauth_state:${state}`);
-
-	const storedRequest = JSON.parse(storedValue) as StoredOAuthRequest;
-	const tokens = await exchangeCognitoCode(c.env, c.req.url, code, storedRequest.pkceVerifier);
-	const userInfo = await fetchCognitoUserInfo(c.env, tokens.access_token);
-	const consentId = crypto.randomUUID();
-	const pendingConsent: PendingConsent = { ...storedRequest, tokens, userInfo };
-
-	await c.env.OAUTH_KV.put(`oauth_consent:${consentId}`, JSON.stringify(pendingConsent), {
-		expirationTtl: OAUTH_STATE_TTL_SECONDS,
-	});
-
-	const client = await c.env.OAUTH_PROVIDER.lookupClient(storedRequest.oauthReqInfo.clientId);
-	return c.html(renderConsentPage({ consentId, clientName: client?.clientName, scopes: storedRequest.oauthReqInfo.scope }));
-});
-
-app.post("/oauth/consent", async (c) => {
+// Step 2 — the user submits their email. Ask ADPList to email a sign-in code.
+app.post("/oauth/login", async (c) => {
 	const body = await c.req.parseBody();
-	const consentId = typeof body.consentId === "string" ? body.consentId : undefined;
-	const action = typeof body.action === "string" ? body.action : undefined;
-	if (!consentId || !action) {
-		return c.json({ error: "Missing consent action" }, 400);
+	const loginId = stringField(body.loginId);
+	const email = stringField(body.email)?.trim().toLowerCase();
+	if (!loginId || !email) {
+		return c.html(renderErrorPage("Please enter your email address."), 400);
 	}
 
-	const pendingValue = await c.env.OAUTH_KV.get(`oauth_consent:${consentId}`);
-	if (!pendingValue) {
-		return c.json({ error: "Consent request expired or invalid" }, 400);
-	}
-	await c.env.OAUTH_KV.delete(`oauth_consent:${consentId}`);
-
-	const pending = JSON.parse(pendingValue) as PendingConsent;
-	if (action !== "approve") {
-		return c.redirect(oauthErrorRedirect(pending.oauthReqInfo.redirectUri, pending.oauthReqInfo.state), 302);
+	const stored = await getLogin(c.env, loginId);
+	if (!stored) {
+		return c.html(renderErrorPage("Your sign-in session expired. Please start again."), 400);
 	}
 
-	const { userInfo, tokens, oauthReqInfo } = pending;
-	const email = userInfo.email ?? null;
-	const refreshTokenKey = `cognito_refresh:${userInfo.sub}`;
+	const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+	if (await consumeRateLimit(c.env, `otp_rate:${ip}`)) {
+		return c.html(
+			renderErrorPage("Too many sign-in attempts. Please wait a few minutes and retry."),
+			429,
+		);
+	}
 
-	if (tokens.refresh_token) {
-		await c.env.OAUTH_KV.put(refreshTokenKey, tokens.refresh_token, {
-			expirationTtl: COGNITO_REFRESH_TTL_SECONDS,
+	let otp;
+	try {
+		otp = await sendOtp(c.env, email);
+	} catch {
+		return c.html(
+			renderErrorPage("We couldn't email a sign-in code. Check the address and try again."),
+			502,
+		);
+	}
+
+	await putLogin(c.env, loginId, {
+		...stored,
+		email,
+		cognitoSession: otp.session,
+		cognitoUserId: otp.cognitoUserId,
+	});
+	return c.html(renderOtpPage(loginId, email, stored.clientName));
+});
+
+// Step 3 — the user submits the code. Verify it, then complete the MCP authorization.
+app.post("/oauth/verify", async (c) => {
+	const body = await c.req.parseBody();
+	const loginId = stringField(body.loginId);
+	const code = stringField(body.code)?.trim();
+	if (!loginId || !code) {
+		return c.html(renderErrorPage("Please enter the 6-digit code."), 400);
+	}
+
+	const stored = await getLogin(c.env, loginId);
+	if (!stored?.cognitoSession || !stored.cognitoUserId) {
+		return c.html(renderErrorPage("Your sign-in session expired. Please start again."), 400);
+	}
+
+	let verified;
+	try {
+		verified = await verifyOtp(c.env, {
+			code,
+			cognitoUserId: stored.cognitoUserId,
+			session: stored.cognitoSession,
 		});
+	} catch {
+		return c.html(
+			renderErrorPage(
+				"That code was incorrect or expired. Close this window and click Connect again to retry.",
+			),
+			400,
+		);
 	}
+
+	await c.env.OAUTH_KV.delete(`oauth_login:${loginId}`);
 
 	const props: McpUserProps = {
-		userId: userInfo.sub,
-		email,
+		userId: verified.userId,
+		email: stored.email ?? null,
 		scopes: [...MCP_SCOPES],
-		cognitoRefreshTokenKey: tokens.refresh_token ? refreshTokenKey : undefined,
-		cognitoAccessToken: tokens.access_token,
+		cognitoAccessToken: verified.accessToken,
+		adplistRefreshToken: verified.refreshToken,
 	};
 
 	const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
-		request: oauthReqInfo,
-		userId: userInfo.sub,
-		metadata: { label: email ?? userInfo.username ?? userInfo.sub },
-		scope: oauthReqInfo.scope.length > 0 ? oauthReqInfo.scope : [...MCP_SCOPES],
+		request: stored.oauthReqInfo,
+		userId: verified.userId,
+		metadata: { label: stored.email ?? verified.userId },
+		scope: stored.oauthReqInfo.scope.length > 0 ? stored.oauthReqInfo.scope : [...MCP_SCOPES],
 		props,
 	});
 
 	return c.redirect(redirectTo, 302);
 });
 
-function renderConsentPage(options: { consentId: string; clientName?: string; scopes: string[] }) {
-	const clientName = options.clientName ?? "MCP client";
-	const scopes = options.scopes.length > 0 ? options.scopes : [...MCP_SCOPES];
-	return html`<!doctype html>
-		<html lang="en">
-			<head>
-				<meta charset="utf-8" />
-				<meta name="viewport" content="width=device-width, initial-scale=1" />
-				<title>Authorize ADPList MCP</title>
-				<style>
-					body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 4rem auto; padding: 0 1rem; color: #111827; }
-					button { border: 0; border-radius: 0.5rem; padding: 0.75rem 1rem; font-weight: 600; cursor: pointer; }
-					.approve { background: #111827; color: white; }
-					.deny { background: #e5e7eb; color: #111827; margin-left: 0.5rem; }
-				</style>
-			</head>
-			<body>
-				<h1>Authorize ADPList MCP</h1>
-				<p><strong>${clientName}</strong> is requesting access to ADPList MCP.</p>
-				<ul>${scopes.map((scope) => html`<li>${scope}</li>`)}</ul>
-				<form method="post" action="/oauth/consent">
-					<input type="hidden" name="consentId" value="${options.consentId}" />
-					<button class="approve" type="submit" name="action" value="approve">Approve</button>
-					<button class="deny" type="submit" name="action" value="deny">Deny</button>
-				</form>
-			</body>
-		</html>`;
-}
-
-function oauthErrorRedirect(redirectUri: string, state: string): string {
-	const url = new URL(redirectUri);
-	url.searchParams.set("error", "access_denied");
-	url.searchParams.set("error_description", "User denied ADPList MCP access");
-	url.searchParams.set("state", state);
-	return url.toString();
-}
-
 export default app;
+
+async function putLogin(env: Bindings, loginId: string, value: StoredLogin): Promise<void> {
+	await env.OAUTH_KV.put(`oauth_login:${loginId}`, JSON.stringify(value), {
+		expirationTtl: LOGIN_TTL_SECONDS,
+	});
+}
+
+async function getLogin(env: Bindings, loginId: string): Promise<StoredLogin | null> {
+	const stored = await env.OAUTH_KV.get(`oauth_login:${loginId}`);
+	if (!stored) return null;
+	try {
+		return JSON.parse(stored) as StoredLogin;
+	} catch {
+		return null;
+	}
+}
+
+// Best-effort per-IP throttle so the OTP email endpoint can't be abused as a mailer.
+async function consumeRateLimit(env: Bindings, key: string): Promise<boolean> {
+	const raw = await env.OAUTH_KV.get(key);
+	const parsed = Number(raw ?? "0");
+	const count = Number.isFinite(parsed) ? parsed : 0;
+	if (count >= OTP_RATE_LIMIT) return true;
+	await env.OAUTH_KV.put(key, String(count + 1), { expirationTtl: OTP_RATE_WINDOW_SECONDS });
+	return false;
+}
+
+function stringField(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+const STYLES = `:root{color-scheme:light}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#f3f4f6;color:#111827;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem}.card{background:#fff;max-width:25rem;width:100%;border-radius:.875rem;box-shadow:0 1px 3px rgba(0,0,0,.08),0 12px 28px rgba(0,0,0,.07);padding:2rem;box-sizing:border-box}.brand{font-weight:700;font-size:1.05rem;letter-spacing:-.01em}h1{font-size:1.3rem;margin:1.1rem 0 .35rem}p{color:#4b5563;line-height:1.55;margin:.35rem 0;font-size:.95rem}label{display:block;font-weight:600;font-size:.85rem;margin:1.2rem 0 .4rem}input{width:100%;box-sizing:border-box;padding:.7rem .8rem;border:1px solid #d1d5db;border-radius:.55rem;font-size:1rem}input:focus{outline:2px solid #111827;outline-offset:0;border-color:#111827}button{width:100%;margin-top:1.3rem;border:0;border-radius:.55rem;padding:.8rem 1rem;font-weight:600;font-size:1rem;background:#111827;color:#fff;cursor:pointer}button:hover{background:#1f2937}.scopes{background:#f9fafb;border:1px solid #e5e7eb;border-radius:.55rem;padding:.7rem .85rem;margin-top:1.1rem;font-size:.85rem;color:#4b5563}.scopes div{margin-top:.25rem}.muted{font-size:.82rem;color:#6b7280;margin-top:1.1rem}`;
+
+function renderEmailPage(loginId: string, clientName?: string) {
+	const client = clientName ?? "an AI client";
+	return html`<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Sign in to ADPList</title>
+		<style>${raw(STYLES)}</style>
+	</head>
+	<body>
+		<div class="card">
+			<div class="brand">ADPList</div>
+			<h1>Sign in to continue</h1>
+			<p>Connect <strong>${client}</strong> to your ADPList account. We'll email you a one-time sign-in code.</p>
+			<form method="post" action="/oauth/login">
+				<input type="hidden" name="loginId" value="${loginId}" />
+				<label for="email">Email address</label>
+				<input id="email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required autofocus />
+				<button type="submit">Email me a code</button>
+			</form>
+			<p class="muted">Use the same email as your ADPList account.</p>
+		</div>
+	</body>
+</html>`;
+}
+
+function renderOtpPage(loginId: string, email: string, clientName?: string) {
+	const client = clientName ?? "an AI client";
+	return html`<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Enter your code</title>
+		<style>${raw(STYLES)}</style>
+	</head>
+	<body>
+		<div class="card">
+			<div class="brand">ADPList</div>
+			<h1>Enter your sign-in code</h1>
+			<p>We emailed a 6-digit code to <strong>${email}</strong>.</p>
+			<form method="post" action="/oauth/verify">
+				<input type="hidden" name="loginId" value="${loginId}" />
+				<label for="code">6-digit code</label>
+				<input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" placeholder="123456" required autofocus />
+				<div class="scopes">
+					Continuing authorizes <strong>${client}</strong> to access your ADPList account:
+					${MCP_SCOPES.map((scope) => html`<div>• ${scope}</div>`)}
+				</div>
+				<button type="submit">Verify and connect</button>
+			</form>
+			<p class="muted">Didn't get the email? Close this window and click Connect again.</p>
+		</div>
+	</body>
+</html>`;
+}
+
+function renderErrorPage(message: string) {
+	return html`<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Sign-in problem</title>
+		<style>${raw(STYLES)}</style>
+	</head>
+	<body>
+		<div class="card">
+			<div class="brand">ADPList</div>
+			<h1>Sign-in couldn't continue</h1>
+			<p>${message}</p>
+			<p class="muted">Close this window and click Connect again in your app to retry.</p>
+		</div>
+	</body>
+</html>`;
+}

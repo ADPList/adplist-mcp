@@ -2,11 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
-const configSource = readFileSync(new URL("../src/config.ts", import.meta.url), "utf8");
-const cognitoSource = readFileSync(new URL("../src/cognito.ts", import.meta.url), "utf8");
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-
 const appSource = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8");
+const authSource = readFileSync(new URL("../src/adplistAuth.ts", import.meta.url), "utf8");
 
 test("MCP exposes OAuth and SSE routes", () => {
 	assert.match(indexSource, /authorizeEndpoint:\s*"\/oauth\/authorize"/);
@@ -15,23 +13,21 @@ test("MCP exposes OAuth and SSE routes", () => {
 	assert.match(indexSource, /apiRoute:\s*"\/sse"/);
 });
 
-test("Cognito callback defaults to the Worker origin", () => {
-	assert.match(configSource, /new URL\(requestUrl\)\.origin/);
-	assert.match(configSource, /\/oauth\/callback/);
+test("auth uses the ADPList email-OTP endpoints, not the Cognito hosted UI", () => {
+	assert.match(authSource, /\/auth\/login/);
+	assert.match(authSource, /\/auth\/verify-challenge/);
+	assert.doesNotMatch(appSource, /oauth2\/authorize/);
 });
 
-test("Cognito auth uses authorization-code flow with PKCE fallback for public clients", () => {
-	assert.match(cognitoSource, /response_type", "code"/);
-	assert.match(cognitoSource, /grant_type:\s*"authorization_code"/);
-	assert.match(cognitoSource, /code_challenge_method", "S256"/);
-	assert.match(cognitoSource, /code_verifier/);
-	assert.match(cognitoSource, /\/oauth2\/authorize/);
-	assert.match(cognitoSource, /\/oauth2\/token/);
-	assert.match(cognitoSource, /\/oauth2\/userInfo/);
-});
-
-test("Cognito callback requires explicit user consent before completing MCP authorization", () => {
-	assert.match(appSource, /oauth_consent:/);
-	assert.match(appSource, /app\.post\("\/oauth\/consent"/);
+test("OAuth flow renders email and OTP steps then completes authorization", () => {
+	assert.match(appSource, /app\.get\("\/oauth\/authorize"/);
+	assert.match(appSource, /app\.post\("\/oauth\/login"/);
+	assert.match(appSource, /app\.post\("\/oauth\/verify"/);
 	assert.match(appSource, /completeAuthorization/);
+});
+
+test("OTP page names the requesting client and scopes before token issuance", () => {
+	assert.match(appSource, /renderOtpPage/);
+	assert.match(appSource, /authorizes/i);
+	assert.match(appSource, /MCP_SCOPES\.map/);
 });
