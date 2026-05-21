@@ -86,10 +86,26 @@ Run the same prompt set in each host. Mark P1 only for failures that block the b
 14. Simulate/force rate limiting, then ask: "Find mentors for leadership coaching."
 15. "Clear the ADPList context you stored about me."
 
-## Host notes template
+## Host notes
 
-| Host           | Install result | OAuth result | 15-prompt soak | P1 bugs | Cosmetic quirks for M7 README |
-| -------------- | -------------- | ------------ | -------------- | ------- | ----------------------------- |
-| Claude Desktop |                |              |                |         |                               |
-| Claude Code    |                |              |                |         |                               |
-| Cursor         |                |              |                |         |                               |
+Validation environment: beta Worker `https://remote-mcp-server-beta.dev-774.workers.dev/sse`.
+
+| Host | Install result | OAuth result | Soak result | P1 bugs | Cosmetic quirks / follow-ups |
+| --- | --- | --- | --- | --- | --- |
+| Claude Desktop | Pending validation on a machine with Claude Desktop available | Pending | Pending | Pending | Not available on the current Linux validation host. |
+| Claude Code | PASS — fresh SSE MCP config recognized the beta server and requested auth | PASS — email OTP OAuth callback completed against the local Claude Code listener | PASS for non-mutating beta-user prompts: `search_mentors`, `manage_my_context` read/merge/clear, `list_availability`, `list_my_sessions`, `list_journals`; `read_journal` skipped because the staging account had no journals | None found in Claude Code envelope/OAuth path | `read_journal` needs an account with journal data for full positive-path coverage. Invalid availability slug currently returns structured `UPSTREAM_UNAVAILABLE` because the upstream service returns HTTP 500; the envelope is correct, but `NOT_FOUND` would be semantically better if upstream can distinguish missing mentors. |
+| Cursor | Pending validation on a machine with Cursor available | Pending | Pending | Pending | Cursor CLI/app was not available on the current Linux validation host. |
+
+### Claude Code beta validation details
+
+Run date: 2026-05-22.
+
+- OAuth: PASS — ADPList email OTP completed and Claude Code accepted the callback.
+- `search_mentors`: PASS — returned 5 ranked mentor cards with `queryID` and `indexUsed: "explore"`.
+- `manage_my_context` read: PASS — clean empty state before validation.
+- `manage_my_context` merge + read-back: PASS — validation key persisted, then cleanup restored the empty state.
+- `list_availability`: PASS — returned 6 UTC slots for a mentor from search results, `truncated: false`.
+- `list_my_sessions`: PASS — valid empty `sessions: []` for the staging account.
+- `list_journals`: PASS — valid empty `journals: []`, `total_items: 0` for the staging account.
+- `read_journal`: SKIPPED positive path — no journal id available on the staging account.
+- Negative-path structured errors: PASS — invalid `read_journal` returned structured `NOT_FOUND`; invalid `list_availability` returned structured `UPSTREAM_UNAVAILABLE` with the required envelope fields.
