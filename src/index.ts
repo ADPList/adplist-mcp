@@ -9,6 +9,7 @@ import { listJournals, readJournal } from "./journals";
 import { manageMyContext } from "./profile";
 import { searchMentors } from "./searchMentors";
 import { cancelSession, listMySessions } from "./sessions";
+import { toolResponse } from "./errors";
 import type { McpUserProps } from "./types";
 
 export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
@@ -34,10 +35,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Career context fields to shallow-merge when action is merge."),
 				},
 			},
-			async (input) => {
-				const result = await manageMyContext(this.env, this.props, input);
-				return { content: [{ type: "text", text: JSON.stringify(result) }] };
-			},
+			async (input) => toolResponse(() => manageMyContext(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -68,10 +66,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.optional(),
 				},
 			},
-			async (input) => {
-				const result = await searchMentors(this.env, this.props, input);
-				return { content: [{ type: "text", text: JSON.stringify(result) }] };
-			},
+			async (input) => toolResponse(() => searchMentors(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -94,10 +89,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Lookahead window in days. Defaults to 14, max 30."),
 				},
 			},
-			async (input) => {
-				const result = await listAvailability(this.env, this.props, input);
-				return { content: [{ type: "text", text: JSON.stringify(result) }] };
-			},
+			async (input) => toolResponse(() => listAvailability(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -130,10 +122,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Algolia queryID from search_mentors, if available."),
 				},
 			},
-			async (input) => {
-				const result = await bookSession(this.env, this.props, input);
-				return { content: [{ type: "text", text: JSON.stringify(result) }] };
-			},
+			async (input) => toolResponse(() => bookSession(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -155,10 +144,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Defaults to 20; max 50."),
 				},
 			},
-			async (input) => {
-				const result = await listMySessions(this.env, this.props, input);
-				return { content: [{ type: "text", text: JSON.stringify(result) }] };
-			},
+			async (input) => toolResponse(() => listMySessions(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -188,10 +174,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						),
 				},
 			},
-			async (input) => {
-				const result = await listJournals(this.env, this.props, input);
-				return { content: [{ type: "text", text: JSON.stringify(result) }] };
-			},
+			async (input) => toolResponse(() => listJournals(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -207,10 +190,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Journal ID returned by list_journals."),
 				},
 			},
-			async (input) => {
-				const result = await readJournal(this.env, this.props, input);
-				return { content: [{ type: "text", text: JSON.stringify(result) }] };
-			},
+			async (input) => toolResponse(() => readJournal(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -233,10 +213,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Optional cancellation reason to share with the mentor."),
 				},
 			},
-			async (input) => {
-				const result = await cancelSession(this.env, this.props, input);
-				return { content: [{ type: "text", text: JSON.stringify(result) }] };
-			},
+			async (input) => toolResponse(() => cancelSession(this.env, this.props, input)),
 		);
 	}
 }

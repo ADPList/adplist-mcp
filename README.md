@@ -34,3 +34,9 @@ npm run dev
 ```
 
 No deployment is performed by this PR.
+
+## M6 hardening
+
+- Shared MCP tool errors are returned as structured JSON: `{ "error": { "code", "message", "retryable", "user_action" } }`.
+- Recovery-oriented codes include `AUTH_EXPIRED`, `SLOT_GONE`, `RATE_LIMITED`, `UPSTREAM_UNAVAILABLE`, `CONFIG_ERROR`, `VALIDATION_ERROR`, `FORBIDDEN`, `NOT_FOUND`, and `UNKNOWN_ERROR`.
+- Multi-host install and 15-prompt soak checklist: [`docs/m6-host-soak.md`](docs/m6-host-soak.md).
