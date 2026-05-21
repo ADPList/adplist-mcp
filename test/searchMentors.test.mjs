@@ -13,7 +13,8 @@ test("M2 registers the search_mentors MCP tool", () => {
 
 test("search_mentors calls search-service Explore with compact filters", () => {
 	assert.match(source, /new URL\("\/search", baseUrl\)/);
-	assert.match(source, /provider", "v2"/);
+	assert.match(source, /provider", "explore"/);
+	assert.doesNotMatch(source, /provider", "v2"/);
 	assert.match(source, /pageSize/);
 	assert.match(source, /disciplines/);
 	assert.match(source, /countries/);
