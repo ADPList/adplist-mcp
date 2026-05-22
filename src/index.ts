@@ -1,9 +1,13 @@
-import OAuthProvider from "@cloudflare/workers-oauth-provider";
+import OAuthProvider, { type OAuthProviderOptions } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 import app from "./app";
 import { MCP_SCOPES } from "./config";
+import {
+	refreshAdplistPropsOnTokenExchange,
+	tokenRefreshErrorResponse,
+} from "./adplistTokenRefresh";
 import { bookSession, listAvailability } from "./booking";
 import { listJournals, readJournal } from "./journals";
 import { manageMyContext } from "./profile";
@@ -218,21 +222,37 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 	}
 }
 
-export default new OAuthProvider({
-	apiRoute: "/sse",
-	apiHandler: MyMCP.serveSSE("/sse"),
-	defaultHandler: app,
-	authorizeEndpoint: "/oauth/authorize",
-	tokenEndpoint: "/oauth/token",
-	clientRegistrationEndpoint: "/oauth/register",
-	scopesSupported: [...MCP_SCOPES],
-	accessTokenTTL: 60 * 60,
-	refreshTokenTTL: 30 * 24 * 60 * 60,
-	allowImplicitFlow: false,
-	allowPlainPKCE: false,
-	resourceMetadata: {
-		resource_name: "ADPList MCP",
-		scopes_supported: [...MCP_SCOPES],
-		bearer_methods_supported: ["header"],
+function createOAuthProvider(env: Env) {
+	const options: OAuthProviderOptions<Env> = {
+		apiRoute: "/sse",
+		apiHandler: MyMCP.serveSSE("/sse"),
+		defaultHandler: app,
+		authorizeEndpoint: "/oauth/authorize",
+		tokenEndpoint: "/oauth/token",
+		clientRegistrationEndpoint: "/oauth/register",
+		scopesSupported: [...MCP_SCOPES],
+		accessTokenTTL: 60 * 60,
+		refreshTokenTTL: 30 * 24 * 60 * 60,
+		tokenExchangeCallback: (options) => refreshAdplistPropsOnTokenExchange(options, env),
+		allowImplicitFlow: false,
+		allowPlainPKCE: false,
+		resourceMetadata: {
+			resource_name: "ADPList MCP",
+			scopes_supported: [...MCP_SCOPES],
+			bearer_methods_supported: ["header"],
+		},
+	};
+	return new OAuthProvider(options);
+}
+
+export default {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+		try {
+			return await createOAuthProvider(env).fetch(request, env, ctx);
+		} catch (error) {
+			const response = tokenRefreshErrorResponse(error);
+			if (response) return response;
+			throw error;
+		}
 	},
-});
+};

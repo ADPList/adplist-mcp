@@ -24,7 +24,11 @@ export function formatToolError(error: unknown): StructuredMcpError {
 	const lower = message.toLowerCase();
 	const status = httpStatusFromMessage(message);
 
-	if (lower.includes("requires an authenticated adplist user") || status === 401) {
+	if (
+		lower.includes("auth_expired") ||
+		lower.includes("requires an authenticated adplist user") ||
+		status === 401
+	) {
 		return structuredError(
 			"AUTH_EXPIRED",
 			"Your ADPList sign-in has expired or is missing.",
