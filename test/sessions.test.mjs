@@ -68,14 +68,27 @@ test("mapInstanceToSession returns both parties with profile and booking context
 				slug: "sarah",
 				title: "Group PM",
 				organization: "Stripe",
+				profile: { image: "https://images.example/sarah.jpg" },
 			},
 			mentee: { fullName: "Riley Mentee", slug: "riley", title: "Senior Designer" },
 		},
 	});
 	assert.deepEqual(result, {
 		session_id: "meeting-1",
-		mentor: { name: "Sarah Mentor", slug: "sarah", title: "Group PM", organization: "Stripe" },
-		mentee: { name: "Riley Mentee", slug: "riley", title: "Senior Designer", organization: "" },
+		mentor: {
+			name: "Sarah Mentor",
+			slug: "sarah",
+			title: "Group PM",
+			organization: "Stripe",
+			profile_photo_url: "https://images.example/sarah.jpg",
+		},
+		mentee: {
+			name: "Riley Mentee",
+			slug: "riley",
+			title: "Senior Designer",
+			organization: "",
+			profile_photo_url: "",
+		},
 		scheduled_at_iso: "2023-11-14T23:13:20.000Z",
 		scheduled_at_local_display: "Tue, Nov 14, 11:13 PM UTC",
 		duration_minutes: 45,
@@ -100,8 +113,15 @@ test("mapInstanceToSession degrades gracefully when parties and booking context 
 		slug: "solo",
 		title: "",
 		organization: "",
+		profile_photo_url: "",
 	});
-	assert.deepEqual(result.mentee, { name: "", slug: "", title: "", organization: "" });
+	assert.deepEqual(result.mentee, {
+		name: "",
+		slug: "",
+		title: "",
+		organization: "",
+		profile_photo_url: "",
+	});
 	assert.equal(result.booking_notes, "");
 	assert.deepEqual(result.booking_questions, []);
 	assert.equal(result.status, "confirmed");

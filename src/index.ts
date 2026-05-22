@@ -5,6 +5,14 @@ import { z } from "zod";
 import app from "./app";
 import { MCP_SCOPES } from "./config";
 import {
+	MCP_APP_MIME_TYPE,
+	UI_RESOURCES,
+	appResourceMeta,
+	appToolMeta,
+	buildAppHtml,
+	type AppViewKind,
+} from "./mcpApps";
+import {
 	refreshAdplistPropsOnTokenExchange,
 	tokenRefreshErrorResponse,
 } from "./adplistTokenRefresh";
@@ -23,11 +31,55 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 		version: "0.1.0",
 	});
 
-	private toolResponse<T>(run: () => Promise<T>) {
-		return toolResponse(() => runWithToolRateLimit(this.env, this.props, run));
+	private toolResponse<T>(
+		run: () => Promise<T>,
+		app?: { resourceUri: string; name: string; title: string; description: string },
+	) {
+		return toolResponse(() => runWithToolRateLimit(this.env, this.props, run), app);
+	}
+
+	private registerAppResource(name: string, uri: string, kind: AppViewKind, description: string) {
+		this.server.registerResource(
+			name,
+			uri,
+			{
+				description,
+				mimeType: MCP_APP_MIME_TYPE,
+				_meta: appResourceMeta(),
+			},
+			async () => ({
+				contents: [
+					{
+						uri,
+						mimeType: MCP_APP_MIME_TYPE,
+						text: buildAppHtml(kind),
+						_meta: appResourceMeta(),
+					},
+				],
+			}),
+		);
 	}
 
 	async init() {
+		this.registerAppResource(
+			"ADPList Mentor Cards",
+			UI_RESOURCES.mentorCards,
+			"mentor-cards",
+			"Clean visual mentor result cards with profile photos and booking CTAs.",
+		);
+		this.registerAppResource(
+			"ADPList Slot Picker",
+			UI_RESOURCES.slotPicker,
+			"slot-picker",
+			"Airbnb-like date/time picker for ADPList mentor availability.",
+		);
+		this.registerAppResource(
+			"ADPList Session Cards",
+			UI_RESOURCES.sessionCards,
+			"session-cards",
+			"Visual cards for ADPList mentorship session status and details.",
+		);
+
 		this.server.registerTool(
 			"manage_my_context",
 			{
@@ -58,7 +110,8 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"search_mentors",
 			{
 				description:
-					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. Returns compact ranked mentor cards plus Algolia queryID for later booking attribution.",
+					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. Returns compact ranked mentor cards plus Algolia queryID for later booking attribution. MCP Apps hosts should render the attached clean visual mentor cards; text/JSON fallback remains complete for unsupported hosts.",
+				_meta: appToolMeta(UI_RESOURCES.mentorCards),
 				annotations: {
 					title: "Search ADPList mentors",
 					readOnlyHint: true,
@@ -89,14 +142,21 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.optional(),
 				},
 			},
-			async (input) => this.toolResponse(() => searchMentors(this.env, this.props, input)),
+			async (input) =>
+				this.toolResponse(() => searchMentors(this.env, this.props, input), {
+					resourceUri: UI_RESOURCES.mentorCards,
+					name: "adplist-mentor-cards",
+					title: "ADPList mentor cards",
+					description: "Interactive ADPList mentor results with profile photos.",
+				}),
 		);
 
 		this.server.registerTool(
 			"list_availability",
 			{
 				description:
-					"List available ADPList mentorship booking slots for a mentor over the next N days. Use this after search_mentors when the user has picked a mentor. Returns at most 20 compact UTC slots plus a localized display string, so ask the user which slot they want before booking.",
+					"List available ADPList mentorship booking slots for a mentor over the next N days. Use this after search_mentors when the user has picked a mentor. Returns at most 20 compact UTC slots plus a localized display string. MCP Apps hosts should render the attached clean Airbnb-like date/time picker; always ask the user to confirm the exact selected slot before booking.",
+				_meta: appToolMeta(UI_RESOURCES.slotPicker),
 				annotations: {
 					title: "List mentor availability",
 					readOnlyHint: true,
@@ -119,14 +179,21 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Lookahead window in days. Defaults to 14, max 30."),
 				},
 			},
-			async (input) => this.toolResponse(() => listAvailability(this.env, this.props, input)),
+			async (input) =>
+				this.toolResponse(() => listAvailability(this.env, this.props, input), {
+					resourceUri: UI_RESOURCES.slotPicker,
+					name: "adplist-slot-picker",
+					title: "Choose a mentorship time",
+					description: "Interactive ADPList date/time picker for mentor availability.",
+				}),
 		);
 
 		this.server.registerTool(
 			"book_session",
 			{
 				description:
-					"Request an ADPList mentorship session for the authenticated user. IMPORTANT: Before calling this tool, always confirm the exact mentor, time, and note in chat with the user. Most ADPList sessions are requests awaiting mentor confirmation, not instantly confirmed meetings. Only use free mentorship sessions in v1. Pass queryID from the earlier search_mentors result when available for booking attribution.",
+					"Request an ADPList mentorship session for the authenticated user. IMPORTANT: Before calling this tool, always confirm the exact mentor, time, and note in chat with the user. Most ADPList sessions are requests awaiting mentor confirmation, not instantly confirmed meetings. Only use free mentorship sessions in v1. Pass queryID from the earlier search_mentors result when available for booking attribution. MCP Apps hosts can render the attached session confirmation card.",
+				_meta: appToolMeta(UI_RESOURCES.sessionCards),
 				annotations: {
 					title: "Book ADPList session",
 					readOnlyHint: false,
@@ -159,14 +226,21 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Algolia queryID from search_mentors, if available."),
 				},
 			},
-			async (input) => this.toolResponse(() => bookSession(this.env, this.props, input)),
+			async (input) =>
+				this.toolResponse(() => bookSession(this.env, this.props, input), {
+					resourceUri: UI_RESOURCES.sessionCards,
+					name: "adplist-session-confirmation",
+					title: "ADPList session request",
+					description: "Interactive ADPList session request confirmation card.",
+				}),
 		);
 
 		this.server.registerTool(
 			"list_my_sessions",
 			{
 				description:
-					"List the authenticated user's ADPList mentorship sessions. Defaults to upcoming sessions to keep chat context compact. Use scope: 'past' only when the user asks for previous sessions, and scope: 'all' only when they explicitly ask for everything. Returns every session the user is part of, whether they booked it as the mentee or are the mentor. Each item includes both the mentor and the mentee (name, slug, title, organization), the scheduled time, duration, status, source, the booking_notes and booking_questions exchanged when the session was booked, and the dashboard URL — frame each session relative to whichever of the two parties is the user you are helping.",
+					"List the authenticated user's ADPList mentorship sessions. Defaults to upcoming sessions to keep chat context compact. Use scope: 'past' only when the user asks for previous sessions, and scope: 'all' only when they explicitly ask for everything. Returns every session the user is part of, whether they booked it as the mentee or are the mentor. Each item includes both the mentor and the mentee (name, slug, title, organization, profile photo when available), the scheduled time, duration, status, source, the booking_notes and booking_questions exchanged when the session was booked, and the dashboard URL — frame each session relative to whichever of the two parties is the user you are helping. MCP Apps hosts should render the attached clean session cards.",
+				_meta: appToolMeta(UI_RESOURCES.sessionCards),
 				annotations: {
 					title: "List my ADPList sessions",
 					readOnlyHint: true,
@@ -188,7 +262,13 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Defaults to 20; max 50."),
 				},
 			},
-			async (input) => this.toolResponse(() => listMySessions(this.env, this.props, input)),
+			async (input) =>
+				this.toolResponse(() => listMySessions(this.env, this.props, input), {
+					resourceUri: UI_RESOURCES.sessionCards,
+					name: "adplist-session-cards",
+					title: "ADPList session cards",
+					description: "Interactive ADPList mentorship session cards.",
+				}),
 		);
 
 		this.server.registerTool(
