@@ -8,14 +8,14 @@ Production URL: `https://mcp.adplist.org/sse`
 
 ### Claude Desktop
 
-Add ADPList from Settings → Connectors if available. For config-file installs, add this to `claude_desktop_config.json`:
+Add ADPList from Settings → Connectors if available. For config-file installs, use an `mcp-remote` stdio bridge so current and older Claude Desktop builds parse the config consistently:
 
 ```json
 {
 	"mcpServers": {
 		"adplist": {
-			"type": "sse",
-			"url": "https://mcp.adplist.org/sse"
+			"command": "npx",
+			"args": ["mcp-remote", "https://mcp.adplist.org/sse"]
 		}
 	}
 }
@@ -24,7 +24,7 @@ Add ADPList from Settings → Connectors if available. For config-file installs,
 ### Claude Code
 
 ```bash
-claude mcp add --transport sse adplist https://mcp.adplist.org/sse
+claude mcp add --transport http adplist https://mcp.adplist.org/sse
 ```
 
 Cursor is experimental/unverified for launch and intentionally omitted from primary install instructions.

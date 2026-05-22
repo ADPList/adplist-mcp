@@ -239,7 +239,7 @@ async function runWithToolRateLimit<T>(
 function createOAuthProvider(env: Env) {
 	const options: OAuthProviderOptions<Env> = {
 		apiRoute: "/sse",
-		apiHandler: MyMCP.serveSSE("/sse"),
+		apiHandler: MyMCP.serve("/sse", { transport: "auto" }),
 		defaultHandler: app,
 		authorizeEndpoint: "/oauth/authorize",
 		tokenEndpoint: "/oauth/token",
