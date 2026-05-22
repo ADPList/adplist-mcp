@@ -43,6 +43,14 @@ test("mentor cards render photos and slot picker renders selectable date-time co
 	assert.match(slotHtml, /ui\/message/);
 });
 
+test("slot picker groups days by the user's local date instead of UTC date", () => {
+	const slotHtml = buildAppHtml("slot-picker");
+	assert.match(slotHtml, /localDayKey\(date\)/);
+	assert.match(slotHtml, /formatToParts\(date\)/);
+	assert.match(slotHtml, /localDayLabel\(day\)/);
+	assert.doesNotMatch(slotHtml, /toISOString\(\)\.slice\(0,10\)/);
+});
+
 test("UI resource constants use stable ui:// URIs", () => {
 	assert.equal(UI_RESOURCES.mentorCards, "ui://adplist/mentor-cards.html");
 	assert.equal(UI_RESOURCES.slotPicker, "ui://adplist/slot-picker.html");

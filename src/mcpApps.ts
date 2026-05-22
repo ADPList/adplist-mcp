@@ -152,11 +152,11 @@ function renderSlots(data) {
   const slots = data.slots || [];
   document.getElementById('subtitle').textContent = slots.length ? 'Select a date, then choose a time. The final booking still needs chat confirmation.' : 'No available slots returned.';
   if (!slots.length) { document.getElementById('root').innerHTML = '<div class="empty">No available times in this window.</div>'; return resize(); }
-  const byDay = slots.reduce((acc, slot) => { const date = new Date(slot.slot_iso); const key = date.toISOString().slice(0,10); (acc[key] ||= []).push(slot); return acc; }, {});
+  const byDay = slots.reduce((acc, slot) => { const date = new Date(slot.slot_iso); const key = localDayKey(date); (acc[key] ||= []).push(slot); return acc; }, {});
   const days = Object.keys(byDay).sort();
   let active = days[0];
   function paint() {
-    const dayButtons = days.map((day) => '<button class="day ' + (day === active ? 'active' : '') + '" data-day="' + day + '"><strong>' + h(new Date(day + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })) + '</strong><span class="subtle">' + byDay[day].length + ' time' + (byDay[day].length === 1 ? '' : 's') + '</span></button>').join('');
+    const dayButtons = days.map((day) => '<button class="day ' + (day === active ? 'active' : '') + '" data-day="' + day + '"><strong>' + h(localDayLabel(day)) + '</strong><span class="subtle">' + byDay[day].length + ' time' + (byDay[day].length === 1 ? '' : 's') + '</span></button>').join('');
     const slotButtons = byDay[active].map((slot) => '<button class="slot" data-slot="' + h(slot.slot_iso) + '" data-mentor="' + h(slot.mentor_slug) + '"><div class="slot-time">' + h(new Date(slot.slot_iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) + '</div><div class="subtle">' + h(slot.duration_minutes) + ' min · ' + h(slot.slot_local_display) + '</div></button>').join('');
     document.getElementById('root').innerHTML = '<div class="days">' + dayButtons + '</div><div class="slots">' + slotButtons + '</div>' + (data.truncated ? '<p class="subtle">Showing the first available times. Ask for a wider window if needed.</p>' : '');
     document.querySelectorAll('[data-day]').forEach((button) => button.addEventListener('click', () => { active = button.dataset.day; paint(); }));
@@ -164,6 +164,15 @@ function renderSlots(data) {
     resize();
   }
   paint();
+}
+function localDayKey(date) {
+  const parts = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+  const get = (type) => parts.find((part) => part.type === type)?.value || '';
+  return get('year') + '-' + get('month') + '-' + get('day');
+}
+function localDayLabel(day) {
+  const [year, month, date] = day.split('-').map(Number);
+  return new Date(year, month - 1, date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 function renderSessions(data) {
   const sessions = data.sessions || (data.session_id ? [data] : []);
