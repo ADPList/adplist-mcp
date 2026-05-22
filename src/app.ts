@@ -87,7 +87,6 @@ app.post("/account/revoke/verify", async (c) => {
 		);
 	}
 
-	await c.env.OAUTH_KV.delete(`oauth_revoke:${revokeId}`);
 	let revokedCount = 0;
 	let cursor: string | undefined;
 	do {
@@ -101,6 +100,7 @@ app.post("/account/revoke/verify", async (c) => {
 		}
 		cursor = result.cursor;
 	} while (cursor);
+	await c.env.OAUTH_KV.delete(`oauth_revoke:${revokeId}`);
 
 	return c.html(renderRevokeDonePage(revokedCount));
 });

@@ -51,3 +51,23 @@ test("per-user tool call rate limit slides out old calls", async () => {
 	const bucket = JSON.parse(env.store.get("mcp_tool_rate:user-123"));
 	assert.equal(bucket.calls.length, 1);
 });
+
+test("per-user tool call rate limit degrades open when KV is unavailable", async () => {
+	const env = {
+		OAUTH_KV: {
+			async get() {
+				throw new Error("KV unavailable");
+			},
+			async put() {
+				throw new Error("KV unavailable");
+			},
+		},
+	};
+	const originalWarn = console.warn;
+	console.warn = () => {};
+	try {
+		await assert.doesNotReject(enforceToolCallRateLimit(env, props, 1_000_000));
+	} finally {
+		console.warn = originalWarn;
+	}
+});
