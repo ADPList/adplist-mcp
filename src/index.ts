@@ -14,6 +14,7 @@ import { manageMyContext } from "./profile";
 import { searchMentors } from "./searchMentors";
 import { cancelSession, listMySessions } from "./sessions";
 import { toolResponse } from "./errors";
+import { enforceToolCallRateLimit } from "./rateLimit";
 import type { McpUserProps } from "./types";
 
 export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
@@ -21,6 +22,10 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 		name: "adplist-mcp",
 		version: "0.1.0",
 	});
+
+	private toolResponse<T>(run: () => Promise<T>) {
+		return toolResponse(() => runWithToolRateLimit(this.env, this.props, run));
+	}
 
 	async init() {
 		this.server.registerTool(
@@ -39,7 +44,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Career context fields to shallow-merge when action is merge."),
 				},
 			},
-			async (input) => toolResponse(() => manageMyContext(this.env, this.props, input)),
+			async (input) => this.toolResponse(() => manageMyContext(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -70,7 +75,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.optional(),
 				},
 			},
-			async (input) => toolResponse(() => searchMentors(this.env, this.props, input)),
+			async (input) => this.toolResponse(() => searchMentors(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -93,7 +98,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Lookahead window in days. Defaults to 14, max 30."),
 				},
 			},
-			async (input) => toolResponse(() => listAvailability(this.env, this.props, input)),
+			async (input) => this.toolResponse(() => listAvailability(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -126,7 +131,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Algolia queryID from search_mentors, if available."),
 				},
 			},
-			async (input) => toolResponse(() => bookSession(this.env, this.props, input)),
+			async (input) => this.toolResponse(() => bookSession(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -148,7 +153,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Defaults to 20; max 50."),
 				},
 			},
-			async (input) => toolResponse(() => listMySessions(this.env, this.props, input)),
+			async (input) => this.toolResponse(() => listMySessions(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -178,7 +183,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						),
 				},
 			},
-			async (input) => toolResponse(() => listJournals(this.env, this.props, input)),
+			async (input) => this.toolResponse(() => listJournals(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -194,7 +199,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Journal ID returned by list_journals."),
 				},
 			},
-			async (input) => toolResponse(() => readJournal(this.env, this.props, input)),
+			async (input) => this.toolResponse(() => readJournal(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(
@@ -217,15 +222,24 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.describe("Optional cancellation reason to share with the mentor."),
 				},
 			},
-			async (input) => toolResponse(() => cancelSession(this.env, this.props, input)),
+			async (input) => this.toolResponse(() => cancelSession(this.env, this.props, input)),
 		);
 	}
+}
+
+async function runWithToolRateLimit<T>(
+	env: Env,
+	props: McpUserProps | undefined,
+	run: () => Promise<T>,
+): Promise<T> {
+	await enforceToolCallRateLimit(env, props);
+	return run();
 }
 
 function createOAuthProvider(env: Env) {
 	const options: OAuthProviderOptions<Env> = {
 		apiRoute: "/sse",
-		apiHandler: MyMCP.serveSSE("/sse"),
+		apiHandler: MyMCP.serve("/sse", { transport: "auto" }),
 		defaultHandler: app,
 		authorizeEndpoint: "/oauth/authorize",
 		tokenEndpoint: "/oauth/token",
