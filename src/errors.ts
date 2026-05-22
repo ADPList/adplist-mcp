@@ -113,16 +113,41 @@ export function formatToolError(error: unknown): StructuredMcpError {
 	);
 }
 
-export async function toolResponse<T>(run: () => Promise<T>) {
+export async function toolResponse<T>(
+	run: () => Promise<T>,
+	app?: { resourceUri: string; name: string; title: string; description: string },
+) {
 	try {
 		const result = await run();
-		return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+		return {
+			structuredContent: isRecord(result) ? result : undefined,
+			content: [
+				{ type: "text" as const, text: JSON.stringify(result) },
+				...(app
+					? [
+							{
+								type: "resource_link" as const,
+								uri: app.resourceUri,
+								name: app.name,
+								title: app.title,
+								description: app.description,
+								mimeType: "text/html;profile=mcp-app",
+								annotations: { audience: ["user" as const], priority: 1 },
+							},
+						]
+					: []),
+			],
+		};
 	} catch (error) {
 		return {
 			content: [{ type: "text" as const, text: JSON.stringify(formatToolError(error)) }],
 			isError: true,
 		};
 	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function structuredError(

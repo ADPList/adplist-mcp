@@ -25,6 +25,10 @@ type InstanceParty = {
 	slug?: string;
 	title?: string;
 	organization?: string;
+	profile?: { image?: string };
+	image?: string;
+	profileImage?: string;
+	profile_photo_url?: string;
 };
 
 type BookingNote = {
@@ -64,6 +68,7 @@ export type SessionParty = {
 	slug: string;
 	title: string;
 	organization: string;
+	profile_photo_url: string;
 };
 
 export type MySession = {
@@ -196,6 +201,12 @@ function toParty(party: InstanceParty | undefined): SessionParty {
 		slug: party?.slug || "",
 		title: party?.title || "",
 		organization: party?.organization || "",
+		profile_photo_url: normalizeImageUrl(
+			party?.profile?.image ??
+				party?.profile_photo_url ??
+				party?.profileImage ??
+				party?.image,
+		),
 	};
 }
 
@@ -298,6 +309,16 @@ async function safeJson<T>(response: Response): Promise<T | undefined> {
 	} catch {
 		return undefined;
 	}
+}
+
+function normalizeImageUrl(value: unknown): string {
+	if (typeof value !== "string") return "";
+	const trimmed = value.trim();
+	if (!trimmed) return "";
+	if (trimmed.startsWith("https://")) return trimmed;
+	if (trimmed.startsWith("//")) return `https:${trimmed}`;
+	if (trimmed.startsWith("/")) return `https://adplist.org${trimmed}`;
+	return "";
 }
 
 function normalizeSource(source: string | undefined): string {

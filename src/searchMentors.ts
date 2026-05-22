@@ -19,6 +19,11 @@ type SearchServiceMentor = {
 	title?: string;
 	employer?: string;
 	company?: string;
+	profile?: { image?: string };
+	image?: string;
+	profileImage?: string;
+	profile_photo_url?: string;
+	photoUrl?: string;
 	expertise?: string[];
 	disciplines?: string[];
 	average_rating?: number;
@@ -44,6 +49,7 @@ export type SearchMentorResult = {
 	sessions_count: number;
 	next_7_day_slots_count: number;
 	profile_url: string;
+	profile_photo_url: string;
 	why_match: string;
 	queryID?: string;
 	position?: number;
@@ -90,6 +96,13 @@ export function mapSearchMentorsResponse(
 		const company = mentor.employer ?? mentor.company ?? "";
 		const sessions = numberOrZero(mentor.total_sessions);
 		const slots = numberOrZero(mentor.next_7_day_slots_count);
+		const profilePhotoUrl = normalizeImageUrl(
+			mentor.profile?.image ??
+				mentor.profile_photo_url ??
+				mentor.profileImage ??
+				mentor.image ??
+				mentor.photoUrl,
+		);
 		return {
 			name: mentor.name ?? "",
 			slug: mentor.slug ?? "",
@@ -105,6 +118,7 @@ export function mapSearchMentorsResponse(
 			profile_url: mentor.slug
 				? `https://adplist.org/mentors/${mentor.slug}`
 				: "https://adplist.org/explore",
+			profile_photo_url: profilePhotoUrl,
 			why_match: buildWhyMatch(mentor, input),
 			queryID: response.queryID,
 			position: mentor.position,
@@ -162,6 +176,16 @@ function buildWhyMatch(mentor: SearchServiceMentor, input: SearchMentorsInput): 
 
 function numberOrZero(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeImageUrl(value: unknown): string {
+	if (typeof value !== "string") return "";
+	const trimmed = value.trim();
+	if (!trimmed) return "";
+	if (trimmed.startsWith("https://")) return trimmed;
+	if (trimmed.startsWith("//")) return `https:${trimmed}`;
+	if (trimmed.startsWith("/")) return `https://adplist.org${trimmed}`;
+	return "";
 }
 
 function includesIgnoreCase(values: string[] | undefined, expected: string): boolean {
