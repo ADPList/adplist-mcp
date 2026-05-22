@@ -11,6 +11,12 @@
 		"SEARCH_SERVICE_URL": "https://api.adplist.org",
 		"MEETINGS_SERVICE_URL": "https://api.adplist.org"
 	},
+	"routes": [
+		{
+			"pattern": "mcp.adplist.org",
+			"custom_domain": true
+		}
+	],
 	"durable_objects": {
 		"bindings": [
 			{

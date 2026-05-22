@@ -5,9 +5,10 @@ import { formatToolError, toolResponse } from "../src/errors.ts";
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 
-test("M6 wraps MCP tool handlers so failures return structured JSON errors", () => {
-	const wrappers = indexSource.match(/toolResponse\(\(\) =>/g) ?? [];
+test("M7 wraps MCP tool handlers with per-user rate limiting and structured errors", () => {
+	const wrappers = indexSource.match(/this\.toolResponse\(\(\) =>/g) ?? [];
 	assert.equal(wrappers.length, 8);
+	assert.match(indexSource, /runWithToolRateLimit/);
 });
 
 test("AUTH_EXPIRED gives the LLM a reconnect recovery path", () => {
