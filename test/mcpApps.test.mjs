@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { MCP_APP_MIME_TYPE, UI_RESOURCES, buildAppHtml } from "../src/mcpApps.ts";
+import {
+	MCP_APP_MIME_TYPE,
+	UI_RESOURCES,
+	appResourceMeta,
+	appToolMeta,
+	buildAppHtml,
+} from "../src/mcpApps.ts";
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 const errorsSource = readFileSync(new URL("../src/errors.ts", import.meta.url), "utf8");
@@ -21,6 +27,26 @@ test("interactive tools advertise MCP Apps resource metadata and preserve fallba
 	assert.match(indexSource, /_meta: appToolMeta\(UI_RESOURCES\.sessionCards\)/);
 	assert.match(errorsSource, /structuredContent/);
 	assert.match(errorsSource, /text\/html;profile=mcp-app/);
+});
+
+test("app metadata includes ChatGPT compatibility aliases", () => {
+	assert.deepEqual(appToolMeta(UI_RESOURCES.mentorCards), {
+		ui: {
+			resourceUri: UI_RESOURCES.mentorCards,
+			visibility: ["model", "app"],
+		},
+		"ui/resourceUri": UI_RESOURCES.mentorCards,
+		"openai/outputTemplate": UI_RESOURCES.mentorCards,
+		"openai/widgetAccessible": true,
+	});
+
+	const resourceMeta = appResourceMeta("Mentor cards");
+	assert.equal(resourceMeta["openai/widgetDescription"], "Mentor cards");
+	assert.equal(resourceMeta["openai/widgetPrefersBorder"], true);
+	assert.deepEqual(
+		resourceMeta["openai/widgetCSP"].resource_domains,
+		resourceMeta.ui.csp.resourceDomains,
+	);
 });
 
 test("mentor cards require and normalize profile photo URLs from search-service", () => {
