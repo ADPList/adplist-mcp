@@ -164,12 +164,18 @@ function resize() { notify('ui/notifications/size-changed', { height: Math.ceil(
 new ResizeObserver(resize).observe(document.body);
 window.addEventListener('message', (event) => {
   const msg = event.data || {};
-  if (Object.prototype.hasOwnProperty.call(msg, 'id') && pendingRequests.has(msg.id)) {
+  const hasId = Object.prototype.hasOwnProperty.call(msg, 'id');
+  const isResponse = hasId && !msg.method && (Object.prototype.hasOwnProperty.call(msg, 'result') || Object.prototype.hasOwnProperty.call(msg, 'error'));
+  if (isResponse && pendingRequests.has(msg.id)) {
     const pending = pendingRequests.get(msg.id);
     pendingRequests.delete(msg.id);
     clearTimeout(pending.timeout);
     if (msg.error) pending.reject(new Error(msg.error.message || 'MCP Apps request failed'));
     else pending.resolve(msg.result);
+    return;
+  }
+  if (hasId && msg.method === 'ui/resource-teardown') {
+    parent.postMessage({ jsonrpc: '2.0', id: msg.id, result: {} }, '*');
     return;
   }
   if (msg.method === 'ui/notifications/tool-result') render(msg.params);

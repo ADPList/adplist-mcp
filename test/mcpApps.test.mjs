@@ -88,6 +88,8 @@ test("embedded apps perform MCP Apps ui initialize handshake before initialized 
 	assert.match(html, /appInfo/);
 	assert.match(html, /protocolVersion: '2026-01-26'/);
 	assert.match(html, /notify\('ui\/notifications\/initialized'/);
+	assert.match(html, /const isResponse = hasId && !msg\.method/);
+	assert.match(html, /msg\.method === 'ui\/resource-teardown'/);
 	assert.ok(
 		html.indexOf("request('ui/initialize'") <
 			html.indexOf("notify('ui/notifications/initialized'"),
