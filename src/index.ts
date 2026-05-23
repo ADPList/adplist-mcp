@@ -8,6 +8,7 @@ import {
 	MCP_APP_MIME_TYPE,
 	UI_RESOURCES,
 	appResourceMeta,
+	appServerCapabilities,
 	appToolMeta,
 	buildAppHtml,
 	type AppViewKind,
@@ -26,10 +27,13 @@ import { enforceToolCallRateLimit } from "./rateLimit";
 import type { McpUserProps } from "./types";
 
 export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
-	server = new McpServer({
-		name: "adplist-mcp",
-		version: "0.1.0",
-	});
+	server = new McpServer(
+		{
+			name: "adplist-mcp",
+			version: "0.1.0",
+		},
+		{ capabilities: appServerCapabilities() },
+	);
 
 	private toolResponse<T>(
 		run: () => Promise<T>,
