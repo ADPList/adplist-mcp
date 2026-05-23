@@ -1,6 +1,11 @@
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export const UI_RESOURCE_META_KEY = "ui/resourceUri";
+export const OPENAI_OUTPUT_TEMPLATE_META_KEY = "openai/outputTemplate";
+export const OPENAI_WIDGET_ACCESSIBLE_META_KEY = "openai/widgetAccessible";
+export const OPENAI_WIDGET_DESCRIPTION_META_KEY = "openai/widgetDescription";
+export const OPENAI_WIDGET_PREFERS_BORDER_META_KEY = "openai/widgetPrefersBorder";
+export const OPENAI_WIDGET_CSP_META_KEY = "openai/widgetCSP";
 
 export const UI_RESOURCES = {
 	mentorCards: "ui://adplist/mentor-cards.html",
@@ -10,6 +15,15 @@ export const UI_RESOURCES = {
 
 export type AppViewKind = "mentor-cards" | "slot-picker" | "session-cards";
 
+const RESOURCE_DOMAINS = [
+	"https://adplist.org",
+	"https://*.adplist.org",
+	"https://images.ctfassets.net",
+	"https://*.cloudinary.com",
+	"https://lh3.googleusercontent.com",
+	"https://avatars.githubusercontent.com",
+];
+
 export function appToolMeta(resourceUri: string) {
 	return {
 		ui: {
@@ -17,23 +31,23 @@ export function appToolMeta(resourceUri: string) {
 			visibility: ["model", "app"],
 		},
 		[UI_RESOURCE_META_KEY]: resourceUri,
+		[OPENAI_OUTPUT_TEMPLATE_META_KEY]: resourceUri,
+		[OPENAI_WIDGET_ACCESSIBLE_META_KEY]: true,
 	};
 }
 
-export function appResourceMeta() {
+export function appResourceMeta(description = "Interactive ADPList MCP App UI") {
 	return {
 		ui: {
 			prefersBorder: true,
 			csp: {
-				resourceDomains: [
-					"https://adplist.org",
-					"https://*.adplist.org",
-					"https://images.ctfassets.net",
-					"https://*.cloudinary.com",
-					"https://lh3.googleusercontent.com",
-					"https://avatars.githubusercontent.com",
-				],
+				resourceDomains: RESOURCE_DOMAINS,
 			},
+		},
+		[OPENAI_WIDGET_DESCRIPTION_META_KEY]: description,
+		[OPENAI_WIDGET_PREFERS_BORDER_META_KEY]: true,
+		[OPENAI_WIDGET_CSP_META_KEY]: {
+			resource_domains: RESOURCE_DOMAINS,
 		},
 	};
 }

@@ -45,7 +45,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			{
 				description,
 				mimeType: MCP_APP_MIME_TYPE,
-				_meta: appResourceMeta(),
+				_meta: appResourceMeta(description),
 			},
 			async () => ({
 				contents: [
@@ -53,7 +53,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						uri,
 						mimeType: MCP_APP_MIME_TYPE,
 						text: buildAppHtml(kind),
-						_meta: appResourceMeta(),
+						_meta: appResourceMeta(description),
 					},
 				],
 			}),
