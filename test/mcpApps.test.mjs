@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
 	MCP_APP_MIME_TYPE,
+	MCP_APP_EXTENSION_ID,
 	UI_RESOURCES,
 	appResourceMeta,
+	appServerCapabilities,
 	appToolMeta,
 	buildAppHtml,
 } from "../src/mcpApps.ts";
@@ -19,6 +21,16 @@ test("V2 MCP Apps resources are registered with the app MIME type", () => {
 	assert.match(indexSource, /UI_RESOURCES\.mentorCards/);
 	assert.match(indexSource, /UI_RESOURCES\.slotPicker/);
 	assert.match(indexSource, /UI_RESOURCES\.sessionCards/);
+});
+
+test("server advertises MCP Apps extension capability", () => {
+	assert.equal(MCP_APP_EXTENSION_ID, "io.modelcontextprotocol/ui");
+	assert.deepEqual(appServerCapabilities(), {
+		extensions: {
+			"io.modelcontextprotocol/ui": {},
+		},
+	});
+	assert.match(indexSource, /capabilities: appServerCapabilities\(\)/);
 });
 
 test("interactive tools advertise MCP Apps resource metadata and preserve fallback content", () => {
@@ -67,6 +79,19 @@ test("mentor cards render photos and slot picker renders selectable date-time co
 	assert.match(slotHtml, /class=\"slots\"/);
 	assert.match(slotHtml, /I choose/);
 	assert.match(slotHtml, /ui\/message/);
+});
+
+test("embedded apps perform MCP Apps ui initialize handshake before initialized notification", () => {
+	const html = buildAppHtml("mentor-cards");
+	assert.match(html, /request\('ui\/initialize'/);
+	assert.match(html, /appCapabilities/);
+	assert.match(html, /appInfo/);
+	assert.match(html, /protocolVersion: '2026-01-26'/);
+	assert.match(html, /notify\('ui\/notifications\/initialized'/);
+	assert.ok(
+		html.indexOf("request('ui/initialize'") <
+			html.indexOf("notify('ui/notifications/initialized'"),
+	);
 });
 
 test("slot picker groups days by the user's local date instead of UTC date", () => {

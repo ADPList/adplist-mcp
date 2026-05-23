@@ -1,4 +1,5 @@
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
+export const MCP_APP_EXTENSION_ID = "io.modelcontextprotocol/ui";
 
 export const UI_RESOURCE_META_KEY = "ui/resourceUri";
 export const OPENAI_OUTPUT_TEMPLATE_META_KEY = "openai/outputTemplate";
@@ -14,6 +15,14 @@ export const UI_RESOURCES = {
 } as const;
 
 export type AppViewKind = "mentor-cards" | "slot-picker" | "session-cards";
+
+export function appServerCapabilities() {
+	return {
+		extensions: {
+			[MCP_APP_EXTENSION_ID]: {},
+		},
+	};
+}
 
 const RESOURCE_DOMAINS = [
 	"https://adplist.org",
@@ -122,15 +131,50 @@ h1 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 <script>
 const VIEW_KIND = ${JSON.stringify(kind)};
 let lastId = 1;
-function send(method, params) { parent.postMessage({ jsonrpc: '2.0', id: lastId++, method, params }, '*'); }
+const pendingRequests = new Map();
+function request(method, params, timeoutMs = 5000) {
+  const id = lastId++;
+  parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingRequests.delete(id);
+      reject(new Error(method + ' timed out'));
+    }, timeoutMs);
+    pendingRequests.set(id, { resolve, reject, timeout });
+  });
+}
+function send(method, params) { request(method, params).catch((error) => console.warn('MCP Apps request failed', error)); }
 function notify(method, params) { parent.postMessage({ jsonrpc: '2.0', method, params }, '*'); }
-notify('ui/notifications/initialized', {});
+async function connectToHost() {
+  try {
+    await request('ui/initialize', {
+      appInfo: { name: titleForView(), version: '0.1.0' },
+      appCapabilities: {},
+      protocolVersion: '2026-01-26'
+    });
+  } catch (error) {
+    console.warn('MCP Apps host initialization failed', error);
+  } finally {
+    notify('ui/notifications/initialized', {});
+    resize();
+  }
+}
+function titleForView() { return VIEW_KIND === 'mentor-cards' ? 'ADPList mentor cards' : VIEW_KIND === 'slot-picker' ? 'ADPList slot picker' : 'ADPList session cards'; }
 function resize() { notify('ui/notifications/size-changed', { height: Math.ceil(document.documentElement.scrollHeight), width: Math.ceil(document.documentElement.scrollWidth) }); }
 new ResizeObserver(resize).observe(document.body);
 window.addEventListener('message', (event) => {
   const msg = event.data || {};
+  if (Object.prototype.hasOwnProperty.call(msg, 'id') && pendingRequests.has(msg.id)) {
+    const pending = pendingRequests.get(msg.id);
+    pendingRequests.delete(msg.id);
+    clearTimeout(pending.timeout);
+    if (msg.error) pending.reject(new Error(msg.error.message || 'MCP Apps request failed'));
+    else pending.resolve(msg.result);
+    return;
+  }
   if (msg.method === 'ui/notifications/tool-result') render(msg.params);
 });
+connectToHost();
 function parseResult(result) {
   if (result && result.structuredContent) return result.structuredContent;
   const text = result?.content?.find?.((item) => item.type === 'text')?.text;
