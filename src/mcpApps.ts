@@ -1,5 +1,6 @@
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 export const MCP_APP_EXTENSION_ID = "io.modelcontextprotocol/ui";
+export const CLAUDE_APP_DOMAIN = "a2380ff814fb1c60de1605b6ee5c83af.claudemcpcontent.com";
 
 export const UI_RESOURCE_META_KEY = "ui/resourceUri";
 export const OPENAI_OUTPUT_TEMPLATE_META_KEY = "openai/outputTemplate";
@@ -48,6 +49,7 @@ export function appToolMeta(resourceUri: string) {
 export function appResourceMeta(description = "Interactive ADPList MCP App UI") {
 	return {
 		ui: {
+			domain: CLAUDE_APP_DOMAIN,
 			prefersBorder: true,
 			csp: {
 				resourceDomains: RESOURCE_DOMAINS,

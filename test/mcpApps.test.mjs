@@ -4,6 +4,7 @@ import test from "node:test";
 import {
 	MCP_APP_MIME_TYPE,
 	MCP_APP_EXTENSION_ID,
+	CLAUDE_APP_DOMAIN,
 	UI_RESOURCES,
 	appResourceMeta,
 	appServerCapabilities,
@@ -41,7 +42,7 @@ test("interactive tools advertise MCP Apps resource metadata and preserve fallba
 	assert.match(errorsSource, /text\/html;profile=mcp-app/);
 });
 
-test("app metadata includes ChatGPT compatibility aliases", () => {
+test("app metadata includes Claude domain and ChatGPT compatibility aliases", () => {
 	assert.deepEqual(appToolMeta(UI_RESOURCES.mentorCards), {
 		ui: {
 			resourceUri: UI_RESOURCES.mentorCards,
@@ -53,6 +54,11 @@ test("app metadata includes ChatGPT compatibility aliases", () => {
 	});
 
 	const resourceMeta = appResourceMeta("Mentor cards");
+	assert.equal(
+		CLAUDE_APP_DOMAIN,
+		"a2380ff814fb1c60de1605b6ee5c83af.claudemcpcontent.com",
+	);
+	assert.equal(resourceMeta.ui.domain, CLAUDE_APP_DOMAIN);
 	assert.equal(resourceMeta["openai/widgetDescription"], "Mentor cards");
 	assert.equal(resourceMeta["openai/widgetPrefersBorder"], true);
 	assert.deepEqual(
