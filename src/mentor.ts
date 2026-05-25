@@ -113,55 +113,96 @@ type MeetingsListResponse = {
 	totalCount?: number;
 };
 
+type RawParty = {
+	userId?: string;
+	fullName?: string;
+	slug?: string;
+	title?: string;
+	organization?: string;
+	profileImage?: string;
+	profile?: { image?: string; title?: string; organization?: string };
+	image?: string;
+};
+
+type RawMeetingInstance = {
+	scheduledDate?: number;
+	status?: string;
+};
+
+type RawBookingNote = {
+	description?: string;
+};
+
 type RawMeeting = {
 	meetingId?: string;
 	status?: string;
 	mentorUserId?: string;
 	menteeUserId?: string;
+	initialStartDateTime?: number;
 	scheduledDate?: number;
 	duration?: number;
 	source?: string;
 	notes?: string;
 	message?: string;
-	mentor?: {
-		userId?: string;
-		fullName?: string;
-		slug?: string;
-		title?: string;
-		organization?: string;
-		profileImage?: string;
+	metadata?: {
+		source?: string;
+		bookingNotes?: RawBookingNote[];
 	};
-	mentee?: {
-		userId?: string;
-		fullName?: string;
-		slug?: string;
-		title?: string;
-		organization?: string;
-		profileImage?: string;
-	};
+	session?: { duration?: number };
+	meetingInstances?: RawMeetingInstance[];
+	mentor?: RawParty;
+	mentee?: RawParty;
 };
+
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+	for (const value of values) {
+		if (typeof value === "number" && Number.isFinite(value)) return value;
+	}
+	return undefined;
+}
+
+function partyTitle(party: RawParty | undefined): string {
+	return party?.profile?.title || party?.title || "";
+}
+
+function partyOrganization(party: RawParty | undefined): string {
+	return party?.profile?.organization || party?.organization || "";
+}
+
+function partyImage(party: RawParty | undefined): string {
+	return normalizeImageUrl(party?.profileImage ?? party?.profile?.image ?? party?.image);
+}
+
+function extractMeetingBookingNotes(meeting: RawMeeting): string {
+	const metadataNotes = (meeting.metadata?.bookingNotes ?? [])
+		.map((note) => (typeof note?.description === "string" ? note.description.trim() : ""))
+		.filter(Boolean)
+		.join("\n");
+	return metadataNotes || meeting.notes || meeting.message || "";
+}
 
 function mapMeetingToMentorRequest(meeting: RawMeeting): MentorRequest {
 	const scheduledEpoch =
-		typeof meeting.scheduledDate === "number" && Number.isFinite(meeting.scheduledDate)
-			? meeting.scheduledDate
-			: 0;
-	const duration =
-		typeof meeting.duration === "number" ? Math.max(1, Math.round(meeting.duration)) : 30;
+		firstFiniteNumber(
+			meeting.scheduledDate,
+			meeting.initialStartDateTime,
+			meeting.meetingInstances?.[0]?.scheduledDate,
+		) ?? 0;
+	const duration = firstFiniteNumber(meeting.duration, meeting.session?.duration) ?? 30;
 
 	return {
 		session_id: meeting.meetingId || "",
 		mentee: {
 			name: meeting.mentee?.fullName || "",
 			slug: meeting.mentee?.slug || "",
-			title: meeting.mentee?.title || "",
-			organization: meeting.mentee?.organization || "",
-			profile_photo_url: normalizeImageUrl(meeting.mentee?.profileImage),
+			title: partyTitle(meeting.mentee),
+			organization: partyOrganization(meeting.mentee),
+			profile_photo_url: partyImage(meeting.mentee),
 		},
 		scheduled_at_iso: new Date(scheduledEpoch * 1000).toISOString(),
-		duration_minutes: duration,
-		source: (meeting.source || "web").toLowerCase(),
-		booking_notes: meeting.notes || meeting.message || "",
+		duration_minutes: Math.max(1, Math.round(duration)),
+		source: (meeting.metadata?.source || meeting.source || "web").toLowerCase(),
+		booking_notes: extractMeetingBookingNotes(meeting),
 		session_url: `https://adplist.org/meetings/${meeting.meetingId || ""}`,
 	};
 }
@@ -178,6 +219,7 @@ export async function listMentorRequests(
 	const url = new URL("/meetings", baseUrl);
 	url.searchParams.set("filter", "pending");
 	url.searchParams.set("limit", String(limit));
+	url.searchParams.set("full", "true");
 
 	const response = await fetch(url.toString(), { headers: buildHeaders(props) });
 
@@ -301,27 +343,16 @@ type MenteesListResponse = {
 	mentees?: RawMentee[];
 };
 
-type RawMentee = {
-	userId?: string;
-	fullName?: string;
-	slug?: string;
-	title?: string;
-	organization?: string;
-	profileImage?: string;
-	profile?: { image?: string };
-	image?: string;
-};
+type RawMentee = RawParty;
 
 function mapMentee(raw: RawMentee): MenteeInfo {
 	return {
 		user_id: raw.userId || "",
 		name: raw.fullName || "",
 		slug: raw.slug || "",
-		title: raw.title || "",
-		organization: raw.organization || "",
-		profile_photo_url: normalizeImageUrl(
-			raw.profileImage ?? raw.profile?.image ?? raw.image,
-		),
+		title: partyTitle(raw),
+		organization: partyOrganization(raw),
+		profile_photo_url: partyImage(raw),
 	};
 }
 
