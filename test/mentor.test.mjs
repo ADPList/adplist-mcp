@@ -5,6 +5,7 @@ import {
 	listMentorRequests,
 	respondToMentorRequest,
 	rescheduleAsMentor,
+	listMyMentees,
 } from "../src/mentor.ts";
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
@@ -64,22 +65,27 @@ test("list_mentor_requests maps pending meetings to request shape", async () => 
 		assert.equal(u.pathname, "/meetings");
 		assert.equal(u.searchParams.get("filter"), "pending");
 		assert.equal(u.searchParams.get("limit"), "20");
+		assert.equal(u.searchParams.get("full"), "true");
 		return new Response(
 			JSON.stringify({
 				meetings: [
 					{
 						meetingId: "m1",
 						status: "AWAITING_CONFIRMATION",
-						scheduledDate: 1714000000,
-						duration: 30,
-						source: "mcp",
-						notes: "Need PM transition advice",
+						initialStartDateTime: 1714000000,
+						session: { duration: 45 },
+						metadata: {
+							source: "mcp",
+							bookingNotes: [{ description: "Need PM transition advice" }],
+						},
 						mentee: {
 							fullName: "Jane Mentee",
 							slug: "jane",
-							title: "Product Manager",
-							organization: "Figma",
-							profileImage: "https://img.example/jane.jpg",
+							profile: {
+								title: "Product Manager",
+								organization: "Figma",
+								image: "https://img.example/jane.jpg",
+							},
 						},
 					},
 				],
@@ -98,6 +104,7 @@ test("list_mentor_requests maps pending meetings to request shape", async () => 
 		assert.equal(r.mentee.title, "Product Manager");
 		assert.equal(r.mentee.organization, "Figma");
 		assert.equal(r.mentee.profile_photo_url, "https://img.example/jane.jpg");
+		assert.equal(r.duration_minutes, 45);
 		assert.equal(r.booking_notes, "Need PM transition advice");
 		assert.equal(r.source, "mcp");
 		assert.ok(r.scheduled_at_iso.startsWith("2024"));
@@ -245,6 +252,42 @@ test("reschedule_as_mentor POSTs to /meetings/reschedule/{id}", async () => {
 		assert.equal(result.status, "RESCHEDULED");
 		assert.match(calledUrl, /\/meetings\/reschedule\/m1/);
 		assert.match(calledBody, /"startDateTime"/);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("list_my_mentees maps nested profile fields without title/organization corruption", async () => {
+	const env = /** @type {any} */ ({
+		MEETINGS_SERVICE_URL: "https://api.example",
+	});
+	const props = { cognitoAccessToken: "tok", userId: "u1", email: null, scopes: [] };
+
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (url) => {
+		const u = new URL(url);
+		assert.equal(u.pathname, "/meetings/mentees");
+		return new Response(
+			JSON.stringify({
+				mentees: [
+					{
+						userId: "mentee-1",
+						fullName: "No Title Mentee",
+						slug: "no-title",
+						profile: { organization: "Google", image: "https://img.example/no-title.jpg" },
+					},
+				],
+			}),
+			{ status: 200 },
+		);
+	};
+
+	try {
+		const result = await listMyMentees(env, props);
+		assert.equal(result.mentees.length, 1);
+		assert.equal(result.mentees[0].title, "");
+		assert.equal(result.mentees[0].organization, "Google");
+		assert.equal(result.mentees[0].profile_photo_url, "https://img.example/no-title.jpg");
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
