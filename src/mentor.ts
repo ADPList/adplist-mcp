@@ -317,7 +317,7 @@ function mapMentee(raw: RawMentee): MenteeInfo {
 		user_id: raw.userId || "",
 		name: raw.fullName || "",
 		slug: raw.slug || "",
-		title: raw.title || raw.organization || "",
+		title: raw.title || "",
 		organization: raw.organization || "",
 		profile_photo_url: normalizeImageUrl(
 			raw.profileImage ?? raw.profile?.image ?? raw.image,
