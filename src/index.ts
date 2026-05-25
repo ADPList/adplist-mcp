@@ -22,6 +22,12 @@ import { listJournals, readJournal } from "./journals";
 import { manageMyContext } from "./profile";
 import { searchMentors } from "./searchMentors";
 import { cancelSession, listMySessions } from "./sessions";
+import {
+	listMentorRequests,
+	respondToMentorRequest,
+	rescheduleAsMentor,
+	listMyMentees,
+} from "./mentor";
 import { toolResponse } from "./errors";
 import { enforceToolCallRateLimit } from "./rateLimit";
 import type { McpUserProps } from "./types";
@@ -333,6 +339,118 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 				},
 			},
 			async (input) => this.toolResponse(() => readJournal(this.env, this.props, input)),
+		);
+
+		this.server.registerTool(
+			"list_mentor_requests",
+			{
+				description:
+					"List booking requests awaiting your confirmation as a mentor. These are sessions where mentees have requested to book with you and you need to accept or decline. Use this when you want to see incoming requests that need your action. Each request includes the mentee's profile, scheduled time, and booking notes.",
+				annotations: {
+					title: "List mentor booking requests",
+					readOnlyHint: true,
+					destructiveHint: false,
+					idempotentHint: true,
+					openWorldHint: true,
+				},
+				inputSchema: {
+					limit: z
+						.number()
+						.int()
+						.min(1)
+						.max(50)
+						.optional()
+						.describe("Defaults to 20; max 50."),
+				},
+			},
+			async (input) =>
+				this.toolResponse(() => listMentorRequests(this.env, this.props, input)),
+		);
+
+		this.server.registerTool(
+			"respond_to_mentor_request",
+			{
+				description:
+					"Accept or decline a mentee's booking request as a mentor. IMPORTANT: Before calling this tool, always confirm the action with the user in chat (for example: 'Accept the request from Sarah for Tuesday 3 PM?'). When declining, you can optionally include a message the mentee will see. The mentee is notified of your decision.",
+				annotations: {
+					title: "Accept or decline mentor booking request",
+					readOnlyHint: false,
+					destructiveHint: false,
+					idempotentHint: false,
+					openWorldHint: true,
+				},
+				inputSchema: {
+					session_id: z
+						.string()
+						.trim()
+						.min(1)
+						.describe("Session ID from list_mentor_requests."),
+					action: z
+						.enum(["accept", "decline"])
+						.describe("Whether to accept or decline the booking request."),
+					message: z
+						.string()
+						.trim()
+						.min(1)
+						.max(1000)
+						.optional()
+						.describe("Optional message to the mentee (e.g. reason for declining, a warm welcome)."),
+				},
+			},
+			async (input) =>
+				this.toolResponse(() => respondToMentorRequest(this.env, this.props, input)),
+		);
+
+		this.server.registerTool(
+			"reschedule_as_mentor",
+			{
+				description:
+					"As a mentor, propose a reschedule for a session to a new time. IMPORTANT: Before calling this tool, always confirm the new time with the user in chat. The mentee will be notified and must confirm the new time. After rescheduling, use list_availability to find viable new slots.",
+				annotations: {
+					title: "Reschedule a session as mentor",
+					readOnlyHint: false,
+					destructiveHint: false,
+					idempotentHint: false,
+					openWorldHint: true,
+				},
+				inputSchema: {
+					session_id: z
+						.string()
+						.trim()
+						.min(1)
+						.describe("Session ID from list_mentor_requests or list_my_sessions."),
+					new_slot_iso: z
+						.string()
+						.trim()
+						.min(1)
+						.describe("Proposed new UTC ISO 8601 datetime for the session."),
+					message: z
+						.string()
+						.trim()
+						.min(1)
+						.max(1000)
+						.optional()
+						.describe("Optional message to the mentee explaining the reschedule."),
+				},
+			},
+			async (input) =>
+				this.toolResponse(() => rescheduleAsMentor(this.env, this.props, input)),
+		);
+
+		this.server.registerTool(
+			"list_my_mentees",
+			{
+				description:
+					"List the mentees you have sessions with as a mentor. Use this to see who you mentor, their roles and organizations, and their profiles. This is a people directory — it returns unique mentees across all your sessions (past and upcoming), not individual session records.",
+				annotations: {
+					title: "List my mentees",
+					readOnlyHint: true,
+					destructiveHint: false,
+					idempotentHint: true,
+					openWorldHint: true,
+				},
+			},
+			async () => this.toolResponse(() => listMyMentees(this.env, this.props)),
 		);
 
 		this.server.registerTool(

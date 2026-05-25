@@ -7,7 +7,7 @@ const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "u
 
 test("M7 wraps MCP tool handlers with per-user rate limiting and structured errors", () => {
 	const wrappers = indexSource.match(/this\.toolResponse\(\(\) =>/g) ?? [];
-	assert.equal(wrappers.length, 8);
+	assert.equal(wrappers.length, 12);
 	assert.match(indexSource, /runWithToolRateLimit/);
 });
 
