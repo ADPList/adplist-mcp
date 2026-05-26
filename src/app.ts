@@ -20,7 +20,29 @@ app.get("/", (c) =>
 		),
 	),
 );
+const DEPLOYED_TOOL_NAMES = [
+	"manage_my_context",
+	"search_mentors",
+	"list_availability",
+	"book_session",
+	"list_my_sessions",
+	"list_journals",
+	"read_journal",
+	"list_mentor_requests",
+	"respond_to_mentor_request",
+	"reschedule_as_mentor",
+	"list_my_mentees",
+	"cancel_session",
+] as const;
+
 app.get("/health", (c) => c.json({ ok: true }));
+app.get("/debug/tools", (c) =>
+	c.json({
+		version: "mentor-mode-v2-2026-05-26",
+		toolCount: DEPLOYED_TOOL_NAMES.length,
+		tools: DEPLOYED_TOOL_NAMES,
+	}),
+);
 
 app.get("/account/revoke", (c) => c.html(renderRevokeEmailPage()));
 
