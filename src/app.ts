@@ -218,8 +218,10 @@ app.post("/oauth/verify", async (c) => {
 		userId: verified.userId,
 		email: stored.email ?? null,
 		scopes: [...MCP_SCOPES],
+		mcpClientId: stored.oauthReqInfo.clientId,
 		cognitoAccessToken: verified.accessToken,
 		cognitoAccessTokenExpiresAt: accessTokenExpiresAt(verified.accessToken),
+		cognitoAccessTokenRefreshedAt: Math.floor(Date.now() / 1000),
 		adplistRefreshToken: verified.refreshToken,
 	};
 

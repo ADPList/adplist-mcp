@@ -492,7 +492,8 @@ async function runWithToolRateLimit<T>(
 	run: () => Promise<T>,
 ): Promise<T> {
 	await enforceToolCallRateLimit(env, props);
-	await ensureFreshAdplistProps(env, props);
+	const freshProps = await ensureFreshAdplistProps(env, props);
+	if (freshProps && freshProps !== props && props) Object.assign(props, freshProps);
 	return run();
 }
 

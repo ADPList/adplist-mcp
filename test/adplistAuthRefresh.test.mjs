@@ -16,6 +16,18 @@ function jwtWithExp(exp) {
 	return `header.${payload}.signature`;
 }
 
+function testEnv() {
+	const kv = new Map();
+	return {
+		AUTH_SERVICE_URL: "https://auth.example.com",
+		_kv: kv,
+		OAUTH_KV: {
+			get: async (key) => kv.get(key) ?? null,
+			put: async (key, value) => kv.set(key, value),
+		},
+	};
+}
+
 test.afterEach(() => {
 	globalThis.fetch = originalFetch;
 });
@@ -40,6 +52,7 @@ test("refreshAdplistToken calls auth-service refresh with body and refresh cooki
 });
 
 test("refreshAdplistPropsOnTokenExchange refreshes oid and persists rotated refresh token", async () => {
+	const env = testEnv();
 	globalThis.fetch = async () =>
 		Response.json({ accessToken: "fresh-oid", refreshToken: "fresh-refresh" });
 
@@ -58,16 +71,19 @@ test("refreshAdplistPropsOnTokenExchange refreshes oid and persists rotated refr
 				adplistRefreshToken: "old-refresh",
 			},
 		},
-		{ AUTH_SERVICE_URL: "https://auth.example.com" },
+		env,
 	);
 
 	assert.equal(result.newProps.cognitoAccessToken, "fresh-oid");
 	assert.equal(result.newProps.adplistRefreshToken, "fresh-refresh");
 	assert.equal(result.newProps.email, "user@example.com");
+	assert.equal(result.newProps.mcpClientId, "client");
+	assert.equal(env._kv.get("adplist_refresh_token:client:user-1"), "fresh-refresh");
 });
 
 test("ensureFreshAdplistProps refreshes an access token before it expires", async () => {
 	const { ensureFreshAdplistProps } = await import("../src/adplistTokenRefresh.ts");
+	const env = testEnv();
 	let refreshCalls = 0;
 	const freshToken = jwtWithExp(Math.floor(Date.now() / 1000) + 3600);
 	globalThis.fetch = async () => {
@@ -83,16 +99,60 @@ test("ensureFreshAdplistProps refreshes an access token before it expires", asyn
 		adplistRefreshToken: "old-refresh",
 	};
 
-	const result = await ensureFreshAdplistProps(
-		{ AUTH_SERVICE_URL: "https://auth.example.com" },
-		props,
-	);
+	const result = await ensureFreshAdplistProps(env, props);
 
 	assert.equal(refreshCalls, 1);
 	assert.equal(result, props);
 	assert.equal(props.cognitoAccessToken, freshToken);
 	assert.equal(props.adplistRefreshToken, "rotated-refresh");
+	assert.equal(env._kv.get("adplist_refresh_token:unknown:user-1"), "rotated-refresh");
 	assert.ok(props.cognitoAccessTokenExpiresAt > Math.floor(Date.now() / 1000));
+});
+
+test("ensureFreshAdplistProps refreshes opaque tokens without fallback freshness", async () => {
+	const { ensureFreshAdplistProps } = await import("../src/adplistTokenRefresh.ts");
+	let refreshCalls = 0;
+	globalThis.fetch = async () => {
+		refreshCalls += 1;
+		return Response.json({ accessToken: "fresh-opaque" });
+	};
+
+	const props = {
+		userId: "user-1",
+		email: "user@example.com",
+		scopes: ["adplist.read"],
+		cognitoAccessToken: "opaque-token",
+		adplistRefreshToken: "old-refresh",
+	};
+
+	await ensureFreshAdplistProps(testEnv(), props);
+
+	assert.equal(refreshCalls, 1);
+	assert.equal(props.cognitoAccessToken, "fresh-opaque");
+	assert.ok(props.cognitoAccessTokenRefreshedAt <= Math.floor(Date.now() / 1000));
+});
+
+test("ensureFreshAdplistProps leaves recently refreshed opaque tokens alone", async () => {
+	const { ensureFreshAdplistProps } = await import("../src/adplistTokenRefresh.ts");
+	let refreshCalls = 0;
+	globalThis.fetch = async () => {
+		refreshCalls += 1;
+		return Response.json({ accessToken: "unexpected" });
+	};
+
+	const props = {
+		userId: "user-1",
+		email: "user@example.com",
+		scopes: ["adplist.read"],
+		cognitoAccessToken: "opaque-token",
+		cognitoAccessTokenRefreshedAt: Math.floor(Date.now() / 1000),
+		adplistRefreshToken: "old-refresh",
+	};
+
+	await ensureFreshAdplistProps(testEnv(), props);
+
+	assert.equal(refreshCalls, 0);
+	assert.equal(props.cognitoAccessToken, "opaque-token");
 });
 
 test("ensureFreshAdplistProps leaves a healthy access token alone", async () => {
@@ -113,7 +173,7 @@ test("ensureFreshAdplistProps leaves a healthy access token alone", async () => 
 	};
 
 	const result = await ensureFreshAdplistProps(
-		{ AUTH_SERVICE_URL: "https://auth.example.com" },
+		testEnv(),
 		props,
 	);
 
@@ -140,7 +200,7 @@ test("refresh callback keeps existing refresh token when auth-service does not r
 				adplistRefreshToken: "old-refresh",
 			},
 		},
-		{ AUTH_SERVICE_URL: "https://auth.example.com" },
+		testEnv(),
 	);
 
 	assert.equal(result.newProps.cognitoAccessToken, "fresh-oid");
@@ -159,7 +219,7 @@ test("invalid or missing ADPList refresh tokens surface as AUTH_EXPIRED", async 
 					requestedScope: [],
 					props: { userId: "user-1", email: null, scopes: [] },
 				},
-				{ AUTH_SERVICE_URL: "https://auth.example.com" },
+				testEnv(),
 			),
 		AuthExpiredError,
 	);
@@ -181,7 +241,7 @@ test("invalid or missing ADPList refresh tokens surface as AUTH_EXPIRED", async 
 						adplistRefreshToken: "expired-refresh",
 					},
 				},
-				{ AUTH_SERVICE_URL: "https://auth.example.com" },
+				testEnv(),
 			),
 		AuthExpiredError,
 	);
@@ -208,7 +268,7 @@ test("transient ADPList refresh failures stay retryable", async () => {
 						adplistRefreshToken: "still-valid-refresh",
 					},
 				},
-				{ AUTH_SERVICE_URL: "https://auth.example.com" },
+				testEnv(),
 			),
 		UpstreamRefreshError,
 	);

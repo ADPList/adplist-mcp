@@ -24,7 +24,9 @@ export type McpUserProps = {
 	userId: string;
 	email: string | null;
 	scopes: string[];
+	mcpClientId?: string;
 	cognitoAccessToken?: string;
 	cognitoAccessTokenExpiresAt?: number;
+	cognitoAccessTokenRefreshedAt?: number;
 	adplistRefreshToken?: string;
 };
