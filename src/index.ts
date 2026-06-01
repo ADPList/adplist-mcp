@@ -14,6 +14,7 @@ import {
 	type AppViewKind,
 } from "./mcpApps";
 import {
+	ensureFreshAdplistProps,
 	refreshAdplistPropsOnTokenExchange,
 	tokenRefreshErrorResponse,
 } from "./adplistTokenRefresh";
@@ -491,6 +492,7 @@ async function runWithToolRateLimit<T>(
 	run: () => Promise<T>,
 ): Promise<T> {
 	await enforceToolCallRateLimit(env, props);
+	await ensureFreshAdplistProps(env, props);
 	return run();
 }
 

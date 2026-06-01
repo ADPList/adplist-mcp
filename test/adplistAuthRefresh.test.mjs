@@ -11,6 +11,11 @@ import { formatToolError } from "../src/errors.ts";
 
 const originalFetch = globalThis.fetch;
 
+function jwtWithExp(exp) {
+	const payload = Buffer.from(JSON.stringify({ exp })).toString("base64url");
+	return `header.${payload}.signature`;
+}
+
 test.afterEach(() => {
 	globalThis.fetch = originalFetch;
 });
@@ -59,6 +64,62 @@ test("refreshAdplistPropsOnTokenExchange refreshes oid and persists rotated refr
 	assert.equal(result.newProps.cognitoAccessToken, "fresh-oid");
 	assert.equal(result.newProps.adplistRefreshToken, "fresh-refresh");
 	assert.equal(result.newProps.email, "user@example.com");
+});
+
+test("ensureFreshAdplistProps refreshes an access token before it expires", async () => {
+	const { ensureFreshAdplistProps } = await import("../src/adplistTokenRefresh.ts");
+	let refreshCalls = 0;
+	const freshToken = jwtWithExp(Math.floor(Date.now() / 1000) + 3600);
+	globalThis.fetch = async () => {
+		refreshCalls += 1;
+		return Response.json({ accessToken: freshToken, refreshToken: "rotated-refresh" });
+	};
+
+	const props = {
+		userId: "user-1",
+		email: "user@example.com",
+		scopes: ["adplist.read"],
+		cognitoAccessToken: jwtWithExp(Math.floor(Date.now() / 1000) + 60),
+		adplistRefreshToken: "old-refresh",
+	};
+
+	const result = await ensureFreshAdplistProps(
+		{ AUTH_SERVICE_URL: "https://auth.example.com" },
+		props,
+	);
+
+	assert.equal(refreshCalls, 1);
+	assert.equal(result, props);
+	assert.equal(props.cognitoAccessToken, freshToken);
+	assert.equal(props.adplistRefreshToken, "rotated-refresh");
+	assert.ok(props.cognitoAccessTokenExpiresAt > Math.floor(Date.now() / 1000));
+});
+
+test("ensureFreshAdplistProps leaves a healthy access token alone", async () => {
+	const { ensureFreshAdplistProps } = await import("../src/adplistTokenRefresh.ts");
+	let refreshCalls = 0;
+	globalThis.fetch = async () => {
+		refreshCalls += 1;
+		return Response.json({ accessToken: "unexpected" });
+	};
+
+	const props = {
+		userId: "user-1",
+		email: "user@example.com",
+		scopes: ["adplist.read"],
+		cognitoAccessToken: jwtWithExp(Math.floor(Date.now() / 1000) + 3600),
+		cognitoAccessTokenExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+		adplistRefreshToken: "old-refresh",
+	};
+
+	const result = await ensureFreshAdplistProps(
+		{ AUTH_SERVICE_URL: "https://auth.example.com" },
+		props,
+	);
+
+	assert.equal(refreshCalls, 0);
+	assert.equal(result, props);
+	assert.equal(props.adplistRefreshToken, "old-refresh");
 });
 
 test("refresh callback keeps existing refresh token when auth-service does not rotate it", async () => {

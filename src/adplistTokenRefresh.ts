@@ -6,8 +6,11 @@ import type { McpUserProps } from "./types";
 
 export type RefreshAdplistTokenResult = {
 	accessToken: string;
+	accessTokenExpiresAt?: number;
 	refreshToken?: string;
 };
+
+const ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
 
 export class AuthExpiredError extends Error {
 	constructor(message = "ADPList refresh token is invalid or expired. Reconnect ADPList.") {
@@ -31,6 +34,33 @@ function authBaseUrl(env: Env): string {
 
 function isExpiredRefreshStatus(status: number): boolean {
 	return status === 400 || status === 401 || status === 403;
+}
+
+function secondsUntil(timestampSeconds: number): number {
+	return timestampSeconds - Math.floor(Date.now() / 1000);
+}
+
+export function accessTokenExpiresAt(accessToken: string): number | undefined {
+	const [, payload] = accessToken.split(".");
+	if (!payload) return undefined;
+
+	try {
+		const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+		const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+		const decoded = JSON.parse(atob(padded)) as { exp?: unknown };
+		return typeof decoded.exp === "number" && Number.isFinite(decoded.exp)
+			? decoded.exp
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function shouldRefreshAdplistAccessToken(props: McpUserProps): boolean {
+	if (!props.cognitoAccessToken) return true;
+	props.cognitoAccessTokenExpiresAt ??= accessTokenExpiresAt(props.cognitoAccessToken);
+	if (!props.cognitoAccessTokenExpiresAt) return false;
+	return secondsUntil(props.cognitoAccessTokenExpiresAt) <= ACCESS_TOKEN_REFRESH_SKEW_SECONDS;
 }
 
 async function postJson(
@@ -75,10 +105,28 @@ export async function refreshAdplistToken(
 	if (typeof data.accessToken !== "string" || data.accessToken.length === 0) {
 		throw new UpstreamRefreshError("ADPList /auth/refresh did not return an access token");
 	}
+	const expiresAt = accessTokenExpiresAt(data.accessToken);
 	return {
 		accessToken: data.accessToken,
+		...(expiresAt ? { accessTokenExpiresAt: expiresAt } : {}),
 		refreshToken: typeof data.refreshToken === "string" ? data.refreshToken : undefined,
 	};
+}
+
+export async function ensureFreshAdplistProps(
+	env: Env,
+	props: McpUserProps | undefined,
+): Promise<McpUserProps | undefined> {
+	if (!props || !shouldRefreshAdplistAccessToken(props)) return props;
+	if (!props.adplistRefreshToken) {
+		throw new AuthExpiredError("ADPList refresh token is missing. Reconnect ADPList.");
+	}
+
+	const refreshed = await refreshAdplistToken(env, props.adplistRefreshToken);
+	props.cognitoAccessToken = refreshed.accessToken;
+	props.cognitoAccessTokenExpiresAt = refreshed.accessTokenExpiresAt;
+	props.adplistRefreshToken = refreshed.refreshToken ?? props.adplistRefreshToken;
+	return props;
 }
 
 export async function refreshAdplistPropsOnTokenExchange(
@@ -96,6 +144,7 @@ export async function refreshAdplistPropsOnTokenExchange(
 	const newProps: McpUserProps = {
 		...props,
 		cognitoAccessToken: refreshed.accessToken,
+		cognitoAccessTokenExpiresAt: refreshed.accessTokenExpiresAt,
 		adplistRefreshToken: refreshed.refreshToken ?? props.adplistRefreshToken,
 	};
 	return { newProps };
