@@ -61,6 +61,7 @@ test("mapAvailabilityResponse flattens, sorts, formats, and truncates slots", ()
 	assert.equal(result.slots[0].slot_iso, "2023-11-14T22:13:20.000Z");
 	assert.equal(result.slots[0].duration_minutes, 30);
 	assert.match(result.slots[0].slot_local_display, /Nov/);
+	assert.match(result.slots[0].slot_local_display, /PST|PDT|GMT-8|GMT-08/);
 });
 
 test("listAvailability passes Cognito bearer and returns compact slots", async () => {

@@ -32,6 +32,7 @@ const RESOURCE_DOMAINS = [
 	"https://*.cloudinary.com",
 	"https://lh3.googleusercontent.com",
 	"https://avatars.githubusercontent.com",
+	"https://assets.adplist.org",
 ];
 
 export function appToolMeta(resourceUri: string) {
@@ -98,7 +99,10 @@ h1 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 .subtle { color: var(--muted); font-size: 13px; line-height: 1.4; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.06); }
-.mentor-photo { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; background: linear-gradient(135deg, #f3f3f3, #e9e9e9); }
+.mentor-photo-frame { position: relative; width: 100%; aspect-ratio: 1 / 1; background: linear-gradient(135deg, #f3f3f3, #e9e9e9); overflow: hidden; }
+.mentor-photo { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mentor-photo-fallback { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--muted); font-size: 42px; font-weight: 800; letter-spacing: -0.04em; }
+.mentor-photo-fallback.visible { display: flex; }
 .card-body { padding: 14px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .name { font-weight: 750; letter-spacing: -0.02em; }
@@ -190,6 +194,22 @@ function parseResult(result) {
   try { return JSON.parse(text); } catch { return {}; }
 }
 function h(value) { return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+function mentorInitials(name) {
+  const parts = String(name || 'ADPList mentor').trim().split(/\s+/).filter(Boolean);
+  return (parts[0]?.[0] || 'A') + (parts[1]?.[0] || 'D');
+}
+function localTimezoneLabel(date) {
+  const value = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(date).find((part) => part.type === 'timeZoneName')?.value;
+  return value && !/^GMT[+-]?0?0(?::?00)?$/.test(value) ? value : (Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time');
+}
+function localSlotTimeLabel(iso) {
+  const date = new Date(iso);
+  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) + ' ' + localTimezoneLabel(date);
+}
+function localSlotDisplay(slot) {
+  const date = new Date(slot.slot_iso);
+  return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
 function sendUserMessage(text) { send('ui/message', { role: 'user', content: [{ type: 'text', text }] }); }
 function render(result) {
   const data = parseResult(result);
@@ -202,10 +222,11 @@ function renderMentors(data) {
   document.getElementById('subtitle').textContent = mentors.length ? 'Pick a mentor to see available times. Photos are shown when ADPList has them.' : 'No mentor matches returned.';
   document.getElementById('root').innerHTML = mentors.length ? '<div class="grid">' + mentors.map((m) => {
     const photo = m.profile_photo_url || '';
-    const fallback = 'https://adplist.org/images/adplist-logo.png';
     const details = [m.title, m.company].filter(Boolean).join(' · ');
+    const fallbackClass = photo ? 'mentor-photo-fallback' : 'mentor-photo-fallback visible';
+    const photoHtml = photo ? '<img class="mentor-photo" src="' + h(photo) + '" alt="' + h(m.name || 'ADPList mentor') + ' profile photo" loading="lazy" onerror="this.style.display=&quot;none&quot;;this.nextElementSibling.classList.add(&quot;visible&quot;);" />' : '';
     return '<article class="card">' +
-      '<img class="mentor-photo" src="' + h(photo || fallback) + '" alt="' + h(m.name) + ' profile photo" loading="lazy" />' +
+      '<div class="mentor-photo-frame">' + photoHtml + '<div class="' + fallbackClass + '" aria-label="Profile photo unavailable">' + h(mentorInitials(m.name)) + '</div></div>' +
       '<div class="card-body"><div class="row"><div><div class="name">' + h(m.name || 'ADPList mentor') + '</div><div class="meta">' + h(details) + '</div></div><div class="stat">' + h(m.rating ? '★ ' + Number(m.rating).toFixed(1) : '') + '</div></div>' +
       '<div class="chips">' + (m.expertise || []).map((x) => '<span class="chip">' + h(x) + '</span>').join('') + '</div>' +
       '<div class="meta" style="margin-top:10px">' + h(m.why_match || '') + '</div>' +
@@ -216,14 +237,15 @@ function renderMentors(data) {
 }
 function renderSlots(data) {
   const slots = data.slots || [];
-  document.getElementById('subtitle').textContent = slots.length ? 'Select a date, then choose a time. The final booking still needs chat confirmation.' : 'No available slots returned.';
+  const timezoneLabel = slots.length ? localTimezoneLabel(new Date(slots[0].slot_iso)) : '';
+  document.getElementById('subtitle').textContent = slots.length ? 'Select a date, then choose a time in your local timezone (' + timezoneLabel + '). The final booking still needs chat confirmation.' : 'No available slots returned.';
   if (!slots.length) { document.getElementById('root').innerHTML = '<div class="empty">No available times in this window.</div>'; return resize(); }
   const byDay = slots.reduce((acc, slot) => { const date = new Date(slot.slot_iso); const key = localDayKey(date); (acc[key] ||= []).push(slot); return acc; }, {});
   const days = Object.keys(byDay).sort();
   let active = days[0];
   function paint() {
     const dayButtons = days.map((day) => '<button class="day ' + (day === active ? 'active' : '') + '" data-day="' + day + '"><strong>' + h(localDayLabel(day)) + '</strong><span class="subtle">' + byDay[day].length + ' time' + (byDay[day].length === 1 ? '' : 's') + '</span></button>').join('');
-    const slotButtons = byDay[active].map((slot) => '<button class="slot" data-slot="' + h(slot.slot_iso) + '" data-mentor="' + h(slot.mentor_slug) + '"><div class="slot-time">' + h(new Date(slot.slot_iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) + '</div><div class="subtle">' + h(slot.duration_minutes) + ' min · ' + h(slot.slot_local_display) + '</div></button>').join('');
+    const slotButtons = byDay[active].map((slot) => '<button class="slot" data-slot="' + h(slot.slot_iso) + '" data-mentor="' + h(slot.mentor_slug) + '"><div class="slot-time">' + h(localSlotTimeLabel(slot.slot_iso)) + '</div><div class="subtle">' + h(slot.duration_minutes) + ' min · ' + h(localSlotDisplay(slot)) + '</div></button>').join('');
     document.getElementById('root').innerHTML = '<div class="days">' + dayButtons + '</div><div class="slots">' + slotButtons + '</div>' + (data.truncated ? '<p class="subtle">Showing the first available times. Ask for a wider window if needed.</p>' : '');
     document.querySelectorAll('[data-day]').forEach((button) => button.addEventListener('click', () => { active = button.dataset.day; paint(); }));
     document.querySelectorAll('[data-slot]').forEach((button) => button.addEventListener('click', () => { button.classList.add('selected'); sendUserMessage('I choose ' + button.dataset.slot + ' for mentor ' + button.dataset.mentor + '. Please confirm the booking details.'); }));

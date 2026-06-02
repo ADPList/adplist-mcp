@@ -19,11 +19,30 @@ type SearchServiceMentor = {
 	title?: string;
 	employer?: string;
 	company?: string;
-	profile?: { image?: string };
+	profile?: {
+		image?: string;
+		imageUrl?: string;
+		image_url?: string;
+		profileImage?: string;
+		profileImageUrl?: string;
+		profile_photo_url?: string;
+		avatarUrl?: string;
+		avatar_url?: string;
+		photoUrl?: string;
+		photo_url?: string;
+		picture?: string;
+	};
 	image?: string;
+	imageUrl?: string;
+	image_url?: string;
 	profileImage?: string;
+	profileImageUrl?: string;
 	profile_photo_url?: string;
+	avatarUrl?: string;
+	avatar_url?: string;
 	photoUrl?: string;
+	photo_url?: string;
+	picture?: string;
 	expertise?: string[];
 	disciplines?: string[];
 	average_rating?: number;
@@ -98,10 +117,27 @@ export function mapSearchMentorsResponse(
 		const slots = numberOrZero(mentor.next_7_day_slots_count);
 		const profilePhotoUrl = normalizeImageUrl(
 			mentor.profile?.image ??
+				mentor.profile?.imageUrl ??
+				mentor.profile?.image_url ??
+				mentor.profile?.profileImage ??
+				mentor.profile?.profileImageUrl ??
+				mentor.profile?.profile_photo_url ??
+				mentor.profile?.avatarUrl ??
+				mentor.profile?.avatar_url ??
+				mentor.profile?.photoUrl ??
+				mentor.profile?.photo_url ??
+				mentor.profile?.picture ??
 				mentor.profile_photo_url ??
 				mentor.profileImage ??
+				mentor.profileImageUrl ??
 				mentor.image ??
-				mentor.photoUrl,
+				mentor.imageUrl ??
+				mentor.image_url ??
+				mentor.avatarUrl ??
+				mentor.avatar_url ??
+				mentor.photoUrl ??
+				mentor.photo_url ??
+				mentor.picture,
 		);
 		return {
 			name: mentor.name ?? "",
