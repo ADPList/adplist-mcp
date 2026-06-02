@@ -131,7 +131,9 @@ test("mentor cards render photos and slot picker renders selectable date-time co
 	assert.match(mentorHtml, /mentor-photo-frame/);
 	assert.match(mentorHtml, /aspect-ratio: 1 \/ 1/);
 	assert.match(mentorHtml, /mentor-photo-fallback visible/);
-	assert.match(mentorHtml, /this\.nextElementSibling\.classList\.add/);
+	assert.match(mentorHtml, /addEventListener\('error', showFallback\)/);
+	assert.match(mentorHtml, /naturalWidth === 0/);
+	assert.doesNotMatch(mentorHtml, /onerror=/);
 	assert.match(mentorHtml, /profile photo/);
 	assert.match(mentorHtml, /See available times/);
 

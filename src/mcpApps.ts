@@ -224,7 +224,7 @@ function renderMentors(data) {
     const photo = m.profile_photo_url || '';
     const details = [m.title, m.company].filter(Boolean).join(' · ');
     const fallbackClass = photo ? 'mentor-photo-fallback' : 'mentor-photo-fallback visible';
-    const photoHtml = photo ? '<img class="mentor-photo" src="' + h(photo) + '" alt="' + h(m.name || 'ADPList mentor') + ' profile photo" loading="lazy" onerror="this.style.display=&quot;none&quot;;this.nextElementSibling.classList.add(&quot;visible&quot;);" />' : '';
+    const photoHtml = photo ? '<img class="mentor-photo" src="' + h(photo) + '" alt="' + h(m.name || 'ADPList mentor') + ' profile photo" loading="lazy" />' : '';
     return '<article class="card">' +
       '<div class="mentor-photo-frame">' + photoHtml + '<div class="' + fallbackClass + '" aria-label="Profile photo unavailable">' + h(mentorInitials(m.name)) + '</div></div>' +
       '<div class="card-body"><div class="row"><div><div class="name">' + h(m.name || 'ADPList mentor') + '</div><div class="meta">' + h(details) + '</div></div><div class="stat">' + h(m.rating ? '★ ' + Number(m.rating).toFixed(1) : '') + '</div></div>' +
@@ -232,6 +232,11 @@ function renderMentors(data) {
       '<div class="meta" style="margin-top:10px">' + h(m.why_match || '') + '</div>' +
       '<button class="cta" data-slug="' + h(m.slug) + '">See available times</button></div></article>';
   }).join('') + '</div>' : '<div class="empty">No mentors found. Try a broader goal or fewer filters.</div>';
+  document.querySelectorAll('.mentor-photo').forEach((img) => {
+    const showFallback = () => { img.style.display = 'none'; img.nextElementSibling?.classList.add('visible'); };
+    img.addEventListener('error', showFallback);
+    if (img.complete && img.naturalWidth === 0) showFallback();
+  });
   document.querySelectorAll('[data-slug]').forEach((button) => button.addEventListener('click', () => sendUserMessage('Show available times for mentor ' + button.dataset.slug)));
   resize();
 }
