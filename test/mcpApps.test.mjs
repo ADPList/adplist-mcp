@@ -7,6 +7,8 @@ import {
 	MCP_APP_EXTENSION_ID,
 	CLAUDE_APP_DOMAIN,
 	UI_RESOURCES,
+	UI_RESOURCE_VERSION,
+	APP_BUILD_LABEL,
 	appResourceMeta,
 	appServerCapabilities,
 	appToolMeta,
@@ -68,7 +70,7 @@ function renderAppWithToolResult(kind, structuredContent, options = {}) {
 	return elements;
 }
 
-test("V2 MCP Apps resources are registered with the app MIME type", () => {
+test("MCP Apps resources are registered with the app MIME type", () => {
 	assert.equal(MCP_APP_MIME_TYPE, "text/html;profile=mcp-app");
 	assert.match(indexSource, /registerAppResource\(/);
 	assert.match(indexSource, /UI_RESOURCES\.mentorCards/);
@@ -145,6 +147,15 @@ test("mentor cards render photos and slot picker renders selectable date-time co
 	assert.match(slotHtml, /ui\/message/);
 });
 
+test("MCP App output includes visible version diagnostics for Claude verification", () => {
+	const html = buildAppHtml("mentor-cards");
+	assert.equal(UI_RESOURCE_VERSION, "v3");
+	assert.equal(APP_BUILD_LABEL, "ADPList MCP App v3");
+	assert.match(html, /ADPList MCP App v3/);
+	assert.match(html, /aria-label="ADPList MCP App version"/);
+	assert.match(html, /appInfo: \{ name: titleForView\(\), version: "3\.0\.0" \}/);
+});
+
 test("mentor photo fallback runs for already-broken Claude-hosted images", () => {
 	const fallback = {
 		addedClasses: [],
@@ -208,9 +219,9 @@ test("slot picker groups days by the user's local date instead of UTC date", () 
 });
 
 test("UI resource constants use versioned ui:// URIs so Claude refreshes cached app resources", () => {
-	assert.equal(UI_RESOURCES.mentorCards, "ui://adplist/v2/mentor-cards.html");
-	assert.equal(UI_RESOURCES.slotPicker, "ui://adplist/v2/slot-picker.html");
-	assert.equal(UI_RESOURCES.sessionCards, "ui://adplist/v2/session-cards.html");
+	assert.equal(UI_RESOURCES.mentorCards, "ui://adplist/v3/mentor-cards.html");
+	assert.equal(UI_RESOURCES.slotPicker, "ui://adplist/v3/slot-picker.html");
+	assert.equal(UI_RESOURCES.sessionCards, "ui://adplist/v3/session-cards.html");
 });
 
 test("slot picker renders viewer-local timezone labels instead of raw UTC-only times", () => {
