@@ -9,7 +9,8 @@ export const OPENAI_WIDGET_DESCRIPTION_META_KEY = "openai/widgetDescription";
 export const OPENAI_WIDGET_PREFERS_BORDER_META_KEY = "openai/widgetPrefersBorder";
 export const OPENAI_WIDGET_CSP_META_KEY = "openai/widgetCSP";
 
-const UI_RESOURCE_VERSION = "v2";
+export const UI_RESOURCE_VERSION = "v3";
+export const APP_BUILD_LABEL = `ADPList MCP App ${UI_RESOURCE_VERSION}`;
 
 export const UI_RESOURCES = {
 	mentorCards: `ui://adplist/${UI_RESOURCE_VERSION}/mentor-cards.html`,
@@ -128,6 +129,7 @@ h1 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 .person { min-width: 0; }
 .arrow { color: var(--muted); }
 .empty { border: 1px dashed var(--line); border-radius: var(--radius); padding: 22px; color: var(--muted); text-align: center; }
+.debug-version { margin-top: 12px; color: var(--muted); font-size: 11px; text-align: right; opacity: .75; }
 @media (max-width: 520px) { .app { padding: 12px; } .header { display: block; } .people { grid-template-columns: 1fr; } .arrow { display: none; } }
 </style>
 </head>
@@ -135,6 +137,7 @@ h1 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 <main class="app">
   <div class="header"><div><h1>${escapeHtml(title)}</h1><div id="subtitle" class="subtle">Loading ADPList results…</div></div></div>
   <section id="root"><div class="empty">Waiting for the MCP tool result.</div></section>
+  <div class="debug-version" aria-label="ADPList MCP App version">${escapeHtml(APP_BUILD_LABEL)}</div>
 </main>
 <script>
 const VIEW_KIND = ${JSON.stringify(kind)};
@@ -156,7 +159,7 @@ function notify(method, params) { parent.postMessage({ jsonrpc: '2.0', method, p
 async function connectToHost() {
   try {
     await request('ui/initialize', {
-      appInfo: { name: titleForView(), version: '0.1.0' },
+      appInfo: { name: titleForView(), version: ${JSON.stringify(UI_RESOURCE_VERSION)} },
       appCapabilities: {},
       protocolVersion: '2026-01-26'
     });
