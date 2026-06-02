@@ -1,4 +1,4 @@
-import { combineIntentWithProfile, getProfileTextForSearch } from "./profile";
+import { combineIntentWithProfile, getProfileTextForSearch } from "./profile.ts";
 import type { McpUserProps } from "./types";
 
 export type SearchMentorsFilters = {
@@ -78,6 +78,7 @@ export type SearchMentorsOutput = {
 	mentors: SearchMentorResult[];
 	queryID?: string;
 	indexUsed?: string;
+	relaxed_filters?: string[];
 };
 
 const DEFAULT_MAX_RESULTS = 6;
@@ -177,6 +178,36 @@ export async function searchMentors(
 		intent: combineIntentWithProfile(input.intent, profileText),
 	};
 
+	const firstResult = await fetchAndMapSearchMentors(baseUrl, props, searchInput, input);
+	if (firstResult.mentors.length > 0 || !input.filters?.discipline) return firstResult;
+
+	const { discipline: _discipline, ...relaxedFilters } = input.filters;
+	const relaxedInput = {
+		...input,
+		filters: Object.keys(relaxedFilters).length > 0 ? relaxedFilters : undefined,
+	};
+	const relaxedSearchInput = {
+		...searchInput,
+		filters: relaxedInput.filters,
+	};
+	const relaxedResult = await fetchAndMapSearchMentors(
+		baseUrl,
+		props,
+		relaxedSearchInput,
+		relaxedInput,
+	);
+	return {
+		...relaxedResult,
+		relaxed_filters: ["discipline"],
+	};
+}
+
+async function fetchAndMapSearchMentors(
+	baseUrl: string,
+	props: McpUserProps | undefined,
+	searchInput: SearchMentorsInput,
+	resultInput: SearchMentorsInput,
+): Promise<SearchMentorsOutput> {
 	const response = await fetch(buildSearchMentorsUrl(baseUrl, searchInput), {
 		headers: {
 			Accept: "application/json",
@@ -190,7 +221,7 @@ export async function searchMentors(
 		throw new Error(`search-service returned HTTP ${response.status}`);
 	}
 
-	return mapSearchMentorsResponse((await response.json()) as SearchServiceResponse, input);
+	return mapSearchMentorsResponse((await response.json()) as SearchServiceResponse, resultInput);
 }
 
 function buildWhyMatch(mentor: SearchServiceMentor, input: SearchMentorsInput): string {
