@@ -105,17 +105,29 @@ type JsonResponse = {
 	headers: Headers;
 };
 
-function refreshTokenFromSetCookie(headers: Headers): string | undefined {
+function setCookieHeaders(headers: Headers): string[] {
+	const workerHeaders = headers as Headers & {
+		getAll?: (name: string) => string[];
+		getSetCookie?: () => string[];
+	};
+
+	const splitHeaders = workerHeaders.getSetCookie?.() ?? workerHeaders.getAll?.("Set-Cookie");
+	if (splitHeaders?.length) return splitHeaders;
+
 	const setCookie = headers.get("Set-Cookie");
-	if (!setCookie) return undefined;
+	return setCookie ? [setCookie] : [];
+}
 
-	const match = setCookie.match(/(?:^|[,;]\s*)ort=([^;,]+)/);
-	if (!match?.[1]) return undefined;
+function refreshTokenFromSetCookie(headers: Headers): string | undefined {
+	for (const setCookie of setCookieHeaders(headers)) {
+		const match = setCookie.match(/(?:^|;\s*)ort=([^;]+)/);
+		if (!match?.[1]) continue;
 
-	try {
-		return decodeURIComponent(match[1]);
-	} catch {
-		return match[1];
+		try {
+			return decodeURIComponent(match[1]);
+		} catch {
+			return match[1];
+		}
 	}
 }
 
@@ -169,7 +181,9 @@ export async function refreshAdplistToken(
 		accessToken: data.accessToken,
 		...(expiresAt ? { accessTokenExpiresAt: expiresAt } : {}),
 		refreshToken:
-			typeof data.refreshToken === "string" ? data.refreshToken : cookieRefreshToken,
+			typeof data.refreshToken === "string" && data.refreshToken.length > 0
+				? data.refreshToken
+				: cookieRefreshToken,
 	};
 }
 

@@ -66,6 +66,42 @@ test("refreshAdplistToken persists refresh token rotated through ort Set-Cookie"
 	assert.deepEqual(result, { accessToken: "new-oid", refreshToken: "cookie-rotated-refresh" });
 });
 
+test("refreshAdplistToken reads split Set-Cookie values from Workers headers", async () => {
+	globalThis.fetch = async () => ({
+		ok: true,
+		json: async () => ({ accessToken: "new-oid" }),
+		headers: {
+			getSetCookie: () => [
+				"other=value; Expires=Mon, 01 Jan 2026 00:00:00 GMT; Path=/",
+				"ort=worker-rotated-refresh; Path=/; HttpOnly; Secure",
+			],
+			get: () => null,
+		},
+	});
+
+	const result = await refreshAdplistToken(
+		{ AUTH_SERVICE_URL: "https://auth.example.com/" },
+		"old-refresh",
+	);
+
+	assert.deepEqual(result, { accessToken: "new-oid", refreshToken: "worker-rotated-refresh" });
+});
+
+test("refreshAdplistToken ignores empty JSON refreshToken and falls back to cookie", async () => {
+	globalThis.fetch = async () =>
+		Response.json(
+			{ accessToken: "new-oid", refreshToken: "" },
+			{ headers: { "Set-Cookie": "ort=cookie-rotated-refresh; Path=/; HttpOnly; Secure" } },
+		);
+
+	const result = await refreshAdplistToken(
+		{ AUTH_SERVICE_URL: "https://auth.example.com/" },
+		"old-refresh",
+	);
+
+	assert.deepEqual(result, { accessToken: "new-oid", refreshToken: "cookie-rotated-refresh" });
+});
+
 test("refreshAdplistToken prefers JSON refreshToken when both JSON and cookie rotate", async () => {
 	globalThis.fetch = async () =>
 		Response.json(
