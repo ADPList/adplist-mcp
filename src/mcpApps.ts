@@ -11,6 +11,7 @@ export const OPENAI_WIDGET_CSP_META_KEY = "openai/widgetCSP";
 
 export const UI_RESOURCE_VERSION = "v3";
 export const APP_BUILD_LABEL = `ADPList MCP App ${UI_RESOURCE_VERSION}`;
+const APP_INFO_VERSION = "3.0.0";
 
 export const UI_RESOURCES = {
 	mentorCards: `ui://adplist/${UI_RESOURCE_VERSION}/mentor-cards.html`,
@@ -159,7 +160,7 @@ function notify(method, params) { parent.postMessage({ jsonrpc: '2.0', method, p
 async function connectToHost() {
   try {
     await request('ui/initialize', {
-      appInfo: { name: titleForView(), version: ${JSON.stringify(UI_RESOURCE_VERSION)} },
+      appInfo: { name: titleForView(), version: ${JSON.stringify(APP_INFO_VERSION)} },
       appCapabilities: {},
       protocolVersion: '2026-01-26'
     });

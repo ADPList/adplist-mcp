@@ -153,7 +153,7 @@ test("MCP App output includes visible version diagnostics for Claude verificatio
 	assert.equal(APP_BUILD_LABEL, "ADPList MCP App v3");
 	assert.match(html, /ADPList MCP App v3/);
 	assert.match(html, /aria-label="ADPList MCP App version"/);
-	assert.match(html, /appInfo: \{ name: titleForView\(\), version: "v3" \}/);
+	assert.match(html, /appInfo: \{ name: titleForView\(\), version: "3\.0\.0" \}/);
 });
 
 test("mentor photo fallback runs for already-broken Claude-hosted images", () => {
