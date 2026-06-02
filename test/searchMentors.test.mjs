@@ -28,3 +28,14 @@ test("search_mentors preserves booking attribution and trims LLM output", () => 
 	assert.match(source, /https:\/\/adplist\.org\/mentors\//);
 	assert.match(source, /why_match/);
 });
+
+test("search_mentors maps common mentor photo aliases into profile_photo_url", () => {
+	assert.match(source, /mentor\.profile\?\.avatarUrl/);
+	assert.match(source, /mentor\.profile\?\.imageUrl/);
+	assert.match(source, /mentor\.profile\?\.photo_url/);
+	assert.match(source, /mentor\.profileImageUrl/);
+	assert.match(source, /mentor\.avatar_url/);
+	assert.match(source, /mentor\.picture/);
+	assert.match(source, /trimmed\.startsWith\("\/\/"\)/);
+	assert.match(source, /trimmed\.startsWith\("\/"\)/);
+});

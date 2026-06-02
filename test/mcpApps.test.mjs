@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 import {
 	MCP_APP_MIME_TYPE,
 	MCP_APP_EXTENSION_ID,
@@ -15,6 +16,56 @@ import {
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 const errorsSource = readFileSync(new URL("../src/errors.ts", import.meta.url), "utf8");
 const searchSource = readFileSync(new URL("../src/searchMentors.ts", import.meta.url), "utf8");
+
+function renderAppWithToolResult(kind, structuredContent) {
+	const html = buildAppHtml(kind);
+	const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+	assert.ok(script);
+
+	const elements = {
+		root: { innerHTML: "" },
+		subtitle: { textContent: "" },
+	};
+	const messageListeners = [];
+	const context = {
+		Date,
+		Intl,
+		Map,
+		clearTimeout,
+		console,
+		setTimeout,
+		ResizeObserver: class {
+			observe() {}
+		},
+		document: {
+			body: {},
+			documentElement: { scrollHeight: 0, scrollWidth: 0 },
+			getElementById(id) {
+				return elements[id];
+			},
+			querySelectorAll() {
+				return [];
+			},
+		},
+		parent: { postMessage() {} },
+		window: {
+			addEventListener(type, listener) {
+				if (type === "message") messageListeners.push(listener);
+			},
+		},
+	};
+	vm.createContext(context);
+	vm.runInContext(script, context);
+	for (const listener of messageListeners) {
+		listener({
+			data: {
+				method: "ui/notifications/tool-result",
+				params: { structuredContent },
+			},
+		});
+	}
+	return elements;
+}
 
 test("V2 MCP Apps resources are registered with the app MIME type", () => {
 	assert.equal(MCP_APP_MIME_TYPE, "text/html;profile=mcp-app");
@@ -77,6 +128,10 @@ test("mentor cards require and normalize profile photo URLs from search-service"
 test("mentor cards render photos and slot picker renders selectable date-time components", () => {
 	const mentorHtml = buildAppHtml("mentor-cards");
 	assert.match(mentorHtml, /mentor-photo/);
+	assert.match(mentorHtml, /mentor-photo-frame/);
+	assert.match(mentorHtml, /aspect-ratio: 1 \/ 1/);
+	assert.match(mentorHtml, /mentor-photo-fallback visible/);
+	assert.match(mentorHtml, /this\.nextElementSibling\.classList\.add/);
 	assert.match(mentorHtml, /profile photo/);
 	assert.match(mentorHtml, /See available times/);
 
@@ -114,4 +169,22 @@ test("UI resource constants use stable ui:// URIs", () => {
 	assert.equal(UI_RESOURCES.mentorCards, "ui://adplist/mentor-cards.html");
 	assert.equal(UI_RESOURCES.slotPicker, "ui://adplist/slot-picker.html");
 	assert.equal(UI_RESOURCES.sessionCards, "ui://adplist/session-cards.html");
+});
+
+test("slot picker renders viewer-local timezone labels instead of raw UTC-only times", () => {
+	const { root, subtitle } = renderAppWithToolResult("slot-picker", {
+		slots: [
+			{
+				mentor_slug: "ada-lovelace",
+				slot_iso: "2026-06-02T20:00:00.000Z",
+				duration_minutes: 30,
+				slot_local_display: "Tue, Jun 2 · 8:00 PM UTC",
+			},
+		],
+	});
+
+	assert.match(subtitle.textContent, /time in your local timezone/);
+	assert.doesNotMatch(root.innerHTML, /Tue, Jun 2 · 8:00 PM UTC/);
+	assert.match(root.innerHTML, /30 min · /);
+	assert.match(root.innerHTML, /ada-lovelace/);
 });
