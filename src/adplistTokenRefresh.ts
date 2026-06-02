@@ -95,18 +95,47 @@ async function storeRefreshTokenOverride(
 	props: McpUserProps,
 	refreshToken: string,
 ): Promise<void> {
-	await env.OAUTH_KV.put(
-		refreshTokenOverrideKey(props.userId, props.mcpClientId),
-		refreshToken,
-		{ expirationTtl: 30 * 24 * 60 * 60 },
-	);
+	await env.OAUTH_KV.put(refreshTokenOverrideKey(props.userId, props.mcpClientId), refreshToken, {
+		expirationTtl: 30 * 24 * 60 * 60,
+	});
+}
+
+type JsonResponse = {
+	data: unknown;
+	headers: Headers;
+};
+
+function setCookieHeaders(headers: Headers): string[] {
+	const workerHeaders = headers as Headers & {
+		getAll?: (name: string) => string[];
+		getSetCookie?: () => string[];
+	};
+
+	const splitHeaders = workerHeaders.getSetCookie?.() ?? workerHeaders.getAll?.("Set-Cookie");
+	if (splitHeaders?.length) return splitHeaders;
+
+	const setCookie = headers.get("Set-Cookie");
+	return setCookie ? [setCookie] : [];
+}
+
+function refreshTokenFromSetCookie(headers: Headers): string | undefined {
+	for (const setCookie of setCookieHeaders(headers)) {
+		const match = setCookie.match(/(?:^|;\s*)ort=([^;]+)/);
+		if (!match?.[1]) continue;
+
+		try {
+			return decodeURIComponent(match[1]);
+		} catch {
+			return match[1];
+		}
+	}
 }
 
 async function postJson(
 	url: string,
 	body: unknown,
 	headers: Record<string, string> = {},
-): Promise<unknown> {
+): Promise<JsonResponse> {
 	const response = await fetch(url, {
 		method: "POST",
 		headers: {
@@ -120,7 +149,7 @@ async function postJson(
 		if (isExpiredRefreshStatus(response.status)) throw new AuthExpiredError();
 		throw new UpstreamRefreshError(`ADPList auth refresh failed: HTTP ${response.status}`);
 	}
-	return response.json();
+	return { data: await response.json(), headers: response.headers };
 }
 
 // Refresh the ADPList oid used by api.adplist.org. auth-service primarily refreshes
@@ -131,12 +160,15 @@ export async function refreshAdplistToken(
 	refreshToken: string,
 ): Promise<RefreshAdplistTokenResult> {
 	let data: { accessToken?: unknown; refreshToken?: unknown };
+	let cookieRefreshToken: string | undefined;
 	try {
-		data = (await postJson(
+		const response = await postJson(
 			`${authBaseUrl(env)}/auth/refresh`,
 			{ refreshToken },
 			{ Cookie: `ort=${refreshToken}` },
-		)) as { accessToken?: unknown; refreshToken?: unknown };
+		);
+		data = response.data as { accessToken?: unknown; refreshToken?: unknown };
+		cookieRefreshToken = refreshTokenFromSetCookie(response.headers);
 	} catch (error) {
 		if (error instanceof AuthExpiredError || error instanceof UpstreamRefreshError) throw error;
 		throw new UpstreamRefreshError();
@@ -148,7 +180,10 @@ export async function refreshAdplistToken(
 	return {
 		accessToken: data.accessToken,
 		...(expiresAt ? { accessTokenExpiresAt: expiresAt } : {}),
-		refreshToken: typeof data.refreshToken === "string" ? data.refreshToken : undefined,
+		refreshToken:
+			typeof data.refreshToken === "string" && data.refreshToken.length > 0
+				? data.refreshToken
+				: cookieRefreshToken,
 	};
 }
 
@@ -201,7 +236,8 @@ export async function refreshAdplistPropsOnTokenExchange(
 		cognitoAccessTokenRefreshedAt: nowSeconds(),
 		adplistRefreshToken: refreshed.refreshToken ?? refreshToken,
 	};
-	if (refreshed.refreshToken) await storeRefreshTokenOverride(env, newProps, refreshed.refreshToken);
+	if (refreshed.refreshToken)
+		await storeRefreshTokenOverride(env, newProps, refreshed.refreshToken);
 	return { newProps };
 }
 
