@@ -9,10 +9,12 @@ export const OPENAI_WIDGET_DESCRIPTION_META_KEY = "openai/widgetDescription";
 export const OPENAI_WIDGET_PREFERS_BORDER_META_KEY = "openai/widgetPrefersBorder";
 export const OPENAI_WIDGET_CSP_META_KEY = "openai/widgetCSP";
 
+const UI_RESOURCE_VERSION = "v2";
+
 export const UI_RESOURCES = {
-	mentorCards: "ui://adplist/mentor-cards.html",
-	slotPicker: "ui://adplist/slot-picker.html",
-	sessionCards: "ui://adplist/session-cards.html",
+	mentorCards: `ui://adplist/${UI_RESOURCE_VERSION}/mentor-cards.html`,
+	slotPicker: `ui://adplist/${UI_RESOURCE_VERSION}/slot-picker.html`,
+	sessionCards: `ui://adplist/${UI_RESOURCE_VERSION}/session-cards.html`,
 } as const;
 
 export type AppViewKind = "mentor-cards" | "slot-picker" | "session-cards";

@@ -207,10 +207,10 @@ test("slot picker groups days by the user's local date instead of UTC date", () 
 	assert.doesNotMatch(slotHtml, /toISOString\(\)\.slice\(0,10\)/);
 });
 
-test("UI resource constants use stable ui:// URIs", () => {
-	assert.equal(UI_RESOURCES.mentorCards, "ui://adplist/mentor-cards.html");
-	assert.equal(UI_RESOURCES.slotPicker, "ui://adplist/slot-picker.html");
-	assert.equal(UI_RESOURCES.sessionCards, "ui://adplist/session-cards.html");
+test("UI resource constants use versioned ui:// URIs so Claude refreshes cached app resources", () => {
+	assert.equal(UI_RESOURCES.mentorCards, "ui://adplist/v2/mentor-cards.html");
+	assert.equal(UI_RESOURCES.slotPicker, "ui://adplist/v2/slot-picker.html");
+	assert.equal(UI_RESOURCES.sessionCards, "ui://adplist/v2/session-cards.html");
 });
 
 test("slot picker renders viewer-local timezone labels instead of raw UTC-only times", () => {
