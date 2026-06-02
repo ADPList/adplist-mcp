@@ -32,6 +32,7 @@ export function appServerCapabilities() {
 const RESOURCE_DOMAINS = [
 	"https://adplist.org",
 	"https://*.adplist.org",
+	"https://adplist-bucket.s3.amazonaws.com",
 	"https://images.ctfassets.net",
 	"https://*.cloudinary.com",
 	"https://lh3.googleusercontent.com",

@@ -39,3 +39,11 @@ test("search_mentors maps common mentor photo aliases into profile_photo_url", (
 	assert.match(source, /trimmed\.startsWith\("\/\/"\)/);
 	assert.match(source, /trimmed\.startsWith\("\/"\)/);
 });
+
+test("search_mentors relaxes only discipline after a zero-result taxonomy mismatch", () => {
+	assert.match(source, /firstResult\.mentors\.length > 0 \|\| !input\.filters\?\.discipline/);
+	assert.match(source, /const \{ discipline: _discipline, \.\.\.relaxedFilters \} = input\.filters/);
+	assert.match(source, /relaxed_filters: \["discipline"\]/);
+	assert.match(source, /original_result_count: firstResult\.mentors\.length/);
+	assert.match(source, /fetchAndMapSearchMentors/);
+});

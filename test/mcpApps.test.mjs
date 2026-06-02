@@ -119,6 +119,9 @@ test("app metadata includes Claude domain and ChatGPT compatibility aliases", ()
 		resourceMeta["openai/widgetCSP"].resource_domains,
 		resourceMeta.ui.csp.resourceDomains,
 	);
+	assert.ok(
+		resourceMeta.ui.csp.resourceDomains.includes("https://adplist-bucket.s3.amazonaws.com"),
+	);
 });
 
 test("mentor cards require and normalize profile photo URLs from search-service", () => {
