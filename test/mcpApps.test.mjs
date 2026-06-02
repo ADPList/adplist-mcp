@@ -17,7 +17,7 @@ const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "u
 const errorsSource = readFileSync(new URL("../src/errors.ts", import.meta.url), "utf8");
 const searchSource = readFileSync(new URL("../src/searchMentors.ts", import.meta.url), "utf8");
 
-function renderAppWithToolResult(kind, structuredContent) {
+function renderAppWithToolResult(kind, structuredContent, options = {}) {
 	const html = buildAppHtml(kind);
 	const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
 	assert.ok(script);
@@ -43,7 +43,8 @@ function renderAppWithToolResult(kind, structuredContent) {
 			getElementById(id) {
 				return elements[id];
 			},
-			querySelectorAll() {
+			querySelectorAll(selector) {
+				if (selector === ".mentor-photo") return options.mentorPhotos || [];
 				return [];
 			},
 		},
@@ -131,7 +132,9 @@ test("mentor cards render photos and slot picker renders selectable date-time co
 	assert.match(mentorHtml, /mentor-photo-frame/);
 	assert.match(mentorHtml, /aspect-ratio: 1 \/ 1/);
 	assert.match(mentorHtml, /mentor-photo-fallback visible/);
-	assert.match(mentorHtml, /this\.nextElementSibling\.classList\.add/);
+	assert.match(mentorHtml, /addEventListener\('error', showFallback\)/);
+	assert.match(mentorHtml, /naturalWidth === 0/);
+	assert.doesNotMatch(mentorHtml, /onerror=/);
 	assert.match(mentorHtml, /profile photo/);
 	assert.match(mentorHtml, /See available times/);
 
@@ -140,6 +143,45 @@ test("mentor cards render photos and slot picker renders selectable date-time co
 	assert.match(slotHtml, /class=\"slots\"/);
 	assert.match(slotHtml, /I choose/);
 	assert.match(slotHtml, /ui\/message/);
+});
+
+test("mentor photo fallback runs for already-broken Claude-hosted images", () => {
+	const fallback = {
+		addedClasses: [],
+		classList: {
+			add(className) {
+				fallback.addedClasses.push(className);
+			},
+		},
+	};
+	const image = {
+		style: {},
+		complete: true,
+		naturalWidth: 0,
+		nextElementSibling: fallback,
+		listeners: {},
+		addEventListener(type, listener) {
+			this.listeners[type] = listener;
+		},
+	};
+
+	renderAppWithToolResult(
+		"mentor-cards",
+		{
+			mentors: [
+				{
+					name: "Ada Lovelace",
+					slug: "ada-lovelace",
+					profile_photo_url: "https://images.example/missing.jpg",
+				},
+			],
+		},
+		{ mentorPhotos: [image] },
+	);
+
+	assert.equal(typeof image.listeners.error, "function");
+	assert.equal(image.style.display, "none");
+	assert.deepEqual(fallback.addedClasses, ["visible"]);
 });
 
 test("embedded apps perform MCP Apps ui initialize handshake before initialized notification", () => {
