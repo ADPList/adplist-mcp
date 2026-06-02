@@ -1,4 +1,4 @@
-import { combineIntentWithProfile, getProfileTextForSearch } from "./profile";
+import { combineIntentWithProfile, getProfileTextForSearch } from "./profile.ts";
 import type { McpUserProps } from "./types";
 
 export type SearchMentorsFilters = {
@@ -79,7 +79,6 @@ export type SearchMentorsOutput = {
 	queryID?: string;
 	indexUsed?: string;
 	relaxed_filters?: string[];
-	original_result_count?: number;
 };
 
 const DEFAULT_MAX_RESULTS = 6;
@@ -200,7 +199,6 @@ export async function searchMentors(
 	return {
 		...relaxedResult,
 		relaxed_filters: ["discipline"],
-		original_result_count: firstResult.mentors.length,
 	};
 }
 
