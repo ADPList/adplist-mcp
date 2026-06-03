@@ -21,7 +21,7 @@ import {
 import { bookSession, listAvailability } from "./booking";
 import { listJournals, readJournal } from "./journals";
 import { manageMyContext } from "./profile";
-import { searchMentors } from "./searchMentors";
+import { searchMentors, type SearchMentorsOutput } from "./searchMentors";
 import { cancelSession, listMySessions } from "./sessions";
 import {
 	listMentorRequests,
@@ -44,7 +44,13 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 
 	private toolResponse<T>(
 		run: () => Promise<T>,
-		app?: { resourceUri: string; name: string; title: string; description: string },
+		app?: {
+			resourceUri: string;
+			name: string;
+			title: string;
+			description: string;
+			shouldRender?: (result: T) => boolean;
+		},
 	) {
 		return toolResponse(() => runWithToolRateLimit(this.env, this.props, run), app);
 	}
@@ -121,8 +127,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"search_mentors",
 			{
 				description:
-					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. Returns compact ranked mentor cards plus Algolia queryID for later booking attribution. MCP Apps hosts should render the attached clean visual mentor cards; text/JSON fallback remains complete for unsupported hosts.",
-				_meta: appToolMeta(UI_RESOURCES.mentorCards),
+					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. Returns compact ranked mentor cards plus Algolia queryID for later booking attribution. When mentor matches are returned, MCP Apps hosts can render the attached clean visual mentor cards; empty results are returned as text/JSON only.",
 				annotations: {
 					title: "Search ADPList mentors",
 					readOnlyHint: true,
@@ -159,6 +164,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 					name: "adplist-mentor-cards",
 					title: "ADPList mentor cards",
 					description: "Interactive ADPList mentor results with profile photos.",
+					shouldRender: (result: SearchMentorsOutput) => result.mentors.length > 0,
 				}),
 		);
 
