@@ -21,7 +21,7 @@ import {
 import { bookSession, listAvailability } from "./booking";
 import { listJournals, readJournal } from "./journals";
 import { manageMyContext } from "./profile";
-import { searchMentors } from "./searchMentors";
+import { searchMentors, type SearchMentorsOutput } from "./searchMentors";
 import { cancelSession, listMySessions } from "./sessions";
 import {
 	listMentorRequests,
@@ -44,7 +44,13 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 
 	private toolResponse<T>(
 		run: () => Promise<T>,
-		app?: { resourceUri: string; name: string; title: string; description: string },
+		app?: {
+			resourceUri: string;
+			name: string;
+			title: string;
+			description: string;
+			shouldRender?: (result: T) => boolean;
+		},
 	) {
 		return toolResponse(() => runWithToolRateLimit(this.env, this.props, run), app);
 	}
@@ -159,6 +165,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 					name: "adplist-mentor-cards",
 					title: "ADPList mentor cards",
 					description: "Interactive ADPList mentor results with profile photos.",
+					shouldRender: (result: SearchMentorsOutput) => result.mentors.length > 0,
 				}),
 		);
 

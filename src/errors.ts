@@ -115,15 +115,22 @@ export function formatToolError(error: unknown): StructuredMcpError {
 
 export async function toolResponse<T>(
 	run: () => Promise<T>,
-	app?: { resourceUri: string; name: string; title: string; description: string },
+	app?: {
+		resourceUri: string;
+		name: string;
+		title: string;
+		description: string;
+		shouldRender?: (result: T) => boolean;
+	},
 ) {
 	try {
 		const result = await run();
+		const renderApp = app && (app.shouldRender ? app.shouldRender(result) : true);
 		return {
 			structuredContent: isRecord(result) ? result : undefined,
 			content: [
 				{ type: "text" as const, text: JSON.stringify(result) },
-				...(app
+				...(renderApp
 					? [
 							{
 								type: "resource_link" as const,

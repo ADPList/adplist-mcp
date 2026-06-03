@@ -63,3 +63,22 @@ test("toolResponse preserves success output and marks failures as MCP tool error
 	assert.equal(failure.isError, true);
 	assert.equal(JSON.parse(failure.content[0].text).error.code, "UPSTREAM_UNAVAILABLE");
 });
+
+test("toolResponse can suppress app resource links for empty successful results", async () => {
+	const app = {
+		resourceUri: "ui://adplist/mentor-cards.html",
+		name: "adplist-mentor-cards",
+		title: "ADPList mentor cards",
+		description: "Interactive ADPList mentor results with profile photos.",
+		shouldRender: (result) => result.mentors.length > 0,
+	};
+	const empty = await toolResponse(async () => ({ mentors: [] }), app);
+	assert.deepEqual(empty.structuredContent, { mentors: [] });
+	assert.deepEqual(empty.content.map((item) => item.type), ["text"]);
+
+	const populated = await toolResponse(
+		async () => ({ mentors: [{ slug: "mentor-one" }] }),
+		app,
+	);
+	assert.deepEqual(populated.content.map((item) => item.type), ["text", "resource_link"]);
+});

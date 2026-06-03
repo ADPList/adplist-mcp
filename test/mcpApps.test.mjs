@@ -92,6 +92,7 @@ test("interactive tools advertise MCP Apps resource metadata and preserve fallba
 	assert.match(indexSource, /_meta: appToolMeta\(UI_RESOURCES\.mentorCards\)/);
 	assert.match(indexSource, /_meta: appToolMeta\(UI_RESOURCES\.slotPicker\)/);
 	assert.match(indexSource, /_meta: appToolMeta\(UI_RESOURCES\.sessionCards\)/);
+	assert.match(indexSource, /shouldRender: \(result: SearchMentorsOutput\) => result\.mentors\.length > 0/);
 	assert.match(errorsSource, /structuredContent/);
 	assert.match(errorsSource, /text\/html;profile=mcp-app/);
 });
