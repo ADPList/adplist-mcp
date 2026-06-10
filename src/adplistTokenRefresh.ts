@@ -407,7 +407,7 @@ export function tokenRefreshErrorResponse(error: unknown): Response | undefined 
 		return new Response(
 			JSON.stringify({
 				error: "invalid_grant",
-				error_description: "ADPList sign-in expired. Reconnect ADPList.",
+				error_description: error.message,
 			}),
 			{ status: 400, headers: { "Content-Type": "application/json" } },
 		);
