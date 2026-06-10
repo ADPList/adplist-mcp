@@ -154,7 +154,15 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 								.optional()
 								.describe("ISO 3166-1 alpha-2 country code, e.g. US or SG."),
 							language: z.string().trim().min(1).optional(),
-							max_results: z.number().int().min(5).max(8).optional(),
+							max_results: z
+								.number()
+								.int()
+								.min(3)
+								.max(9)
+								.optional()
+								.describe(
+									"How many mentors to return. Snapped to full rows of 3 (3, 6, or 9) for the card grid.",
+								),
 						})
 						.optional(),
 				},

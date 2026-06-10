@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { searchMentors } from "../src/searchMentors.ts";
+import {
+	mapSearchMentorsResponse,
+	normalizeMaxResults,
+	searchMentors,
+} from "../src/searchMentors.ts";
 
 const source = readFileSync(new URL("../src/searchMentors.ts", import.meta.url), "utf8");
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
@@ -9,7 +13,8 @@ const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "u
 test("M2 registers the search_mentors MCP tool", () => {
 	assert.match(indexSource, /registerTool\(\s*"search_mentors"/);
 	assert.match(indexSource, /existing Explore personalization ranker/);
-	assert.match(indexSource, /min\(5\)\.max\(8\)/);
+	assert.match(indexSource, /min\(3\)/);
+	assert.match(indexSource, /max\(9\)/);
 });
 
 test("search_mentors calls search-service Explore with compact filters", () => {
@@ -138,3 +143,67 @@ function jsonResponse(body) {
 		headers: { "content-type": "application/json" },
 	});
 }
+
+test("max_results snaps to full rows of three for the card grid", () => {
+	assert.equal(normalizeMaxResults(undefined), 6);
+	assert.equal(normalizeMaxResults(3), 3);
+	assert.equal(normalizeMaxResults(4), 3);
+	assert.equal(normalizeMaxResults(5), 6);
+	assert.equal(normalizeMaxResults(6), 6);
+	assert.equal(normalizeMaxResults(7), 6);
+	assert.equal(normalizeMaxResults(8), 9);
+	assert.equal(normalizeMaxResults(9), 9);
+	assert.equal(normalizeMaxResults(1), 3);
+	assert.equal(normalizeMaxResults(50), 9);
+});
+
+test("partial trailing rows are trimmed so the grid renders without gaps", () => {
+	const mentor = (i) => ({ name: `Mentor ${i}`, slug: `mentor-${i}` });
+	const input = { intent: "design mentor", filters: { max_results: 9 } };
+	const results = (n) => ({ results: Array.from({ length: n }, (_, i) => mentor(i)) });
+
+	assert.equal(mapSearchMentorsResponse(results(8), input).mentors.length, 6);
+	assert.equal(mapSearchMentorsResponse(results(9), input).mentors.length, 9);
+	assert.equal(mapSearchMentorsResponse(results(7), input).mentors.length, 6);
+	assert.equal(mapSearchMentorsResponse(results(6), input).mentors.length, 6);
+	assert.equal(mapSearchMentorsResponse(results(4), input).mentors.length, 3);
+	// below one full row there is nothing to trim against — keep what exists
+	assert.equal(mapSearchMentorsResponse(results(2), input).mentors.length, 2);
+	assert.equal(mapSearchMentorsResponse(results(0), input).mentors.length, 0);
+});
+
+test("region-style adplist-bucket S3 photo hosts are rewritten to the CSP-allowlisted global host", () => {
+	const input = { intent: "design mentor" };
+	const out = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Hanshuman Tuteja",
+					slug: "hanshuman-tuteja",
+					image:
+						"https://adplist-bucket.s3.us-east-2.amazonaws.com/media/profile_photos/4cdac20c.webp",
+				},
+				{
+					name: "Global Host",
+					slug: "global-host",
+					image: "https://adplist-bucket.s3.amazonaws.com/media/profile_photos/abc.webp",
+				},
+				{
+					name: "Other Host",
+					slug: "other-host",
+					image: "https://lh3.googleusercontent.com/photo.jpg",
+				},
+			],
+		},
+		input,
+	);
+	assert.equal(
+		out.mentors[0].profile_photo_url,
+		"https://adplist-bucket.s3.amazonaws.com/media/profile_photos/4cdac20c.webp",
+	);
+	assert.equal(
+		out.mentors[1].profile_photo_url,
+		"https://adplist-bucket.s3.amazonaws.com/media/profile_photos/abc.webp",
+	);
+	assert.equal(out.mentors[2].profile_photo_url, "https://lh3.googleusercontent.com/photo.jpg");
+});

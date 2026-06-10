@@ -82,12 +82,15 @@ export type SearchMentorsOutput = {
 };
 
 const DEFAULT_MAX_RESULTS = 6;
-const MAX_RESULTS = 8;
-const MIN_RESULTS = 5;
+const MAX_RESULTS = 9;
+const MIN_RESULTS = 3;
+const ROW_SIZE = 3;
 
+// Results render in a 3-column card grid, so counts snap to full rows (3/6/9).
 export function normalizeMaxResults(value: number | undefined): number {
 	if (value === undefined || !Number.isFinite(value)) return DEFAULT_MAX_RESULTS;
-	return Math.min(MAX_RESULTS, Math.max(MIN_RESULTS, Math.trunc(value)));
+	const clamped = Math.min(MAX_RESULTS, Math.max(MIN_RESULTS, Math.trunc(value)));
+	return Math.min(MAX_RESULTS, Math.max(MIN_RESULTS, Math.round(clamped / ROW_SIZE) * ROW_SIZE));
 }
 
 export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput): string {
@@ -161,7 +164,15 @@ export function mapSearchMentorsResponse(
 			position: mentor.position,
 		};
 	});
-	return { mentors, queryID: response.queryID, indexUsed: response.indexUsed };
+	// Drop a partial trailing row so the 3-up grid never renders with gaps;
+	// below one full row there is nothing to trim against, so keep what exists.
+	const fullRowCount =
+		mentors.length > ROW_SIZE ? Math.floor(mentors.length / ROW_SIZE) * ROW_SIZE : mentors.length;
+	return {
+		mentors: mentors.slice(0, fullRowCount),
+		queryID: response.queryID,
+		indexUsed: response.indexUsed,
+	};
 }
 
 export async function searchMentors(
@@ -249,10 +260,20 @@ function normalizeImageUrl(value: unknown): string {
 	if (typeof value !== "string") return "";
 	const trimmed = value.trim();
 	if (!trimmed) return "";
-	if (trimmed.startsWith("https://")) return trimmed;
-	if (trimmed.startsWith("//")) return `https:${trimmed}`;
+	if (trimmed.startsWith("https://")) return canonicalizeS3Host(trimmed);
+	if (trimmed.startsWith("//")) return canonicalizeS3Host(`https:${trimmed}`);
 	if (trimmed.startsWith("/")) return `https://adplist.org${trimmed}`;
 	return "";
+}
+
+// Newer uploads store region-style S3 URLs (adplist-bucket.s3.us-east-2.amazonaws.com),
+// but MCP App hosts only allow the global-style host in the widget CSP. The global
+// endpoint serves the same objects directly (no redirect), so rewrite to it.
+function canonicalizeS3Host(url: string): string {
+	return url.replace(
+		/^https:\/\/adplist-bucket\.s3\.[a-z0-9-]+\.amazonaws\.com\//,
+		"https://adplist-bucket.s3.amazonaws.com/",
+	);
 }
 
 function includesIgnoreCase(values: string[] | undefined, expected: string): boolean {
