@@ -9,9 +9,9 @@ export const OPENAI_WIDGET_DESCRIPTION_META_KEY = "openai/widgetDescription";
 export const OPENAI_WIDGET_PREFERS_BORDER_META_KEY = "openai/widgetPrefersBorder";
 export const OPENAI_WIDGET_CSP_META_KEY = "openai/widgetCSP";
 
-export const UI_RESOURCE_VERSION = "v3";
+export const UI_RESOURCE_VERSION = "v4";
 export const APP_BUILD_LABEL = `ADPList MCP App ${UI_RESOURCE_VERSION}`;
-const APP_INFO_VERSION = "3.0.0";
+const APP_INFO_VERSION = "4.0.0";
 
 export const UI_RESOURCES = {
 	mentorCards: `ui://adplist/${UI_RESOURCE_VERSION}/mentor-cards.html`,
@@ -91,8 +91,6 @@ export function buildAppHtml(kind: AppViewKind): string {
   --text: var(--color-text-primary, #222);
   --muted: var(--color-text-secondary, #6a6a6a);
   --line: var(--color-border-primary, #e8e8e8);
-  --accent: #ff385c;
-  --accent-dark: #d70466;
   --radius: 22px;
   font-family: var(--font-sans, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
 }
@@ -103,6 +101,7 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 h1 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 .subtle { color: var(--muted); font-size: 13px; line-height: 1.4; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.06); }
 .mentor-photo-frame { position: relative; width: 100%; aspect-ratio: 1 / 1; background: linear-gradient(135deg, #f3f3f3, #e9e9e9); overflow: hidden; }
 .mentor-photo { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -112,19 +111,22 @@ h1 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .name { font-weight: 750; letter-spacing: -0.02em; }
 .meta { color: var(--muted); font-size: 13px; margin-top: 3px; }
+.meta.why { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
 .chip { border: 1px solid var(--line); border-radius: 999px; padding: 5px 8px; font-size: 12px; color: var(--text); background: var(--card-soft); }
 .stat { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.cta { width: 100%; margin-top: 13px; border: 0; border-radius: 999px; padding: 10px 12px; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-dark)); font-weight: 700; cursor: pointer; }
-.cta.secondary { width: auto; margin-top: 0; background: var(--text); padding: 8px 11px; font-size: 12px; }
+.cta { width: auto; margin-top: 12px; border: 0; border-radius: 999px; padding: 8px 14px; color: var(--bg); background: var(--text); font-size: 13px; font-weight: 650; cursor: pointer; }
+.cta.secondary { margin-top: 0; padding: 8px 11px; font-size: 12px; }
+.cta:disabled { opacity: .55; cursor: default; }
 .days { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 12px; }
 .day { min-width: 128px; border: 1px solid var(--line); border-radius: 18px; padding: 12px; background: var(--card); cursor: pointer; text-align: left; }
 .day.active { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
 .day strong { display: block; font-size: 14px; }
 .slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .slot { border: 1px solid var(--line); border-radius: 16px; padding: 12px; background: var(--card); cursor: pointer; text-align: left; }
-.slot:hover, .slot.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.slot:hover, .slot.selected { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
 .slot-time { font-weight: 750; }
+.confirm-bar { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
 .session { padding: 16px; display: grid; gap: 12px; }
 .badge { display: inline-flex; width: fit-content; border-radius: 999px; padding: 5px 9px; background: var(--card-soft); border: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .people { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; }
@@ -132,7 +134,9 @@ h1 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 .arrow { color: var(--muted); }
 .empty { border: 1px dashed var(--line); border-radius: var(--radius); padding: 22px; color: var(--muted); text-align: center; }
 .debug-version { margin-top: 12px; color: var(--muted); font-size: 11px; text-align: right; opacity: .75; }
+@media (max-width: 640px) { .grid.cols-3 { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 520px) { .app { padding: 12px; } .header { display: block; } .people { grid-template-columns: 1fr; } .arrow { display: none; } }
+@media (max-width: 420px) { .grid.cols-3 { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -202,7 +206,7 @@ function parseResult(result) {
 }
 function h(value) { return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 function mentorInitials(name) {
-  const parts = String(name || 'ADPList mentor').trim().split(/\s+/).filter(Boolean);
+  const parts = String(name || 'ADPList mentor').trim().split(/\\s+/).filter(Boolean);
   return (parts[0]?.[0] || 'A') + (parts[1]?.[0] || 'D');
 }
 function localTimezoneLabel(date) {
@@ -227,7 +231,7 @@ function render(result) {
 function renderMentors(data) {
   const mentors = data.mentors || [];
   document.getElementById('subtitle').textContent = mentors.length ? 'Pick a mentor to see available times. Photos are shown when ADPList has them.' : 'No mentor matches returned.';
-  document.getElementById('root').innerHTML = mentors.length ? '<div class="grid">' + mentors.map((m) => {
+  document.getElementById('root').innerHTML = mentors.length ? '<div class="grid cols-3">' + mentors.map((m) => {
     const photo = m.profile_photo_url || '';
     const details = [m.title, m.company].filter(Boolean).join(' · ');
     const fallbackClass = photo ? 'mentor-photo-fallback' : 'mentor-photo-fallback visible';
@@ -236,7 +240,7 @@ function renderMentors(data) {
       '<div class="mentor-photo-frame">' + photoHtml + '<div class="' + fallbackClass + '" aria-label="Profile photo unavailable">' + h(mentorInitials(m.name)) + '</div></div>' +
       '<div class="card-body"><div class="row"><div><div class="name">' + h(m.name || 'ADPList mentor') + '</div><div class="meta">' + h(details) + '</div></div><div class="stat">' + h(m.rating ? '★ ' + Number(m.rating).toFixed(1) : '') + '</div></div>' +
       '<div class="chips">' + (m.expertise || []).map((x) => '<span class="chip">' + h(x) + '</span>').join('') + '</div>' +
-      '<div class="meta" style="margin-top:10px">' + h(m.why_match || '') + '</div>' +
+      '<div class="meta why" style="margin-top:10px">' + h(m.why_match || '') + '</div>' +
       '<button class="cta" data-slug="' + h(m.slug) + '">See available times</button></div></article>';
   }).join('') + '</div>' : '<div class="empty">No mentors found. Try a broader goal or fewer filters.</div>';
   document.querySelectorAll('.mentor-photo').forEach((img) => {
@@ -250,17 +254,23 @@ function renderMentors(data) {
 function renderSlots(data) {
   const slots = data.slots || [];
   const timezoneLabel = slots.length ? localTimezoneLabel(new Date(slots[0].slot_iso)) : '';
-  document.getElementById('subtitle').textContent = slots.length ? 'Select a date, then choose a time in your local timezone (' + timezoneLabel + '). The final booking still needs chat confirmation.' : 'No available slots returned.';
+  document.getElementById('subtitle').textContent = slots.length ? 'Pick a date and time, then confirm. Times are in your local timezone (' + timezoneLabel + ').' : 'No available slots returned.';
   if (!slots.length) { document.getElementById('root').innerHTML = '<div class="empty">No available times in this window.</div>'; return resize(); }
   const byDay = slots.reduce((acc, slot) => { const date = new Date(slot.slot_iso); const key = localDayKey(date); (acc[key] ||= []).push(slot); return acc; }, {});
   const days = Object.keys(byDay).sort();
   let active = days[0];
+  let selected = null;
+  let sent = false;
   function paint() {
     const dayButtons = days.map((day) => '<button class="day ' + (day === active ? 'active' : '') + '" data-day="' + day + '"><strong>' + h(localDayLabel(day)) + '</strong><span class="subtle">' + byDay[day].length + ' time' + (byDay[day].length === 1 ? '' : 's') + '</span></button>').join('');
-    const slotButtons = byDay[active].map((slot) => '<button class="slot" data-slot="' + h(slot.slot_iso) + '" data-mentor="' + h(slot.mentor_slug) + '"><div class="slot-time">' + h(localSlotTimeLabel(slot.slot_iso)) + '</div><div class="subtle">' + h(slot.duration_minutes) + ' min · ' + h(localSlotDisplay(slot)) + '</div></button>').join('');
-    document.getElementById('root').innerHTML = '<div class="days">' + dayButtons + '</div><div class="slots">' + slotButtons + '</div>' + (data.truncated ? '<p class="subtle">Showing the first available times. Ask for a wider window if needed.</p>' : '');
+    const slotButtons = byDay[active].map((slot) => '<button class="slot' + (selected && selected.iso === slot.slot_iso ? ' selected' : '') + '" data-slot="' + h(slot.slot_iso) + '" data-mentor="' + h(slot.mentor_slug) + '"><div class="slot-time">' + h(localSlotTimeLabel(slot.slot_iso)) + '</div><div class="subtle">' + h(slot.duration_minutes) + ' min · ' + h(localSlotDisplay(slot)) + '</div></button>').join('');
+    const selectedOnActiveDay = selected && localDayKey(new Date(selected.iso)) === active;
+    const confirmLabel = sent ? 'Sent to chat ✓' : selected ? 'Confirm ' + localSlotTimeLabel(selected.iso) + ' · ' + localSlotDisplay({ slot_iso: selected.iso }) : '';
+    const confirmBar = selectedOnActiveDay ? '<div class="confirm-bar"><button class="cta secondary" id="confirm-slot"' + (sent ? ' disabled' : '') + '>' + h(confirmLabel) + '</button></div>' : '';
+    document.getElementById('root').innerHTML = '<div class="days">' + dayButtons + '</div><div class="slots">' + slotButtons + '</div>' + confirmBar + (data.truncated ? '<p class="subtle">Showing the first available times. Ask for a wider window if needed.</p>' : '');
     document.querySelectorAll('[data-day]').forEach((button) => button.addEventListener('click', () => { active = button.dataset.day; paint(); }));
-    document.querySelectorAll('[data-slot]').forEach((button) => button.addEventListener('click', () => { button.classList.add('selected'); sendUserMessage('I choose ' + button.dataset.slot + ' for mentor ' + button.dataset.mentor + '. Please confirm the booking details.'); }));
+    document.querySelectorAll('[data-slot]').forEach((button) => button.addEventListener('click', () => { if (selected && selected.iso === button.dataset.slot) return; selected = { iso: button.dataset.slot, mentor: button.dataset.mentor }; sent = false; paint(); }));
+    document.getElementById('confirm-slot')?.addEventListener('click', () => { if (sent || !selected) return; sent = true; sendUserMessage('I choose ' + selected.iso + ' for mentor ' + selected.mentor + '. Please confirm the booking details.'); paint(); });
     resize();
   }
   paint();

@@ -150,13 +150,36 @@ test("mentor cards render photos and slot picker renders selectable date-time co
 	assert.match(slotHtml, /ui\/message/);
 });
 
+test("mentor cards render a three-column grid with compact black CTAs", () => {
+	const mentorHtml = buildAppHtml("mentor-cards");
+	assert.match(mentorHtml, /class="grid cols-3"/);
+	assert.match(mentorHtml, /\.grid\.cols-3 \{ grid-template-columns: repeat\(3, 1fr\); \}/);
+	assert.match(mentorHtml, /\.cta \{[^}]*background: var\(--text\)/);
+	assert.doesNotMatch(mentorHtml, /\.cta \{[^}]*linear-gradient/);
+});
+
+test("slot picker enforces a single selection and only messages chat on explicit confirm", () => {
+	const slotHtml = buildAppHtml("slot-picker");
+	// selection is tracked as one value and painted from state, not accumulated classes
+	assert.match(slotHtml, /selected && selected\.iso === slot\.slot_iso/);
+	assert.doesNotMatch(slotHtml, /classList\.add\('selected'\)/);
+	// slot clicks only update selection; the confirm button sends the one chat message
+	assert.match(slotHtml, /id="confirm-slot"/);
+	assert.match(slotHtml, /if \(sent \|\| !selected\) return;/);
+	assert.equal(slotHtml.match(/sendUserMessage\('I choose/g)?.length, 1);
+	// re-clicking the confirmed slot must not re-arm the confirm button (Greptile/Codex P1)
+	assert.match(slotHtml, /if \(selected && selected\.iso === button\.dataset\.slot\) return;/);
+	// the confirm bar only shows when the selected slot's day is active (Greptile P2)
+	assert.match(slotHtml, /selectedOnActiveDay/);
+});
+
 test("MCP App output includes visible version diagnostics for Claude verification", () => {
 	const html = buildAppHtml("mentor-cards");
-	assert.equal(UI_RESOURCE_VERSION, "v3");
-	assert.equal(APP_BUILD_LABEL, "ADPList MCP App v3");
-	assert.match(html, /ADPList MCP App v3/);
+	assert.equal(UI_RESOURCE_VERSION, "v4");
+	assert.equal(APP_BUILD_LABEL, "ADPList MCP App v4");
+	assert.match(html, /ADPList MCP App v4/);
 	assert.match(html, /aria-label="ADPList MCP App version"/);
-	assert.match(html, /appInfo: \{ name: titleForView\(\), version: "3\.0\.0" \}/);
+	assert.match(html, /appInfo: \{ name: titleForView\(\), version: "4\.0\.0" \}/);
 });
 
 test("mentor photo fallback runs for already-broken Claude-hosted images", () => {
@@ -222,9 +245,9 @@ test("slot picker groups days by the user's local date instead of UTC date", () 
 });
 
 test("UI resource constants use versioned ui:// URIs so Claude refreshes cached app resources", () => {
-	assert.equal(UI_RESOURCES.mentorCards, "ui://adplist/v3/mentor-cards.html");
-	assert.equal(UI_RESOURCES.slotPicker, "ui://adplist/v3/slot-picker.html");
-	assert.equal(UI_RESOURCES.sessionCards, "ui://adplist/v3/session-cards.html");
+	assert.equal(UI_RESOURCES.mentorCards, "ui://adplist/v4/mentor-cards.html");
+	assert.equal(UI_RESOURCES.slotPicker, "ui://adplist/v4/slot-picker.html");
+	assert.equal(UI_RESOURCES.sessionCards, "ui://adplist/v4/session-cards.html");
 });
 
 test("slot picker renders viewer-local timezone labels instead of raw UTC-only times", () => {
@@ -239,7 +262,7 @@ test("slot picker renders viewer-local timezone labels instead of raw UTC-only t
 		],
 	});
 
-	assert.match(subtitle.textContent, /time in your local timezone/);
+	assert.match(subtitle.textContent, /in your local timezone/);
 	assert.doesNotMatch(root.innerHTML, /Tue, Jun 2 · 8:00 PM UTC/);
 	assert.match(root.innerHTML, /30 min · /);
 	assert.match(root.innerHTML, /ada-lovelace/);
