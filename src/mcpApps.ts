@@ -264,11 +264,12 @@ function renderSlots(data) {
   function paint() {
     const dayButtons = days.map((day) => '<button class="day ' + (day === active ? 'active' : '') + '" data-day="' + day + '"><strong>' + h(localDayLabel(day)) + '</strong><span class="subtle">' + byDay[day].length + ' time' + (byDay[day].length === 1 ? '' : 's') + '</span></button>').join('');
     const slotButtons = byDay[active].map((slot) => '<button class="slot' + (selected && selected.iso === slot.slot_iso ? ' selected' : '') + '" data-slot="' + h(slot.slot_iso) + '" data-mentor="' + h(slot.mentor_slug) + '"><div class="slot-time">' + h(localSlotTimeLabel(slot.slot_iso)) + '</div><div class="subtle">' + h(slot.duration_minutes) + ' min · ' + h(localSlotDisplay(slot)) + '</div></button>').join('');
+    const selectedOnActiveDay = selected && localDayKey(new Date(selected.iso)) === active;
     const confirmLabel = sent ? 'Sent to chat ✓' : selected ? 'Confirm ' + localSlotTimeLabel(selected.iso) + ' · ' + localSlotDisplay({ slot_iso: selected.iso }) : '';
-    const confirmBar = selected ? '<div class="confirm-bar"><button class="cta secondary" id="confirm-slot"' + (sent ? ' disabled' : '') + '>' + h(confirmLabel) + '</button></div>' : '';
+    const confirmBar = selectedOnActiveDay ? '<div class="confirm-bar"><button class="cta secondary" id="confirm-slot"' + (sent ? ' disabled' : '') + '>' + h(confirmLabel) + '</button></div>' : '';
     document.getElementById('root').innerHTML = '<div class="days">' + dayButtons + '</div><div class="slots">' + slotButtons + '</div>' + confirmBar + (data.truncated ? '<p class="subtle">Showing the first available times. Ask for a wider window if needed.</p>' : '');
     document.querySelectorAll('[data-day]').forEach((button) => button.addEventListener('click', () => { active = button.dataset.day; paint(); }));
-    document.querySelectorAll('[data-slot]').forEach((button) => button.addEventListener('click', () => { selected = { iso: button.dataset.slot, mentor: button.dataset.mentor }; sent = false; paint(); }));
+    document.querySelectorAll('[data-slot]').forEach((button) => button.addEventListener('click', () => { if (selected && selected.iso === button.dataset.slot) return; selected = { iso: button.dataset.slot, mentor: button.dataset.mentor }; sent = false; paint(); }));
     document.getElementById('confirm-slot')?.addEventListener('click', () => { if (sent || !selected) return; sent = true; sendUserMessage('I choose ' + selected.iso + ' for mentor ' + selected.mentor + '. Please confirm the booking details.'); paint(); });
     resize();
   }

@@ -167,6 +167,10 @@ test("slot picker enforces a single selection and only messages chat on explicit
 	assert.match(slotHtml, /id="confirm-slot"/);
 	assert.match(slotHtml, /if \(sent \|\| !selected\) return;/);
 	assert.equal(slotHtml.match(/sendUserMessage\('I choose/g)?.length, 1);
+	// re-clicking the confirmed slot must not re-arm the confirm button (Greptile/Codex P1)
+	assert.match(slotHtml, /if \(selected && selected\.iso === button\.dataset\.slot\) return;/);
+	// the confirm bar only shows when the selected slot's day is active (Greptile P2)
+	assert.match(slotHtml, /selectedOnActiveDay/);
 });
 
 test("MCP App output includes visible version diagnostics for Claude verification", () => {
