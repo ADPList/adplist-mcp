@@ -277,9 +277,8 @@ async function refreshAdplistTokenWithPolicy(
 	props: McpUserProps,
 	refreshToken: string | undefined,
 ): Promise<RefreshAdplistTokenResult | undefined> {
-	const hardExpired = isAdplistAccessTokenHardExpired(props);
 	if (!refreshToken) {
-		if (hardExpired) {
+		if (isAdplistAccessTokenHardExpired(props)) {
 			logRefresh("error", "auth_expired_missing_refresh_token", path, props);
 			throw new AuthExpiredError("ADPList refresh token is missing. Reconnect ADPList.");
 		}
@@ -290,8 +289,10 @@ async function refreshAdplistTokenWithPolicy(
 	// Definitive 4xx rejection: retrying is pointless, but only fail the session
 	// when the current access token is actually unusable — otherwise keep serving
 	// it and let a later refresh (or reconnect at hard expiry) settle it.
+	// Expiry is re-evaluated at each decision point because the token can cross
+	// into hard expiry during the request/retry window.
 	const handleAuthExpired = (error: AuthExpiredError, retried: boolean): undefined => {
-		if (hardExpired) {
+		if (isAdplistAccessTokenHardExpired(props)) {
 			logRefresh("error", "refresh_auth_expired", path, props, { retried });
 			throw error;
 		}
@@ -319,7 +320,7 @@ async function refreshAdplistTokenWithPolicy(
 	} catch (error) {
 		if (error instanceof AuthExpiredError) return handleAuthExpired(error, true);
 		const reason = error instanceof Error ? error.message : String(error);
-		if (!hardExpired) {
+		if (!isAdplistAccessTokenHardExpired(props)) {
 			logRefresh("warn", "refresh_transient_failure_continuing", path, props, {
 				retried: true,
 				reason,
