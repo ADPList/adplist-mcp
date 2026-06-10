@@ -12,6 +12,18 @@ export type RefreshAdplistTokenResult = {
 
 const ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
 const OPAQUE_ACCESS_TOKEN_REFRESH_AFTER_SECONDS = 23 * 60 * 60;
+const OPAQUE_ACCESS_TOKEN_HARD_EXPIRY_SECONDS = 24 * 60 * 60;
+const TRANSIENT_REFRESH_RETRY_DELAY_MS = 250;
+
+type RefreshPath = "tool_call" | "token_exchange";
+
+// Staging/testing escape hatch: forces "near expired" without waiting out the
+// real 24h Cognito token lifetime. Unset in production.
+function refreshSkewSeconds(env: Env): number {
+	const raw = (env as unknown as Record<string, unknown>).ADPLIST_REFRESH_SKEW_SECONDS;
+	const parsed = typeof raw === "string" ? Number(raw) : Number.NaN;
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : ACCESS_TOKEN_REFRESH_SKEW_SECONDS;
+}
 
 export class AuthExpiredError extends Error {
 	constructor(message = "ADPList refresh token is invalid or expired. Reconnect ADPList.") {
@@ -21,9 +33,19 @@ export class AuthExpiredError extends Error {
 }
 
 export class UpstreamRefreshError extends Error {
-	constructor(message = "ADPList auth refresh is temporarily unavailable.") {
+	// auth-service returns HTTP 200 with status:"Failed" and no accessToken for BOTH
+	// transient Cognito throttles and permanent refresh-token rejections. That shape is
+	// "ambiguous": after a failed retry on an already-expired token we treat it as
+	// auth-expired. Plain 5xx/network failures are never escalated.
+	readonly ambiguousAuthFailure: boolean;
+
+	constructor(
+		message = "ADPList auth refresh is temporarily unavailable.",
+		options: { ambiguousAuthFailure?: boolean } = {},
+	) {
 		super(message);
 		this.name = "UpstreamRefreshError";
+		this.ambiguousAuthFailure = options.ambiguousAuthFailure ?? false;
 	}
 }
 
@@ -61,16 +83,51 @@ export function accessTokenExpiresAt(accessToken: string): number | undefined {
 	}
 }
 
-function shouldRefreshAdplistAccessToken(props: McpUserProps): boolean {
+function shouldRefreshAdplistAccessToken(env: Env, props: McpUserProps): boolean {
 	if (!props.cognitoAccessToken) return true;
 	if (props.cognitoAccessTokenExpiresAt) {
-		return secondsUntil(props.cognitoAccessTokenExpiresAt) <= ACCESS_TOKEN_REFRESH_SKEW_SECONDS;
+		return secondsUntil(props.cognitoAccessTokenExpiresAt) <= refreshSkewSeconds(env);
 	}
 	if (!props.cognitoAccessTokenRefreshedAt) return true;
 	return (
 		secondsUntil(
 			props.cognitoAccessTokenRefreshedAt + OPAQUE_ACCESS_TOKEN_REFRESH_AFTER_SECONDS,
-		) <= ACCESS_TOKEN_REFRESH_SKEW_SECONDS
+		) <= refreshSkewSeconds(env)
+	);
+}
+
+// "Hard expired" = the stored access token is no longer usable at all, so failing to
+// refresh must surface AUTH_EXPIRED instead of silently continuing with a dead token.
+function isAdplistAccessTokenHardExpired(props: McpUserProps): boolean {
+	if (!props.cognitoAccessToken) return true;
+	if (props.cognitoAccessTokenExpiresAt) return secondsUntil(props.cognitoAccessTokenExpiresAt) <= 0;
+	if (props.cognitoAccessTokenRefreshedAt) {
+		return (
+			secondsUntil(props.cognitoAccessTokenRefreshedAt + OPAQUE_ACCESS_TOKEN_HARD_EXPIRY_SECONDS) <=
+			0
+		);
+	}
+	return true;
+}
+
+function logRefresh(
+	level: "log" | "warn" | "error",
+	action: string,
+	path: RefreshPath,
+	props: McpUserProps,
+	details: Record<string, unknown> = {},
+): void {
+	console[level](
+		JSON.stringify({
+			event: "adplist_token_refresh",
+			action,
+			path,
+			userId: props.userId,
+			accessTokenExpiresInSeconds: props.cognitoAccessTokenExpiresAt
+				? secondsUntil(props.cognitoAccessTokenExpiresAt)
+				: null,
+			...details,
+		}),
 	);
 }
 
@@ -88,6 +145,19 @@ async function getStoredRefreshToken(
 		if (clientToken) return clientToken;
 	}
 	return env.OAUTH_KV.get(refreshTokenOverrideKey(userId));
+}
+
+// A fresh sign-in must never be shadowed by a refresh token persisted from a
+// previous session, so clear any stored override when authorization completes.
+export async function clearStoredRefreshToken(
+	env: Env,
+	userId: string,
+	clientId?: string,
+): Promise<void> {
+	await Promise.all([
+		env.OAUTH_KV.delete(refreshTokenOverrideKey(userId, clientId)),
+		env.OAUTH_KV.delete(refreshTokenOverrideKey(userId)),
+	]);
 }
 
 async function storeRefreshTokenOverride(
@@ -174,7 +244,9 @@ export async function refreshAdplistToken(
 		throw new UpstreamRefreshError();
 	}
 	if (typeof data.accessToken !== "string" || data.accessToken.length === 0) {
-		throw new UpstreamRefreshError("ADPList /auth/refresh did not return an access token");
+		throw new UpstreamRefreshError("ADPList /auth/refresh did not return an access token", {
+			ambiguousAuthFailure: true,
+		});
 	}
 	const expiresAt = accessTokenExpiresAt(data.accessToken);
 	return {
@@ -187,6 +259,69 @@ export async function refreshAdplistToken(
 	};
 }
 
+// Refresh with a bounded failure policy:
+// - explicit 400/401/403 from auth-service -> AuthExpiredError (permanent, reconnect)
+// - anything ambiguous/transient (5xx, network, 200 with no accessToken) -> one retry
+// - still failing: keep serving the current token if it is still valid (the next
+//   hourly exchange/tool call retries naturally), AUTH_EXPIRED only if it is dead.
+async function refreshAdplistTokenWithPolicy(
+	env: Env,
+	path: RefreshPath,
+	props: McpUserProps,
+	refreshToken: string | undefined,
+): Promise<RefreshAdplistTokenResult | undefined> {
+	const hardExpired = isAdplistAccessTokenHardExpired(props);
+	if (!refreshToken) {
+		if (hardExpired) {
+			logRefresh("error", "auth_expired_missing_refresh_token", path, props);
+			throw new AuthExpiredError("ADPList refresh token is missing. Reconnect ADPList.");
+		}
+		logRefresh("warn", "refresh_skipped_missing_refresh_token", path, props);
+		return undefined;
+	}
+
+	logRefresh("log", "refresh_attempt", path, props);
+	try {
+		const refreshed = await refreshAdplistToken(env, refreshToken);
+		logRefresh("log", "refresh_success", path, props);
+		return refreshed;
+	} catch (error) {
+		if (error instanceof AuthExpiredError) {
+			logRefresh("error", "refresh_auth_expired", path, props);
+			throw error;
+		}
+		logRefresh("warn", "refresh_attempt_failed_retrying", path, props, {
+			reason: error instanceof Error ? error.message : String(error),
+		});
+	}
+
+	await new Promise((resolve) => setTimeout(resolve, TRANSIENT_REFRESH_RETRY_DELAY_MS));
+	try {
+		const refreshed = await refreshAdplistToken(env, refreshToken);
+		logRefresh("log", "refresh_success_after_retry", path, props);
+		return refreshed;
+	} catch (error) {
+		if (error instanceof AuthExpiredError) {
+			logRefresh("error", "refresh_auth_expired", path, props, { retried: true });
+			throw error;
+		}
+		const reason = error instanceof Error ? error.message : String(error);
+		if (!hardExpired) {
+			logRefresh("warn", "refresh_transient_failure_continuing", path, props, {
+				retried: true,
+				reason,
+			});
+			return undefined;
+		}
+		if (error instanceof UpstreamRefreshError && error.ambiguousAuthFailure) {
+			logRefresh("error", "refresh_rejected_token_expired", path, props, { retried: true, reason });
+			throw new AuthExpiredError("ADPList token expired and refresh is failing. Reconnect ADPList.");
+		}
+		logRefresh("error", "refresh_unavailable_token_expired", path, props, { retried: true, reason });
+		throw error;
+	}
+}
+
 export async function ensureFreshAdplistProps(
 	env: Env,
 	props: McpUserProps | undefined,
@@ -195,16 +330,14 @@ export async function ensureFreshAdplistProps(
 	props.cognitoAccessTokenExpiresAt ??= props.cognitoAccessToken
 		? accessTokenExpiresAt(props.cognitoAccessToken)
 		: undefined;
-	if (!shouldRefreshAdplistAccessToken(props)) return props;
+	if (!shouldRefreshAdplistAccessToken(env, props)) return props;
 
 	const refreshToken =
 		(await getStoredRefreshToken(env, props.userId, props.mcpClientId)) ??
 		props.adplistRefreshToken;
-	if (!refreshToken) {
-		throw new AuthExpiredError("ADPList refresh token is missing. Reconnect ADPList.");
-	}
+	const refreshed = await refreshAdplistTokenWithPolicy(env, "tool_call", props, refreshToken);
+	if (!refreshed) return props;
 
-	const refreshed = await refreshAdplistToken(env, refreshToken);
 	props.cognitoAccessToken = refreshed.accessToken;
 	props.cognitoAccessTokenExpiresAt = refreshed.accessTokenExpiresAt;
 	props.cognitoAccessTokenRefreshedAt = nowSeconds();
@@ -220,14 +353,28 @@ export async function refreshAdplistPropsOnTokenExchange(
 	if (options.grantType !== "refresh_token") return;
 
 	const props = options.props as McpUserProps;
+	const normalized: McpUserProps = {
+		...props,
+		cognitoAccessTokenExpiresAt:
+			props.cognitoAccessTokenExpiresAt ??
+			(props.cognitoAccessToken ? accessTokenExpiresAt(props.cognitoAccessToken) : undefined),
+	};
+	if (!shouldRefreshAdplistAccessToken(env, normalized)) {
+		logRefresh("log", "refresh_skipped_fresh", "token_exchange", normalized);
+		return;
+	}
+
 	const refreshToken =
 		(await getStoredRefreshToken(env, props.userId, options.clientId)) ??
 		props.adplistRefreshToken;
-	if (!refreshToken) {
-		throw new AuthExpiredError("ADPList refresh token is missing. Reconnect ADPList.");
-	}
+	const refreshed = await refreshAdplistTokenWithPolicy(
+		env,
+		"token_exchange",
+		normalized,
+		refreshToken,
+	);
+	if (!refreshed) return;
 
-	const refreshed = await refreshAdplistToken(env, refreshToken);
 	const newProps: McpUserProps = {
 		...props,
 		mcpClientId: props.mcpClientId ?? options.clientId,

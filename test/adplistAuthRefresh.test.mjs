@@ -24,6 +24,7 @@ function testEnv() {
 		OAUTH_KV: {
 			get: async (key) => kv.get(key) ?? null,
 			put: async (key, value) => kv.set(key, value),
+			delete: async (key) => kv.delete(key),
 		},
 	};
 }
@@ -342,4 +343,192 @@ test("transient ADPList refresh failures stay retryable", async () => {
 	const upstream = tokenRefreshErrorResponse(new UpstreamRefreshError());
 	assert.equal(upstream.status, 503);
 	assert.equal((await upstream.json()).error, "temporarily_unavailable");
+});
+
+test("token exchange skips ADPList refresh while the access token is fresh", async () => {
+	let fetchCalls = 0;
+	globalThis.fetch = async () => {
+		fetchCalls += 1;
+		return new Response(JSON.stringify({ accessToken: jwtWithExp(9999999999) }), { status: 200 });
+	};
+
+	const result = await refreshAdplistPropsOnTokenExchange(
+		{
+			grantType: "refresh_token",
+			clientId: "client",
+			userId: "user-1",
+			scope: [],
+			requestedScope: [],
+			props: {
+				userId: "user-1",
+				email: null,
+				scopes: [],
+				cognitoAccessToken: jwtWithExp(Math.floor(Date.now() / 1000) + 6 * 60 * 60),
+				adplistRefreshToken: "refresh-1",
+			},
+		},
+		testEnv(),
+	);
+
+	assert.equal(result, undefined);
+	assert.equal(fetchCalls, 0);
+});
+
+test("token exchange keeps existing props when refresh fails transiently and token is still valid", async () => {
+	let fetchCalls = 0;
+	globalThis.fetch = async () => {
+		fetchCalls += 1;
+		return new Response("temporary", { status: 503 });
+	};
+
+	const result = await refreshAdplistPropsOnTokenExchange(
+		{
+			grantType: "refresh_token",
+			clientId: "client",
+			userId: "user-1",
+			scope: [],
+			requestedScope: [],
+			props: {
+				userId: "user-1",
+				email: null,
+				scopes: [],
+				// Inside the 5-minute refresh window but not hard-expired yet.
+				cognitoAccessToken: jwtWithExp(Math.floor(Date.now() / 1000) + 2 * 60),
+				adplistRefreshToken: "refresh-1",
+			},
+		},
+		testEnv(),
+	);
+
+	assert.equal(result, undefined);
+	assert.equal(fetchCalls, 2);
+});
+
+test("ambiguous failed refresh on an expired token becomes AUTH_EXPIRED after one retry", async () => {
+	let fetchCalls = 0;
+	globalThis.fetch = async () => {
+		fetchCalls += 1;
+		// auth-service's Cognito-rejection shape: HTTP 200, status Failed, no accessToken.
+		return new Response(JSON.stringify({ status: "Failed", requestId: "r" }), { status: 200 });
+	};
+
+	await assert.rejects(
+		() =>
+			refreshAdplistPropsOnTokenExchange(
+				{
+					grantType: "refresh_token",
+					clientId: "client",
+					userId: "user-1",
+					scope: [],
+					requestedScope: [],
+					props: {
+						userId: "user-1",
+						email: null,
+						scopes: [],
+						cognitoAccessToken: jwtWithExp(Math.floor(Date.now() / 1000) - 60),
+						adplistRefreshToken: "refresh-1",
+					},
+				},
+				testEnv(),
+			),
+		AuthExpiredError,
+	);
+	assert.equal(fetchCalls, 2);
+});
+
+test("plain outage on an expired token stays a retryable 503", async () => {
+	let fetchCalls = 0;
+	globalThis.fetch = async () => {
+		fetchCalls += 1;
+		return new Response("down", { status: 502 });
+	};
+
+	await assert.rejects(
+		() =>
+			refreshAdplistPropsOnTokenExchange(
+				{
+					grantType: "refresh_token",
+					clientId: "client",
+					userId: "user-1",
+					scope: [],
+					requestedScope: [],
+					props: {
+						userId: "user-1",
+						email: null,
+						scopes: [],
+						cognitoAccessToken: jwtWithExp(Math.floor(Date.now() / 1000) - 60),
+						adplistRefreshToken: "refresh-1",
+					},
+				},
+				testEnv(),
+			),
+		UpstreamRefreshError,
+	);
+	assert.equal(fetchCalls, 2);
+});
+
+test("ensureFreshAdplistProps continues with the current token when refresh fails transiently", async () => {
+	const { ensureFreshAdplistProps } = await import("../src/adplistTokenRefresh.ts");
+	let fetchCalls = 0;
+	globalThis.fetch = async () => {
+		fetchCalls += 1;
+		return new Response("temporary", { status: 503 });
+	};
+
+	const currentToken = jwtWithExp(Math.floor(Date.now() / 1000) + 2 * 60);
+	const props = {
+		userId: "user-1",
+		email: null,
+		scopes: [],
+		cognitoAccessToken: currentToken,
+		adplistRefreshToken: "refresh-1",
+	};
+
+	const result = await ensureFreshAdplistProps(testEnv(), props);
+
+	assert.equal(result.cognitoAccessToken, currentToken);
+	assert.equal(fetchCalls, 2);
+});
+
+test("ADPLIST_REFRESH_SKEW_SECONDS override forces refresh of an otherwise fresh token", async () => {
+	let fetchCalls = 0;
+	const freshAccessToken = jwtWithExp(9999999999);
+	globalThis.fetch = async () => {
+		fetchCalls += 1;
+		return new Response(JSON.stringify({ accessToken: freshAccessToken }), { status: 200 });
+	};
+
+	const env = { ...testEnv(), ADPLIST_REFRESH_SKEW_SECONDS: String(48 * 60 * 60) };
+	const result = await refreshAdplistPropsOnTokenExchange(
+		{
+			grantType: "refresh_token",
+			clientId: "client",
+			userId: "user-1",
+			scope: [],
+			requestedScope: [],
+			props: {
+				userId: "user-1",
+				email: null,
+				scopes: [],
+				cognitoAccessToken: jwtWithExp(Math.floor(Date.now() / 1000) + 6 * 60 * 60),
+				adplistRefreshToken: "refresh-1",
+			},
+		},
+		env,
+	);
+
+	assert.equal(fetchCalls, 1);
+	assert.equal(result.newProps.cognitoAccessToken, freshAccessToken);
+});
+
+test("clearStoredRefreshToken removes persisted refresh-token overrides", async () => {
+	const { clearStoredRefreshToken } = await import("../src/adplistTokenRefresh.ts");
+	const env = testEnv();
+	env._kv.set("adplist_refresh_token:client:user-1", "old-token");
+	env._kv.set("adplist_refresh_token:unknown:user-1", "older-token");
+
+	await clearStoredRefreshToken(env, "user-1", "client");
+
+	assert.equal(env._kv.has("adplist_refresh_token:client:user-1"), false);
+	assert.equal(env._kv.has("adplist_refresh_token:unknown:user-1"), false);
 });
