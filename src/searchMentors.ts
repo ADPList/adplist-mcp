@@ -87,10 +87,11 @@ const MIN_RESULTS = 3;
 const ROW_SIZE = 3;
 
 // Results render in a 3-column card grid, so counts snap to full rows (3/6/9).
+// Floors rather than rounds so max_results stays an upper bound for callers.
 export function normalizeMaxResults(value: number | undefined): number {
 	if (value === undefined || !Number.isFinite(value)) return DEFAULT_MAX_RESULTS;
 	const clamped = Math.min(MAX_RESULTS, Math.max(MIN_RESULTS, Math.trunc(value)));
-	return Math.min(MAX_RESULTS, Math.max(MIN_RESULTS, Math.round(clamped / ROW_SIZE) * ROW_SIZE));
+	return Math.max(MIN_RESULTS, Math.floor(clamped / ROW_SIZE) * ROW_SIZE);
 }
 
 export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput): string {

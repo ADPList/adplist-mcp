@@ -147,11 +147,12 @@ function jsonResponse(body) {
 test("max_results snaps to full rows of three for the card grid", () => {
 	assert.equal(normalizeMaxResults(undefined), 6);
 	assert.equal(normalizeMaxResults(3), 3);
+	// floors to a full row, never exceeding what the caller asked for
 	assert.equal(normalizeMaxResults(4), 3);
-	assert.equal(normalizeMaxResults(5), 6);
+	assert.equal(normalizeMaxResults(5), 3);
 	assert.equal(normalizeMaxResults(6), 6);
 	assert.equal(normalizeMaxResults(7), 6);
-	assert.equal(normalizeMaxResults(8), 9);
+	assert.equal(normalizeMaxResults(8), 6);
 	assert.equal(normalizeMaxResults(9), 9);
 	assert.equal(normalizeMaxResults(1), 3);
 	assert.equal(normalizeMaxResults(50), 9);
