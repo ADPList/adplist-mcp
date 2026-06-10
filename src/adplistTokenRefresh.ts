@@ -148,16 +148,23 @@ async function getStoredRefreshToken(
 }
 
 // A fresh sign-in must never be shadowed by a refresh token persisted from a
-// previous session, so clear any stored override when authorization completes.
-export async function clearStoredRefreshToken(
+// previous session. Overwrite the shared overrides with the newly verified token
+// (other active grants read the override first, so they pick up the fresh token
+// too); only delete when the sign-in somehow produced no refresh token.
+export async function persistRefreshTokenOnSignIn(
 	env: Env,
 	userId: string,
-	clientId?: string,
+	clientId: string | undefined,
+	refreshToken: string | undefined,
 ): Promise<void> {
-	await Promise.all([
-		env.OAUTH_KV.delete(refreshTokenOverrideKey(userId, clientId)),
-		env.OAUTH_KV.delete(refreshTokenOverrideKey(userId)),
-	]);
+	const keys = [refreshTokenOverrideKey(userId, clientId), refreshTokenOverrideKey(userId)];
+	await Promise.all(
+		keys.map((key) =>
+			refreshToken
+				? env.OAUTH_KV.put(key, refreshToken, { expirationTtl: 30 * 24 * 60 * 60 })
+				: env.OAUTH_KV.delete(key),
+		),
+	);
 }
 
 async function storeRefreshTokenOverride(
@@ -280,16 +287,25 @@ async function refreshAdplistTokenWithPolicy(
 		return undefined;
 	}
 
+	// Definitive 4xx rejection: retrying is pointless, but only fail the session
+	// when the current access token is actually unusable — otherwise keep serving
+	// it and let a later refresh (or reconnect at hard expiry) settle it.
+	const handleAuthExpired = (error: AuthExpiredError, retried: boolean): undefined => {
+		if (hardExpired) {
+			logRefresh("error", "refresh_auth_expired", path, props, { retried });
+			throw error;
+		}
+		logRefresh("warn", "refresh_rejected_continuing", path, props, { retried });
+		return undefined;
+	};
+
 	logRefresh("log", "refresh_attempt", path, props);
 	try {
 		const refreshed = await refreshAdplistToken(env, refreshToken);
 		logRefresh("log", "refresh_success", path, props);
 		return refreshed;
 	} catch (error) {
-		if (error instanceof AuthExpiredError) {
-			logRefresh("error", "refresh_auth_expired", path, props);
-			throw error;
-		}
+		if (error instanceof AuthExpiredError) return handleAuthExpired(error, false);
 		logRefresh("warn", "refresh_attempt_failed_retrying", path, props, {
 			reason: error instanceof Error ? error.message : String(error),
 		});
@@ -301,10 +317,7 @@ async function refreshAdplistTokenWithPolicy(
 		logRefresh("log", "refresh_success_after_retry", path, props);
 		return refreshed;
 	} catch (error) {
-		if (error instanceof AuthExpiredError) {
-			logRefresh("error", "refresh_auth_expired", path, props, { retried: true });
-			throw error;
-		}
+		if (error instanceof AuthExpiredError) return handleAuthExpired(error, true);
 		const reason = error instanceof Error ? error.message : String(error);
 		if (!hardExpired) {
 			logRefresh("warn", "refresh_transient_failure_continuing", path, props, {

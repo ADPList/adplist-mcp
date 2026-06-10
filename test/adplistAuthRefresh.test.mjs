@@ -521,14 +521,86 @@ test("ADPLIST_REFRESH_SKEW_SECONDS override forces refresh of an otherwise fresh
 	assert.equal(result.newProps.cognitoAccessToken, freshAccessToken);
 });
 
-test("clearStoredRefreshToken removes persisted refresh-token overrides", async () => {
-	const { clearStoredRefreshToken } = await import("../src/adplistTokenRefresh.ts");
+test("persistRefreshTokenOnSignIn overwrites stale overrides with the fresh token", async () => {
+	const { persistRefreshTokenOnSignIn } = await import("../src/adplistTokenRefresh.ts");
 	const env = testEnv();
 	env._kv.set("adplist_refresh_token:client:user-1", "old-token");
 	env._kv.set("adplist_refresh_token:unknown:user-1", "older-token");
 
-	await clearStoredRefreshToken(env, "user-1", "client");
+	await persistRefreshTokenOnSignIn(env, "user-1", "client", "fresh-token");
+
+	assert.equal(env._kv.get("adplist_refresh_token:client:user-1"), "fresh-token");
+	assert.equal(env._kv.get("adplist_refresh_token:unknown:user-1"), "fresh-token");
+});
+
+test("persistRefreshTokenOnSignIn clears overrides when sign-in has no refresh token", async () => {
+	const { persistRefreshTokenOnSignIn } = await import("../src/adplistTokenRefresh.ts");
+	const env = testEnv();
+	env._kv.set("adplist_refresh_token:client:user-1", "old-token");
+	env._kv.set("adplist_refresh_token:unknown:user-1", "older-token");
+
+	await persistRefreshTokenOnSignIn(env, "user-1", "client", undefined);
 
 	assert.equal(env._kv.has("adplist_refresh_token:client:user-1"), false);
 	assert.equal(env._kv.has("adplist_refresh_token:unknown:user-1"), false);
+});
+
+test("definitive 4xx rejection with a still-valid token degrades instead of forcing reconnect", async () => {
+	let fetchCalls = 0;
+	globalThis.fetch = async () => {
+		fetchCalls += 1;
+		return new Response("nope", { status: 401 });
+	};
+
+	const result = await refreshAdplistPropsOnTokenExchange(
+		{
+			grantType: "refresh_token",
+			clientId: "client",
+			userId: "user-1",
+			scope: [],
+			requestedScope: [],
+			props: {
+				userId: "user-1",
+				email: null,
+				scopes: [],
+				cognitoAccessToken: jwtWithExp(Math.floor(Date.now() / 1000) + 2 * 60),
+				adplistRefreshToken: "rejected-refresh",
+			},
+		},
+		testEnv(),
+	);
+
+	assert.equal(result, undefined);
+	assert.equal(fetchCalls, 1);
+});
+
+test("definitive 4xx rejection with a hard-expired token raises AUTH_EXPIRED without retry", async () => {
+	let fetchCalls = 0;
+	globalThis.fetch = async () => {
+		fetchCalls += 1;
+		return new Response("nope", { status: 401 });
+	};
+
+	await assert.rejects(
+		() =>
+			refreshAdplistPropsOnTokenExchange(
+				{
+					grantType: "refresh_token",
+					clientId: "client",
+					userId: "user-1",
+					scope: [],
+					requestedScope: [],
+					props: {
+						userId: "user-1",
+						email: null,
+						scopes: [],
+						cognitoAccessToken: jwtWithExp(Math.floor(Date.now() / 1000) - 60),
+						adplistRefreshToken: "rejected-refresh",
+					},
+				},
+				testEnv(),
+			),
+		AuthExpiredError,
+	);
+	assert.equal(fetchCalls, 1);
 });

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { html, raw } from "hono/html";
 import { MCP_SCOPES } from "./config";
 import { sendOtp, verifyOtp } from "./adplistAuth";
-import { accessTokenExpiresAt, clearStoredRefreshToken } from "./adplistTokenRefresh";
+import { accessTokenExpiresAt, persistRefreshTokenOnSignIn } from "./adplistTokenRefresh";
 import type { Bindings, McpUserProps, StoredLogin, StoredRevoke } from "./types";
 
 const LOGIN_TTL_SECONDS = 60 * 60;
@@ -225,7 +225,12 @@ app.post("/oauth/verify", async (c) => {
 		adplistRefreshToken: verified.refreshToken,
 	};
 
-	await clearStoredRefreshToken(c.env, verified.userId, stored.oauthReqInfo.clientId);
+	await persistRefreshTokenOnSignIn(
+		c.env,
+		verified.userId,
+		stored.oauthReqInfo.clientId,
+		verified.refreshToken,
+	);
 
 	const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
 		request: stored.oauthReqInfo,
