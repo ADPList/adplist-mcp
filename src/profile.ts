@@ -98,7 +98,12 @@ export async function getProfileTextForSearch(
 	// successfully-fetched ADPList profile (and vice versa).
 	const [adplistProfile, storedContext] = await Promise.all([
 		fetchAdplistProfileText(env, props),
-		getStoredContextText(env, props).catch(() => ""),
+		getStoredContextText(env, props).catch((error) => {
+			console.warn(
+				JSON.stringify({ event: "stored_context_read_error", error: String(error) }),
+			);
+			return "";
+		}),
 	]);
 	if (adplistProfile.length > 0 || storedContext.length > 0) {
 		console.log(
@@ -191,8 +196,9 @@ function textOf(value: unknown): string {
 
 // Identity-service lists arrive as strings or objects whose label key varies
 // by entity (Expertise.expertise, Discipline.discipline, Motivation.motivation,
-// Interest.interest, ExperienceLevel.seniority, ...); pick the first string we find.
-function labelsOf(value: unknown): string {
+// Interest.interest, ExperienceLevel.seniority, Language.language, ...); pick
+// the first string we find. Shared with mentorProfile.ts.
+export function labelsOf(value: unknown): string {
 	const items = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
 	const labels = items
 		.map((item) => {
@@ -204,6 +210,7 @@ function labelsOf(value: unknown): string {
 				"discipline",
 				"motivation",
 				"interest",
+				"language",
 				"seniority",
 				"skill",
 				"title",

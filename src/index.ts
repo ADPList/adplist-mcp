@@ -20,6 +20,7 @@ import {
 } from "./adplistTokenRefresh";
 import { bookSession, listAvailability } from "./booking";
 import { listJournals, readJournal } from "./journals";
+import { getMentorProfile } from "./mentorProfile";
 import { manageMyContext } from "./profile";
 import { searchMentors, type SearchMentorsOutput } from "./searchMentors";
 import { cancelSession, listMySessions } from "./sessions";
@@ -127,7 +128,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"search_mentors",
 			{
 				description:
-					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. In intent, describe who the user is from the conversation — current role, seniority, company or industry, and what they want to achieve and why — not just topic keywords (e.g. 'senior PM at a fintech startup transitioning into UX research, wants help running first discovery interviews' rather than 'user research for startups'). Returns compact ranked mentor cards plus Algolia queryID for later booking attribution. MCP Apps hosts should render the attached clean visual mentor cards; text/JSON fallback remains complete for unsupported hosts. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
+					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. In intent, describe who the user is from the conversation — current role, seniority, company or industry, and what they want to achieve and why — not just topic keywords (e.g. 'senior PM at a fintech startup transitioning into UX research, wants help running first discovery interviews' rather than 'user research for startups'). Returns compact ranked mentor cards plus Algolia queryID for later booking attribution. After the cards render, consider deep-diving the top 2-3 candidates with get_mentor_profile and giving the user a short personal recommendation in chat that references their situation — do not just restate the cards. MCP Apps hosts should render the attached clean visual mentor cards; text/JSON fallback remains complete for unsupported hosts. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
 				_meta: appToolMeta(UI_RESOURCES.mentorCards),
 				annotations: {
 					title: "Search ADPList mentors",
@@ -177,6 +178,29 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 					description: "Interactive ADPList mentor results with profile photos.",
 					shouldRender: (result: SearchMentorsOutput) => result.mentors.length > 0,
 				}),
+		);
+
+		this.server.registerTool(
+			"get_mentor_profile",
+			{
+				description:
+					"Fetch a mentor's full public ADPList profile by slug: bio, complete expertise and disciplines, languages, experience level, review stats, and recent review snippets — the same information shown on their public profile page. Use it after search_mentors to deep-dive the top candidates, compare them against the user's actual situation, and explain in your own words why a specific mentor fits. Read-only and fast; calling it for 2-3 candidates in parallel is fine.",
+				annotations: {
+					title: "Get mentor public profile",
+					readOnlyHint: true,
+					destructiveHint: false,
+					idempotentHint: true,
+					openWorldHint: true,
+				},
+				inputSchema: {
+					mentor_slug: z
+						.string()
+						.trim()
+						.min(1)
+						.describe("Mentor slug from search_mentors results (e.g. felix-lee)."),
+				},
+			},
+			async (input) => this.toolResponse(() => getMentorProfile(this.env, input)),
 		);
 
 		this.server.registerTool(
