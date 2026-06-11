@@ -7,6 +7,7 @@ export type ListMySessionsInput = {
 
 export type CancelSessionInput = {
 	session_id: string;
+	user_confirmed: true;
 	reason?: string;
 };
 

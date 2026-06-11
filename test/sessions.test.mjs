@@ -23,6 +23,14 @@ test("M4 registers list_my_sessions and cancel_session MCP tools with cancellati
 	assert.match(indexSource, /there is no native reschedule_session tool in v1/i);
 });
 
+test("cancel_session requires schema-level user_confirmed literal true", () => {
+	assert.match(indexSource, /user_confirmed:\s*z\s*\.literal\(true\)/);
+	assert.match(
+		indexSource,
+		/Set to true only after explicitly confirming the exact session, mentor, and scheduled time/i,
+	);
+});
+
 test("session scope defaults to upcoming and limit defaults to 20", () => {
 	assert.equal(normalizeSessionScope(undefined), "upcoming");
 	assert.equal(normalizeSessionScope("past"), "past");
@@ -189,7 +197,7 @@ test("cancelSession posts optional reason and returns cancellation time", async 
 		const result = await cancelSession(
 			{ MEETINGS_SERVICE_URL: "https://meetings.example" },
 			{ userId: "u1", email: null, scopes: [], cognitoAccessToken: "token" },
-			{ session_id: "meeting-1", reason: "rescheduling" },
+			{ session_id: "meeting-1", user_confirmed: true, reason: "rescheduling" },
 		);
 		assert.equal(calls[0].url, "https://meetings.example/meetings/cancel/meeting-1");
 		assert.equal(calls[0].init.method, "POST");
@@ -212,7 +220,7 @@ test("cancelSession returns clear rejection reason for meetings-service rule fai
 		const result = await cancelSession(
 			{ MEETINGS_SERVICE_URL: "https://meetings.example" },
 			{ userId: "u1", email: null, scopes: [], cognitoAccessToken: "token" },
-			{ session_id: "meeting-1" },
+			{ session_id: "meeting-1", user_confirmed: true },
 		);
 		assert.deepEqual(result, {
 			cancelled: false,
