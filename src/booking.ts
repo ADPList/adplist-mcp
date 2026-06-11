@@ -91,7 +91,18 @@ export function mapAvailabilityResponse(
 		.filter(({ session, slot }) => session.sessionId && isFiniteEpoch(slot.startEpoch))
 		.sort((a, b) => Number(a.slot.startEpoch) - Number(b.slot.startEpoch));
 
-	const slots = allSlots.slice(0, MAX_SLOTS).map(({ session, slot }) => {
+	// Every session type repeats the same start times, so without dedupe the
+	// widget shows identical unlabeled slot buttons. Dedupe before the
+	// MAX_SLOTS slice so the cap applies to distinct times.
+	const seenEpochs = new Set<number>();
+	const dedupedSlots = allSlots.filter(({ slot }) => {
+		const epoch = Number(slot.startEpoch);
+		if (seenEpochs.has(epoch)) return false;
+		seenEpochs.add(epoch);
+		return true;
+	});
+
+	const slots = dedupedSlots.slice(0, MAX_SLOTS).map(({ session, slot }) => {
 		const startEpoch = Number(slot.startEpoch);
 		const endEpoch = isFiniteEpoch(slot.endEpoch)
 			? Number(slot.endEpoch)
@@ -108,7 +119,7 @@ export function mapAvailabilityResponse(
 		};
 	});
 
-	return { slots, truncated: allSlots.length > MAX_SLOTS, timezone };
+	return { slots, truncated: dedupedSlots.length > MAX_SLOTS, timezone };
 }
 
 export async function listAvailability(

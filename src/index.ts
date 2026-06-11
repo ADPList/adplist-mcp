@@ -487,6 +487,11 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.trim()
 						.min(1)
 						.describe("Session ID returned by list_my_sessions or book_session."),
+					user_confirmed: z
+						.literal(true)
+						.describe(
+							"Set to true only after explicitly confirming the exact session, mentor, and scheduled time with the user in chat, and asking for an optional cancellation reason.",
+						),
 					reason: z
 						.string()
 						.trim()

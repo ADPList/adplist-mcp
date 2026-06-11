@@ -64,6 +64,27 @@ test("mapAvailabilityResponse flattens, sorts, formats, and truncates slots", ()
 	assert.match(result.slots[0].slot_local_display, /PST|PDT|GMT-8|GMT-08/);
 });
 
+test("mapAvailabilityResponse dedupes identical start times across session types before truncating", () => {
+	const startTimes = Array.from({ length: 15 }, (_, index) => 1_700_000_000 + index * 1_800);
+	const response = {
+		timezone: "UTC",
+		sessions: ["session-a", "session-b", "session-c"].map((sessionId) => ({
+			sessionId,
+			slots: startTimes.map((startEpoch) => ({ startEpoch, endEpoch: startEpoch + 1_800 })),
+		})),
+	};
+
+	const result = mapAvailabilityResponse("mentor-slug", response);
+	// 45 raw (session, slot) pairs collapse to 15 unique times — under MAX_SLOTS,
+	// so nothing is truncated and each time appears exactly once.
+	assert.equal(result.slots.length, 15);
+	assert.equal(result.truncated, false);
+	const uniqueIsoTimes = new Set(result.slots.map((slot) => slot.slot_iso));
+	assert.equal(uniqueIsoTimes.size, 15);
+	// First occurrence wins: every kept slot belongs to the first session type.
+	assert.ok(result.slots.every((slot) => slot.session_id === "session-a"));
+});
+
 test("listAvailability passes Cognito bearer and returns compact slots", async () => {
 	const calls = [];
 	const originalFetch = globalThis.fetch;
