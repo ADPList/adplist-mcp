@@ -184,13 +184,13 @@ export function adplistProfileToSearchText(response: unknown): string {
 	return `${fullText.slice(0, ADPLIST_PROFILE_TEXT_LIMIT - 1).trimEnd()}…`;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
+export function asRecord(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: {};
 }
 
-function textOf(value: unknown): string {
+export function textOf(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
 }
 

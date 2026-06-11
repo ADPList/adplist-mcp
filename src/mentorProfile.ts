@@ -1,4 +1,4 @@
-import { labelsOf } from "./profile.ts";
+import { asRecord, labelsOf, textOf } from "./profile.ts";
 
 export type GetMentorProfileInput = {
 	mentor_slug: string;
@@ -195,14 +195,4 @@ function truncate(value: string, max: number): string {
 
 function splitLabels(labels: string): string[] {
 	return labels ? labels.split(", ").filter(Boolean) : [];
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-	return value && typeof value === "object" && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: {};
-}
-
-function textOf(value: unknown): string {
-	return typeof value === "string" ? value.trim() : "";
 }
