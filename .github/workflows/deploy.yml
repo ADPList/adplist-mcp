@@ -22,6 +22,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -37,5 +38,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: "9774390785438bc2e74ffed2aa4f2985"
       - name: Verify health
         run: |
-          sleep 5
-          curl -sf https://mcp.adplist.org/health | grep -q '"ok":true'
+          for i in $(seq 1 10); do
+            curl -sf https://mcp.adplist.org/health | grep -q '"ok":true' && exit 0
+            sleep 5
+          done
+          echo "Health check failed after retries" && exit 1
