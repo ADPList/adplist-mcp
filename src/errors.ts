@@ -66,13 +66,15 @@ export function formatToolError(error: unknown): StructuredMcpError {
 		);
 	}
 
-	if (status === 404) {
+	if (status === 404 || lower.includes("no adplist mentor found for slug")) {
 		return structuredError(
 			"NOT_FOUND",
-			"ADPList could not find that item.",
+			lower.includes("no adplist mentor found for slug")
+				? message
+				: "ADPList could not find that item.",
 			false,
 			"Refresh the relevant list, then ask the user to choose from the current results.",
-			{ http_status: status },
+			status ? { http_status: status } : undefined,
 		);
 	}
 
