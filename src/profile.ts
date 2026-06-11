@@ -94,17 +94,21 @@ export async function getProfileTextForSearch(
 	env: Env,
 	props: McpUserProps | undefined,
 ): Promise<string> {
+	// Each source fails open independently so a D1 hiccup can't discard a
+	// successfully-fetched ADPList profile (and vice versa).
 	const [adplistProfile, storedContext] = await Promise.all([
 		fetchAdplistProfileText(env, props),
-		getStoredContextText(env, props),
+		getStoredContextText(env, props).catch(() => ""),
 	]);
-	console.log(
-		JSON.stringify({
-			event: "search_profile_merge",
-			profile_chars: adplistProfile.length,
-			stored_chars: storedContext.length,
-		}),
-	);
+	if (adplistProfile.length > 0 || storedContext.length > 0) {
+		console.log(
+			JSON.stringify({
+				event: "search_profile_merge",
+				profile_chars: adplistProfile.length,
+				stored_chars: storedContext.length,
+			}),
+		);
+	}
 	return [adplistProfile, storedContext].filter(Boolean).join(". ");
 }
 
