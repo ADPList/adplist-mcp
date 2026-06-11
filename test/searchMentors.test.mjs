@@ -144,6 +144,113 @@ function jsonResponse(body) {
 	});
 }
 
+const AUTHED_PROPS = {
+	userId: "u1",
+	email: null,
+	scopes: [],
+	cognitoAccessToken: "cognito-token",
+};
+
+const PROFILE_ME_RESPONSE = {
+	data: {
+		profile: { title: "Senior Product Manager", organization: "Finch Fintech" },
+		experiences: {
+			disciplines: [{ name: "product management" }],
+			expertise: [{ expertise: "roadmapping" }],
+		},
+		preferences: { motivations: ["transition into UX research"] },
+		country: { countryName: "Singapore" },
+	},
+};
+
+// PROFILE_DB stub: user has no stored D1 context.
+const EMPTY_PROFILE_DB = {
+	prepare: () => ({ bind: () => ({ first: async () => null }) }),
+};
+
+test("search_mentors merges the user's own ADPList profile into the search query", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url, init) => {
+		calls.push({ url: String(url), init });
+		if (String(url).includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
+		return jsonResponse({ results: [], queryID: "q", indexUsed: "explore" });
+	};
+
+	try {
+		await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+				PROFILE_DB: EMPTY_PROFILE_DB,
+			},
+			AUTHED_PROPS,
+			{ intent: "help running first discovery interviews" },
+		);
+
+		const profileCall = calls.find((c) => c.url.includes("/users/profile/me"));
+		assert.ok(profileCall, "expected a /users/profile/me fetch");
+		assert.equal(profileCall.init.headers.Authorization, "Bearer cognito-token");
+
+		const searchCall = calls.find((c) => c.url.includes("/search?"));
+		const q = new URL(searchCall.url).searchParams.get("q");
+		assert.match(q, /Senior Product Manager at Finch Fintech/);
+		assert.match(q, /product management/);
+		assert.match(q, /transition into UX research/);
+		assert.match(q, /Current request: help running first discovery interviews/);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors fails open to the bare intent when the profile fetch errors", async () => {
+	const originalFetch = globalThis.fetch;
+	const searchCalls = [];
+	globalThis.fetch = async (url) => {
+		if (String(url).includes("/users/profile/me")) {
+			return new Response("upstream broke", { status: 500 });
+		}
+		searchCalls.push(String(url));
+		return jsonResponse({ results: [], queryID: "q", indexUsed: "explore" });
+	};
+
+	try {
+		await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+				PROFILE_DB: EMPTY_PROFILE_DB,
+			},
+			AUTHED_PROPS,
+			{ intent: "bare intent survives" },
+		);
+		assert.equal(searchCalls.length, 1);
+		assert.equal(new URL(searchCalls[0]).searchParams.get("q"), "bare intent survives");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors never fetches the ADPList profile for unauthenticated callers", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		return jsonResponse({ results: [], queryID: "q", indexUsed: "explore" });
+	};
+
+	try {
+		await searchMentors({ SEARCH_SERVICE_URL: "https://search.example" }, undefined, {
+			intent: "anonymous search",
+		});
+		assert.equal(calls.some((url) => url.includes("/users/profile/me")), false);
+		const q = new URL(calls[0]).searchParams.get("q");
+		assert.equal(q, "anonymous search");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("max_results snaps to full rows of three for the card grid", () => {
 	assert.equal(normalizeMaxResults(undefined), 6);
 	assert.equal(normalizeMaxResults(3), 3);

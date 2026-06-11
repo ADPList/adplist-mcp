@@ -24,6 +24,8 @@ type ProfileRow = {
 };
 
 const PROFILE_TEXT_SOFT_LIMIT = 1000;
+const ADPLIST_PROFILE_TEXT_LIMIT = 600;
+const ADPLIST_PROFILE_FETCH_TIMEOUT_MS = 2000;
 
 export async function manageMyContext(
 	env: Env,
@@ -92,11 +94,125 @@ export async function getProfileTextForSearch(
 	env: Env,
 	props: McpUserProps | undefined,
 ): Promise<string> {
+	const [adplistProfile, storedContext] = await Promise.all([
+		fetchAdplistProfileText(env, props),
+		getStoredContextText(env, props),
+	]);
+	console.log(
+		JSON.stringify({
+			event: "search_profile_merge",
+			profile_chars: adplistProfile.length,
+			stored_chars: storedContext.length,
+		}),
+	);
+	return [adplistProfile, storedContext].filter(Boolean).join(". ");
+}
+
+async function getStoredContextText(env: Env, props: McpUserProps | undefined): Promise<string> {
 	const userId = props?.userId;
 	if (!userId) return "";
 	const existing = await readUserProfile(env, userId);
 	if (!existing) return "";
 	return synthesizeProfileText(existing.profile).text;
+}
+
+// The user's own ADPList profile (identity-service /users/profile/me). v1 D1
+// memory is explicit-only and empty for nearly everyone, so this is what makes
+// search queries personal for most users. Always fails open to "".
+export async function fetchAdplistProfileText(
+	env: Env,
+	props: McpUserProps | undefined,
+): Promise<string> {
+	if (!props?.cognitoAccessToken || !env.AUTH_SERVICE_URL) return "";
+	try {
+		const response = await fetch(new URL("/users/profile/me", env.AUTH_SERVICE_URL).toString(), {
+			headers: {
+				Accept: "application/json",
+				Authorization: `Bearer ${props.cognitoAccessToken}`,
+			},
+			signal: AbortSignal.timeout(ADPLIST_PROFILE_FETCH_TIMEOUT_MS),
+		});
+		if (!response.ok) return "";
+		return adplistProfileToSearchText(await response.json());
+	} catch {
+		return "";
+	}
+}
+
+export function adplistProfileToSearchText(response: unknown): string {
+	const data = (response as { data?: Record<string, unknown> } | undefined)?.data;
+	if (!data || typeof data !== "object") return "";
+
+	const profile = asRecord(data.profile);
+	const experiences = asRecord(data.experiences);
+	const preferences = asRecord(data.preferences);
+	const country = asRecord(data.country);
+
+	const parts: string[] = [];
+	const title = textOf(profile.title);
+	const organization = textOf(profile.organization);
+	if (title && organization) parts.push(`Role: ${title} at ${organization}`);
+	else if (title) parts.push(`Role: ${title}`);
+	else if (organization) parts.push(`Works at ${organization}`);
+
+	const sections: Array<[string, unknown]> = [
+		["Experience level", experiences.experienceLevel],
+		["Disciplines", experiences.disciplines],
+		["Expertise", experiences.expertise],
+		["Goals", preferences.motivations],
+		["Interests", preferences.interests],
+	];
+	for (const [label, value] of sections) {
+		const text = labelsOf(value);
+		if (text) parts.push(`${label}: ${text}`);
+	}
+
+	const countryName = textOf(country.countryName);
+	if (countryName) parts.push(`Based in ${countryName}`);
+
+	const fullText = parts.join(". ");
+	if (fullText.length <= ADPLIST_PROFILE_TEXT_LIMIT) return fullText;
+	return `${fullText.slice(0, ADPLIST_PROFILE_TEXT_LIMIT - 1).trimEnd()}…`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
+function textOf(value: unknown): string {
+	return typeof value === "string" ? value.trim() : "";
+}
+
+// Identity-service lists arrive as strings or objects whose label key varies
+// by entity (Expertise.expertise, Discipline.discipline, Motivation.motivation,
+// Interest.interest, ExperienceLevel.seniority, ...); pick the first string we find.
+function labelsOf(value: unknown): string {
+	const items = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+	const labels = items
+		.map((item) => {
+			if (typeof item === "string") return item.trim();
+			const record = asRecord(item);
+			for (const key of [
+				"name",
+				"expertise",
+				"discipline",
+				"motivation",
+				"interest",
+				"seniority",
+				"skill",
+				"title",
+				"label",
+				"value",
+			]) {
+				const text = textOf(record[key]);
+				if (text) return text;
+			}
+			return "";
+		})
+		.filter(Boolean);
+	return labels.join(", ");
 }
 
 export function combineIntentWithProfile(intent: string, profileText: string): string {

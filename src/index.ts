@@ -127,7 +127,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"search_mentors",
 			{
 				description:
-					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. Returns compact ranked mentor cards plus Algolia queryID for later booking attribution. MCP Apps hosts should render the attached clean visual mentor cards; text/JSON fallback remains complete for unsupported hosts. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
+					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. In intent, describe who the user is from the conversation — current role, seniority, company or industry, and what they want to achieve and why — not just topic keywords (e.g. 'senior PM at a fintech startup transitioning into UX research, wants help running first discovery interviews' rather than 'user research for startups'). Returns compact ranked mentor cards plus Algolia queryID for later booking attribution. MCP Apps hosts should render the attached clean visual mentor cards; text/JSON fallback remains complete for unsupported hosts. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
 				_meta: appToolMeta(UI_RESOURCES.mentorCards),
 				annotations: {
 					title: "Search ADPList mentors",
@@ -142,7 +142,9 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.trim()
 						.min(1)
 						.max(3000)
-						.describe("The user's mentorship/career intent in natural language."),
+						.describe(
+							"The user's mentorship/career intent in natural language. Include who the user is (role, seniority, situation) and their goal, not just topic keywords.",
+						),
 					filters: z
 						.object({
 							discipline: z.string().trim().min(1).optional(),
