@@ -301,6 +301,24 @@ test("session card relabels the link button to View request while awaiting confi
 	}
 });
 
+test("session card uses View session for terminal statuses instead of Open session", () => {
+	for (const status of ["completed", "cancelled", "declined"]) {
+		const { root } = renderAppWithToolResult("session-cards", {
+			sessions: [
+				{
+					session_id: "meeting-5",
+					status,
+					session_url: "https://adplist.org/meetings/meeting-5",
+					mentor: { name: "Ada Lovelace" },
+					mentee: { name: "Grace Hopper" },
+				},
+			],
+		});
+		assert.match(root.innerHTML, /View session/);
+		assert.doesNotMatch(root.innerHTML, /Open session/);
+	}
+});
+
 test("session card hides the people row when both party names are blank", () => {
 	const { root } = renderAppWithToolResult("session-cards", {
 		sessions: [{ session_id: "meeting-3", status: "requested", mentor: {}, mentee: {} }],

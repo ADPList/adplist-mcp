@@ -300,7 +300,7 @@ function renderSessions(data) {
     const isPending = status === 'requested' || status === 'pending';
     const durationHtml = s.duration_minutes ? '<div class="meta">' + h(s.duration_minutes + ' minutes') + '</div>' : '';
     const peopleHtml = (s.mentor?.name || s.mentee?.name) ? '<div class="people"><div class="person"><div class="name">' + h(s.mentor?.name || 'Mentor') + '</div><div class="meta">' + h([s.mentor?.title, s.mentor?.organization].filter(Boolean).join(' · ')) + '</div></div><div class="arrow">→</div><div class="person"><div class="name">' + h(s.mentee?.name || 'Mentee') + '</div><div class="meta">' + h([s.mentee?.title, s.mentee?.organization].filter(Boolean).join(' · ')) + '</div></div></div>' : '';
-    const buttonHtml = s.session_url ? '<button class="cta secondary" data-url="' + h(s.session_url) + '">' + (isPending ? 'View request' : 'Open session') + '</button>' : '';
+    const buttonHtml = s.session_url ? '<button class="cta secondary" data-url="' + h(s.session_url) + '">' + (isPending ? 'View request' : status === 'confirmed' ? 'Open session' : 'View session') + '</button>' : '';
     return '<article class="card session"><span class="badge">' + h(status) + '</span><div><div class="name">' + h(s.scheduled_at_local_display || s.expected_confirmation_time || 'Session requested') + '</div>' + durationHtml + '</div>' + peopleHtml + buttonHtml + '</article>';
   }).join('') + '</div>' : '<div class="empty">No sessions to show.</div>';
   document.querySelectorAll('[data-url]').forEach((button) => button.addEventListener('click', () => send('ui/open-link', { url: button.dataset.url })));
