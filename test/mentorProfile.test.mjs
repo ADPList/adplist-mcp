@@ -19,12 +19,6 @@ test("registers get_mentor_profile as a read-only tool with deep-dive guidance (
 	assert.match(indexSource, /do not just restate the cards/);
 });
 
-test("search_mentors instructs at most one search per user request (widget-stacking fix)", () => {
-	assert.match(indexSource, /at most ONCE per user request/);
-	assert.match(indexSource, /every call renders another full card grid/);
-	assert.match(indexSource, /do not run multiple filter variations yourself/);
-});
-
 test("URL builders target the public api.adplist.org endpoints", () => {
 	assert.equal(
 		buildMentorProfileUrl("https://auth.example", "felix lee"),

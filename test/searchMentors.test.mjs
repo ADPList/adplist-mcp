@@ -17,6 +17,13 @@ test("M2 registers the search_mentors MCP tool", () => {
 	assert.match(indexSource, /max\(9\)/);
 });
 
+test("search_mentors instructs at most one search per user request (widget-stacking fix)", () => {
+	// Loose patterns on purpose: pin the constraint, not the exact wording.
+	assert.match(indexSource, /at most\s+once\s+per user request/i);
+	assert.match(indexSource, /every call renders another.{0,20}card grid/i);
+	assert.match(indexSource, /do not run multiple filter variations/i);
+});
+
 test("search_mentors calls search-service Explore with compact filters", () => {
 	assert.match(source, /new URL\("\/search", baseUrl\)/);
 	assert.match(source, /provider", "explore"/);
