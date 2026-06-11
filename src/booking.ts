@@ -163,7 +163,9 @@ export async function bookSession(
 		session_id: created.meetingId,
 		session_url: `https://adplist.org/meetings/${created.meetingId}`,
 		expected_confirmation_time:
-			status === "confirmed" ? "confirmed immediately" : "typically within 24 hours",
+			status === "confirmed"
+				? "confirmed immediately"
+				: "You'll be notified when the mentor confirms.",
 	};
 }
 
