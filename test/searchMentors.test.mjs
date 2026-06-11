@@ -231,6 +231,42 @@ test("search_mentors fails open to the bare intent when the profile fetch errors
 	}
 });
 
+test("search_mentors keeps the ADPList profile when the D1 stored-context read throws", async () => {
+	const originalFetch = globalThis.fetch;
+	const searchCalls = [];
+	globalThis.fetch = async (url) => {
+		if (String(url).includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
+		searchCalls.push(String(url));
+		return jsonResponse({ results: [], queryID: "q", indexUsed: "explore" });
+	};
+	const throwingDb = {
+		prepare: () => ({
+			bind: () => ({
+				first: async () => {
+					throw new Error("D1 hiccup");
+				},
+			}),
+		}),
+	};
+
+	try {
+		await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+				PROFILE_DB: throwingDb,
+			},
+			AUTHED_PROPS,
+			{ intent: "discovery interview help" },
+		);
+		const q = new URL(searchCalls[0]).searchParams.get("q");
+		assert.match(q, /Senior Product Manager at Finch Fintech/);
+		assert.match(q, /Current request: discovery interview help/);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("search_mentors never fetches the ADPList profile for unauthenticated callers", async () => {
 	const originalFetch = globalThis.fetch;
 	const calls = [];
