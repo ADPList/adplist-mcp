@@ -175,11 +175,11 @@ test("slot picker enforces a single selection and only messages chat on explicit
 
 test("MCP App output includes visible version diagnostics for Claude verification", () => {
 	const html = buildAppHtml("mentor-cards");
-	assert.equal(UI_RESOURCE_VERSION, "v4");
-	assert.equal(APP_BUILD_LABEL, "ADPList MCP App v4");
-	assert.match(html, /ADPList MCP App v4/);
+	assert.equal(UI_RESOURCE_VERSION, "v5");
+	assert.equal(APP_BUILD_LABEL, "ADPList MCP App v5");
+	assert.match(html, /ADPList MCP App v5/);
 	assert.match(html, /aria-label="ADPList MCP App version"/);
-	assert.match(html, /appInfo: \{ name: titleForView\(\), version: "4\.0\.0" \}/);
+	assert.match(html, /appInfo: \{ name: titleForView\(\), version: "5\.0\.0" \}/);
 });
 
 test("mentor photo fallback runs for already-broken Claude-hosted images", () => {
@@ -245,9 +245,74 @@ test("slot picker groups days by the user's local date instead of UTC date", () 
 });
 
 test("UI resource constants use versioned ui:// URIs so Claude refreshes cached app resources", () => {
-	assert.equal(UI_RESOURCES.mentorCards, "ui://adplist/v4/mentor-cards.html");
-	assert.equal(UI_RESOURCES.slotPicker, "ui://adplist/v4/slot-picker.html");
-	assert.equal(UI_RESOURCES.sessionCards, "ui://adplist/v4/session-cards.html");
+	assert.equal(UI_RESOURCES.mentorCards, "ui://adplist/v5/mentor-cards.html");
+	assert.equal(UI_RESOURCES.slotPicker, "ui://adplist/v5/slot-picker.html");
+	assert.equal(UI_RESOURCES.sessionCards, "ui://adplist/v5/session-cards.html");
+});
+
+test("each widget shows friendly per-view loading copy instead of MCP jargon", () => {
+	assert.match(buildAppHtml("mentor-cards"), /Finding your mentors…/);
+	assert.match(buildAppHtml("slot-picker"), /Loading available times…/);
+	assert.match(buildAppHtml("session-cards"), /Loading your sessions…/);
+	assert.doesNotMatch(buildAppHtml("mentor-cards"), /Waiting for the MCP tool result/);
+});
+
+test("mentor card CTA sends the display name to chat, not the slug", () => {
+	const mentorHtml = buildAppHtml("mentor-cards");
+	assert.match(mentorHtml, /data-name=/);
+	assert.match(
+		mentorHtml,
+		/sendUserMessage\('Show available times for ' \+ \(button\.dataset\.name \|\| \('mentor ' \+ button\.dataset\.slug\)\)\)/,
+	);
+});
+
+test("session card never prints the raw session URL as text", () => {
+	const { root } = renderAppWithToolResult("session-cards", {
+		sessions: [
+			{
+				session_id: "meeting-1",
+				status: "confirmed",
+				session_url: "https://adplist.org/meetings/meeting-1",
+				mentor: { name: "Ada Lovelace" },
+				mentee: { name: "Grace Hopper" },
+			},
+		],
+	});
+	assert.match(root.innerHTML, /data-url="https:\/\/adplist\.org\/meetings\/meeting-1"/);
+	assert.doesNotMatch(root.innerHTML, />https:\/\/adplist\.org/);
+	assert.match(root.innerHTML, /Open session/);
+});
+
+test("session card relabels the link button to View request while awaiting confirmation", () => {
+	for (const status of ["requested", "pending", undefined]) {
+		const { root } = renderAppWithToolResult("session-cards", {
+			sessions: [
+				{
+					session_id: "meeting-2",
+					status,
+					session_url: "https://adplist.org/meetings/meeting-2",
+					mentor: { name: "Ada Lovelace" },
+					mentee: { name: "Grace Hopper" },
+				},
+			],
+		});
+		assert.match(root.innerHTML, /View request/);
+		assert.doesNotMatch(root.innerHTML, /Open session/);
+	}
+});
+
+test("session card hides the people row when both party names are blank", () => {
+	const { root } = renderAppWithToolResult("session-cards", {
+		sessions: [{ session_id: "meeting-3", status: "requested", mentor: {}, mentee: {} }],
+	});
+	assert.doesNotMatch(root.innerHTML, /class="people"/);
+
+	const withNames = renderAppWithToolResult("session-cards", {
+		sessions: [
+			{ session_id: "meeting-4", status: "requested", mentor: { name: "Ada" }, mentee: {} },
+		],
+	});
+	assert.match(withNames.root.innerHTML, /class="people"/);
 });
 
 test("slot picker renders viewer-local timezone labels instead of raw UTC-only times", () => {

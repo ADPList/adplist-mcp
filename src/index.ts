@@ -127,7 +127,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"search_mentors",
 			{
 				description:
-					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. Returns compact ranked mentor cards plus Algolia queryID for later booking attribution. MCP Apps hosts should render the attached clean visual mentor cards; text/JSON fallback remains complete for unsupported hosts.",
+					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. Returns compact ranked mentor cards plus Algolia queryID for later booking attribution. MCP Apps hosts should render the attached clean visual mentor cards; text/JSON fallback remains complete for unsupported hosts. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
 				_meta: appToolMeta(UI_RESOURCES.mentorCards),
 				annotations: {
 					title: "Search ADPList mentors",
@@ -181,7 +181,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"list_availability",
 			{
 				description:
-					"List available ADPList mentorship booking slots for a mentor over the next N days. Use this after search_mentors when the user has picked a mentor. Returns at most 20 compact UTC slots plus a localized display string. MCP Apps hosts should render the attached clean Airbnb-like date/time picker; always ask the user to confirm the exact selected slot before booking.",
+					"List available ADPList mentorship booking slots for a mentor over the next N days. Use this after search_mentors when the user has picked a mentor. Returns at most 20 compact UTC slots plus a localized display string. MCP Apps hosts should render the attached clean Airbnb-like date/time picker; always ask the user to confirm the exact selected slot before booking. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
 				_meta: appToolMeta(UI_RESOURCES.slotPicker),
 				annotations: {
 					title: "List mentor availability",
@@ -218,7 +218,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"book_session",
 			{
 				description:
-					"Request an ADPList mentorship session for the authenticated user. IMPORTANT: Before calling this tool, always confirm the exact mentor, time, and note in chat with the user. Most ADPList sessions are requests awaiting mentor confirmation, not instantly confirmed meetings. Only use free mentorship sessions in v1. Pass queryID from the earlier search_mentors result when available for booking attribution. MCP Apps hosts can render the attached session confirmation card.",
+					"Request an ADPList mentorship session for the authenticated user. IMPORTANT: Before calling this tool, always confirm the exact mentor, time, and note in chat with the user. Most ADPList sessions are requests awaiting mentor confirmation, not instantly confirmed meetings. Only use free mentorship sessions in v1. Pass queryID from the earlier search_mentors result when available for booking attribution. MCP Apps hosts can render the attached session confirmation card. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
 				_meta: appToolMeta(UI_RESOURCES.sessionCards),
 				annotations: {
 					title: "Book ADPList session",
@@ -265,7 +265,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"list_my_sessions",
 			{
 				description:
-					"List the authenticated user's ADPList mentorship sessions. Defaults to upcoming sessions to keep chat context compact. Use scope: 'past' only when the user asks for previous sessions, and scope: 'all' only when they explicitly ask for everything. Returns every session the user is part of, whether they booked it as the mentee or are the mentor. Each item includes both the mentor and the mentee (name, slug, title, organization, profile photo when available), the scheduled time, duration, status, source, the booking_notes and booking_questions exchanged when the session was booked, and the dashboard URL — frame each session relative to whichever of the two parties is the user you are helping. MCP Apps hosts should render the attached clean session cards.",
+					"List the authenticated user's ADPList mentorship sessions. Defaults to upcoming sessions to keep chat context compact. Use scope: 'past' only when the user asks for previous sessions, and scope: 'all' only when they explicitly ask for everything. Returns every session the user is part of, whether they booked it as the mentee or are the mentor. Each item includes both the mentor and the mentee (name, slug, title, organization, profile photo when available), the scheduled time, duration, status, source, the booking_notes and booking_questions exchanged when the session was booked, and the dashboard URL — frame each session relative to whichever of the two parties is the user you are helping. MCP Apps hosts should render the attached clean session cards. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
 				_meta: appToolMeta(UI_RESOURCES.sessionCards),
 				annotations: {
 					title: "List my ADPList sessions",

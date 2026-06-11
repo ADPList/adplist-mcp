@@ -129,7 +129,7 @@ test("bookSession refreshes availability and posts source mcp plus queryID", asy
 			status: "requested",
 			session_id: "meeting-1",
 			session_url: "https://adplist.org/meetings/meeting-1",
-			expected_confirmation_time: "typically within 24 hours",
+			expected_confirmation_time: "You'll be notified when the mentor confirms.",
 		});
 		const createCall = calls.find((call) => call.init.method === "POST");
 		assert.ok(createCall);

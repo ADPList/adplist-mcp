@@ -9,9 +9,9 @@ export const OPENAI_WIDGET_DESCRIPTION_META_KEY = "openai/widgetDescription";
 export const OPENAI_WIDGET_PREFERS_BORDER_META_KEY = "openai/widgetPrefersBorder";
 export const OPENAI_WIDGET_CSP_META_KEY = "openai/widgetCSP";
 
-export const UI_RESOURCE_VERSION = "v4";
+export const UI_RESOURCE_VERSION = "v5";
 export const APP_BUILD_LABEL = `ADPList MCP App ${UI_RESOURCE_VERSION}`;
-const APP_INFO_VERSION = "4.0.0";
+const APP_INFO_VERSION = "5.0.0";
 
 export const UI_RESOURCES = {
 	mentorCards: `ui://adplist/${UI_RESOURCE_VERSION}/mentor-cards.html`,
@@ -76,6 +76,12 @@ export function buildAppHtml(kind: AppViewKind): string {
 			: kind === "slot-picker"
 				? "Choose a mentorship time"
 				: "ADPList sessions";
+	const loadingCopy =
+		kind === "mentor-cards"
+			? "Finding your mentors…"
+			: kind === "slot-picker"
+				? "Loading available times…"
+				: "Loading your sessions…";
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -102,12 +108,13 @@ h1 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 .subtle { color: var(--muted); font-size: 13px; line-height: 1.4; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
 .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.06); }
+.card { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.06); }
 .mentor-photo-frame { position: relative; width: 100%; aspect-ratio: 1 / 1; background: linear-gradient(135deg, #f3f3f3, #e9e9e9); overflow: hidden; }
 .mentor-photo { width: 100%; height: 100%; object-fit: cover; display: block; }
 .mentor-photo-fallback { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--muted); font-size: 42px; font-weight: 800; letter-spacing: -0.04em; }
 .mentor-photo-fallback.visible { display: flex; }
-.card-body { padding: 14px; }
+.card-body { padding: 14px; display: flex; flex-direction: column; flex: 1; }
+.card-body .cta { margin-top: auto; align-self: flex-start; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .name { font-weight: 750; letter-spacing: -0.02em; }
 .meta { color: var(--muted); font-size: 13px; margin-top: 3px; }
@@ -127,7 +134,8 @@ h1 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 .slot:hover, .slot.selected { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
 .slot-time { font-weight: 750; }
 .confirm-bar { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
-.session { padding: 16px; display: grid; gap: 12px; }
+.session { padding: 16px; gap: 12px; }
+.session .cta { margin-top: auto; }
 .badge { display: inline-flex; width: fit-content; border-radius: 999px; padding: 5px 9px; background: var(--card-soft); border: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .people { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; }
 .person { min-width: 0; }
@@ -142,7 +150,7 @@ h1 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 <body>
 <main class="app">
   <div class="header"><div><h1>${escapeHtml(title)}</h1><div id="subtitle" class="subtle">Loading ADPList results…</div></div></div>
-  <section id="root"><div class="empty">Waiting for the MCP tool result.</div></section>
+  <section id="root"><div class="empty">${escapeHtml(loadingCopy)}</div></section>
   <div class="debug-version" aria-label="ADPList MCP App version">${escapeHtml(APP_BUILD_LABEL)}</div>
 </main>
 <script>
@@ -240,15 +248,15 @@ function renderMentors(data) {
       '<div class="mentor-photo-frame">' + photoHtml + '<div class="' + fallbackClass + '" aria-label="Profile photo unavailable">' + h(mentorInitials(m.name)) + '</div></div>' +
       '<div class="card-body"><div class="row"><div><div class="name">' + h(m.name || 'ADPList mentor') + '</div><div class="meta">' + h(details) + '</div></div><div class="stat">' + h(m.rating ? '★ ' + Number(m.rating).toFixed(1) : '') + '</div></div>' +
       '<div class="chips">' + (m.expertise || []).map((x) => '<span class="chip">' + h(x) + '</span>').join('') + '</div>' +
-      '<div class="meta why" style="margin-top:10px">' + h(m.why_match || '') + '</div>' +
-      '<button class="cta" data-slug="' + h(m.slug) + '">See available times</button></div></article>';
+      '<div class="meta why" style="margin-top:10px;margin-bottom:12px">' + h(m.why_match || '') + '</div>' +
+      '<button class="cta" data-slug="' + h(m.slug) + '" data-name="' + h(m.name || '') + '">See available times</button></div></article>';
   }).join('') + '</div>' : '<div class="empty">No mentors found. Try a broader goal or fewer filters.</div>';
   document.querySelectorAll('.mentor-photo').forEach((img) => {
     const showFallback = () => { img.style.display = 'none'; img.nextElementSibling?.classList.add('visible'); };
     img.addEventListener('error', showFallback);
     if (img.complete && img.naturalWidth === 0) showFallback();
   });
-  document.querySelectorAll('[data-slug]').forEach((button) => button.addEventListener('click', () => sendUserMessage('Show available times for mentor ' + button.dataset.slug)));
+  document.querySelectorAll('[data-slug]').forEach((button) => button.addEventListener('click', () => sendUserMessage('Show available times for ' + (button.dataset.name || ('mentor ' + button.dataset.slug)))));
   resize();
 }
 function renderSlots(data) {
@@ -287,9 +295,14 @@ function localDayLabel(day) {
 function renderSessions(data) {
   const sessions = data.sessions || (data.session_id ? [data] : []);
   document.getElementById('subtitle').textContent = sessions.length ? 'Your mentorship sessions, with status and next action.' : 'No sessions returned.';
-  document.getElementById('root').innerHTML = sessions.length ? '<div class="grid">' + sessions.map((s) => '<article class="card session"><span class="badge">' + h(s.status || 'requested') + '</span><div><div class="name">' + h(s.scheduled_at_local_display || s.expected_confirmation_time || 'Session requested') + '</div><div class="meta">' + h(s.duration_minutes ? s.duration_minutes + ' minutes' : s.session_url || '') + '</div></div>' +
-    '<div class="people"><div class="person"><div class="name">' + h(s.mentor?.name || 'Mentor') + '</div><div class="meta">' + h([s.mentor?.title, s.mentor?.organization].filter(Boolean).join(' · ')) + '</div></div><div class="arrow">→</div><div class="person"><div class="name">' + h(s.mentee?.name || 'Mentee') + '</div><div class="meta">' + h([s.mentee?.title, s.mentee?.organization].filter(Boolean).join(' · ')) + '</div></div></div>' +
-    (s.session_url ? '<button class="cta secondary" data-url="' + h(s.session_url) + '">Open session</button>' : '') + '</article>').join('') + '</div>' : '<div class="empty">No sessions to show.</div>';
+  document.getElementById('root').innerHTML = sessions.length ? '<div class="grid">' + sessions.map((s) => {
+    const status = s.status || 'requested';
+    const isPending = status === 'requested' || status === 'pending';
+    const durationHtml = s.duration_minutes ? '<div class="meta">' + h(s.duration_minutes + ' minutes') + '</div>' : '';
+    const peopleHtml = (s.mentor?.name || s.mentee?.name) ? '<div class="people"><div class="person"><div class="name">' + h(s.mentor?.name || 'Mentor') + '</div><div class="meta">' + h([s.mentor?.title, s.mentor?.organization].filter(Boolean).join(' · ')) + '</div></div><div class="arrow">→</div><div class="person"><div class="name">' + h(s.mentee?.name || 'Mentee') + '</div><div class="meta">' + h([s.mentee?.title, s.mentee?.organization].filter(Boolean).join(' · ')) + '</div></div></div>' : '';
+    const buttonHtml = s.session_url ? '<button class="cta secondary" data-url="' + h(s.session_url) + '">' + (isPending ? 'View request' : 'Open session') + '</button>' : '';
+    return '<article class="card session"><span class="badge">' + h(status) + '</span><div><div class="name">' + h(s.scheduled_at_local_display || s.expected_confirmation_time || 'Session requested') + '</div>' + durationHtml + '</div>' + peopleHtml + buttonHtml + '</article>';
+  }).join('') + '</div>' : '<div class="empty">No sessions to show.</div>';
   document.querySelectorAll('[data-url]').forEach((button) => button.addEventListener('click', () => send('ui/open-link', { url: button.dataset.url })));
   resize();
 }
