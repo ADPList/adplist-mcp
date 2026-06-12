@@ -104,7 +104,7 @@ test("mapInstanceToSession returns both parties with profile and booking context
 		source: "mcp",
 		booking_notes: "Want help moving from design to PM",
 		booking_questions: ["Biggest challenge? — Positioning myself"],
-		session_url: "https://adplist.org/meetings/meeting-1",
+		session_url: "https://app.adplist.org/bookings/",
 	});
 });
 

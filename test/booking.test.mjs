@@ -167,7 +167,7 @@ test("bookSession refreshes availability and posts source mcp plus queryID", asy
 		assert.deepEqual(result, {
 			status: "requested",
 			session_id: "meeting-1",
-			session_url: "https://adplist.org/meetings/meeting-1",
+			session_url: "https://app.adplist.org/bookings/",
 			expected_confirmation_time: "You'll be notified when the mentor confirms.",
 		});
 		const createCall = calls.find((call) => call.init.method === "POST");
