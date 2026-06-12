@@ -172,7 +172,8 @@ export async function bookSession(
 	return {
 		status,
 		session_id: created.meetingId,
-		session_url: `https://adplist.org/meetings/${created.meetingId}`,
+		// Bookings dashboard — see sessions.ts session_url note.
+		session_url: "https://app.adplist.org/bookings/",
 		expected_confirmation_time:
 			status === "confirmed"
 				? "confirmed immediately"

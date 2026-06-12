@@ -192,7 +192,10 @@ export function mapInstanceToSession(instance: MeetingInstanceRecord): MySession
 		source: normalizeSource(instance.meeting?.metadata?.source),
 		booking_notes: extractBookingNotes(instance.meeting),
 		booking_questions: extractBookingQuestions(instance.meeting),
-		session_url: `https://adplist.org/meetings/${meetingId}`,
+		// The bookings dashboard, not /meetings/{id} — that route expects a meeting
+		// SLUG, so the meetingId form landed users on the wrong page / 404
+		// (Felix QA 2026-06-12).
+		session_url: "https://app.adplist.org/bookings/",
 	};
 }
 
