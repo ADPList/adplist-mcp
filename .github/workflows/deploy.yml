@@ -1,0 +1,45 @@
+# Auto-deploy to production on every merge to main (requested by Felix,
+# 2026-06-12). This replaces the broken Cloudflare "Workers Builds" Git
+# integration, whose green check never deploys (ADPLIST-3126) — that check
+# remains build-verification only.
+#
+# Requires the CLOUDFLARE_API_TOKEN repo secret: a token from the
+# "Edit Cloudflare Workers" template scoped to the ADPList account.
+# Without it the deploy step fails loudly — there is no silent skip.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Deploy worker
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: "9774390785438bc2e74ffed2aa4f2985"
+      - name: Verify health
+        run: |
+          for i in $(seq 1 10); do
+            curl -sf https://mcp.adplist.org/health | grep -q '"ok":true' && exit 0
+            sleep 5
+          done
+          echo "Health check failed after retries" && exit 1
