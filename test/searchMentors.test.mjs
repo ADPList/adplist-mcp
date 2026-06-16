@@ -210,6 +210,39 @@ test("search_mentors merges the user's own ADPList profile into the search query
 	}
 });
 
+test("search_mentors clamps profile-enriched queries below Algolia's byte limit", async () => {
+	const originalFetch = globalThis.fetch;
+	const searchCalls = [];
+	globalThis.fetch = async (url) => {
+		if (String(url).includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
+		searchCalls.push(String(url));
+		return jsonResponse({ results: [], queryID: "q", indexUsed: "explore" });
+	};
+
+	try {
+		await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+				PROFILE_DB: EMPTY_PROFILE_DB,
+			},
+			AUTHED_PROPS,
+			{
+				intent:
+					"product designer based in san francisco looking for a mentor to help with design portfolio reviews and interview preparation for faang google meta amazon apple netflix and high-growth startup product design roles. wants someone with a strong product design background who has hiring or interviewing experience at top tech companies and can give sharp actionable feedback on portfolio storytelling case study structure behavioral whiteboard and app critique interview rounds. prefer mentors based in the usa or canada so timezones and the us north american hiring market align.",
+				filters: { discipline: "product design", max_results: 6 },
+			},
+		);
+
+		const q = new URL(searchCalls[0]).searchParams.get("q");
+		assert.ok(Buffer.byteLength(q, "utf8") <= 500);
+		assert.match(q, /Stored ADPList career context:/);
+		assert.match(q, /Current request:/);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("search_mentors fails open to the bare intent when the profile fetch errors", async () => {
 	const originalFetch = globalThis.fetch;
 	const searchCalls = [];

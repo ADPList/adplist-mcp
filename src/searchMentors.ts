@@ -85,6 +85,7 @@ const DEFAULT_MAX_RESULTS = 6;
 const MAX_RESULTS = 9;
 const MIN_RESULTS = 3;
 const ROW_SIZE = 3;
+const ALGOLIA_QUERY_MAX_BYTES = 500;
 
 // Results render in a 3-column card grid, so counts snap to full rows (3/6/9).
 // Floors rather than rounds so max_results stays an upper bound for callers.
@@ -98,7 +99,7 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 	const url = new URL("/search", baseUrl);
 	const filters = input.filters ?? {};
 	url.searchParams.set("provider", "explore");
-	url.searchParams.set("q", input.intent.trim());
+	url.searchParams.set("q", clampUtf8Bytes(input.intent.trim(), ALGOLIA_QUERY_MAX_BYTES));
 	url.searchParams.set("page", "1");
 	url.searchParams.set("pageSize", String(normalizeMaxResults(filters.max_results)));
 	if (filters.discipline)
@@ -106,6 +107,24 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 	if (filters.country) url.searchParams.set("countries", filters.country.trim().toUpperCase());
 	if (filters.language) url.searchParams.set("languages", filters.language.trim().toLowerCase());
 	return url.toString();
+}
+
+function clampUtf8Bytes(value: string, maxBytes: number): string {
+	const encoder = new TextEncoder();
+	const encoded = encoder.encode(value);
+	if (encoded.length <= maxBytes) return value;
+
+	let bytes = 0;
+	let output = "";
+	for (const char of value) {
+		const codePoint = char.codePointAt(0) ?? 0;
+		const charBytes =
+			codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+		if (bytes + charBytes > maxBytes) break;
+		output += char;
+		bytes += charBytes;
+	}
+	return output.trimEnd();
 }
 
 export function mapSearchMentorsResponse(
