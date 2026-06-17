@@ -229,7 +229,7 @@ test("search_mentors clamps profile-enriched queries below Algolia's byte limit"
 			AUTHED_PROPS,
 			{
 				intent:
-					"product designer based in san francisco looking for a mentor to help with design portfolio reviews and interview preparation for faang google meta amazon apple netflix and high-growth startup product design roles. wants someone with a strong product design background who has hiring or interviewing experience at top tech companies and can give sharp actionable feedback on portfolio storytelling case study structure behavioral whiteboard and app critique interview rounds. prefer mentors based in the usa or canada so timezones and the us north american hiring market align.",
+					"product designer based in san francisco looking for a mentor to help with portfolio reviews, interview prep, and product design storytelling.",
 				filters: { discipline: "product design", max_results: 6 },
 			},
 		);
@@ -238,6 +238,46 @@ test("search_mentors clamps profile-enriched queries below Algolia's byte limit"
 		assert.ok(Buffer.byteLength(q, "utf8") <= 500);
 		assert.match(q, /Stored ADPList career context:/);
 		assert.match(q, /Current request:/);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors keeps the current request when long profile context is clamped", async () => {
+	const originalFetch = globalThis.fetch;
+	const searchCalls = [];
+	const storedContextDb = {
+		prepare: () => ({
+			bind: () => ({
+				first: async () => ({
+					profile_json: JSON.stringify({
+						recent_context_notes: "legacy profile context ".repeat(80),
+					}),
+					updated_at: 1_700_000_000,
+				}),
+			}),
+		}),
+	};
+	globalThis.fetch = async (url) => {
+		if (String(url).includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
+		searchCalls.push(String(url));
+		return jsonResponse({ results: [], queryID: "q", indexUsed: "explore" });
+	};
+
+	try {
+		await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+				PROFILE_DB: storedContextDb,
+			},
+			AUTHED_PROPS,
+			{ intent: "need help preparing for a staff product design interview next week" },
+		);
+
+		const q = new URL(searchCalls[0]).searchParams.get("q");
+		assert.ok(Buffer.byteLength(q, "utf8") <= 500);
+		assert.match(q, /Current request: need help preparing for a staff product design interview next week/);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

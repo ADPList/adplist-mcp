@@ -99,7 +99,7 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 	const url = new URL("/search", baseUrl);
 	const filters = input.filters ?? {};
 	url.searchParams.set("provider", "explore");
-	url.searchParams.set("q", clampUtf8Bytes(input.intent.trim(), ALGOLIA_QUERY_MAX_BYTES));
+	url.searchParams.set("q", clampSearchIntent(input.intent.trim(), ALGOLIA_QUERY_MAX_BYTES));
 	url.searchParams.set("page", "1");
 	url.searchParams.set("pageSize", String(normalizeMaxResults(filters.max_results)));
 	if (filters.discipline)
@@ -107,6 +107,27 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 	if (filters.country) url.searchParams.set("countries", filters.country.trim().toUpperCase());
 	if (filters.language) url.searchParams.set("languages", filters.language.trim().toLowerCase());
 	return url.toString();
+}
+
+function clampSearchIntent(value: string, maxBytes: number): string {
+	const marker = "\nCurrent request: ";
+	const markerIndex = value.indexOf(marker);
+	if (markerIndex === -1) return clampUtf8Bytes(value, maxBytes);
+
+	const currentRequest = value.slice(markerIndex + marker.length).trim();
+	if (!currentRequest) return clampUtf8Bytes(value, maxBytes);
+
+	const requiredSuffix = `${marker}${currentRequest}`;
+	const suffixBytes = utf8ByteLength(requiredSuffix);
+	const currentOnlyPrefix = "Current request: ";
+	if (suffixBytes >= maxBytes) {
+		return `${currentOnlyPrefix}${clampUtf8Bytes(currentRequest, maxBytes - utf8ByteLength(currentOnlyPrefix))}`;
+	}
+
+	const profilePrefix = value.slice(0, markerIndex).trimEnd();
+	const prefixBudget = maxBytes - suffixBytes;
+	const clampedPrefix = clampUtf8Bytes(profilePrefix, prefixBudget).trimEnd();
+	return clampedPrefix ? `${clampedPrefix}${requiredSuffix}` : `Current request: ${currentRequest}`;
 }
 
 function clampUtf8Bytes(value: string, maxBytes: number): string {
@@ -125,6 +146,10 @@ function clampUtf8Bytes(value: string, maxBytes: number): string {
 		bytes += charBytes;
 	}
 	return output.trimEnd();
+}
+
+function utf8ByteLength(value: string): number {
+	return new TextEncoder().encode(value).length;
 }
 
 export function mapSearchMentorsResponse(
