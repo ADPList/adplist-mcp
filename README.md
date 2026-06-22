@@ -35,11 +35,11 @@ Tell Claude what you're working through — *"I'm a designer trying to break int
 ## See it in action
 
 <p align="center">
-  <video src="https://github.com/ADPList/adplist-mcp/raw/main/assets/find-a-mentor-demo.mp4" controls muted playsinline width="100%">
-    Your browser can't play embedded video —
-    <a href="https://github.com/ADPList/adplist-mcp/raw/main/assets/find-a-mentor-demo.mp4">watch the demo →</a>
-  </video>
+  <a href="https://github.com/ADPList/adplist-mcp/blob/main/assets/find-a-mentor-demo.mp4">
+    <img src="assets/demo-poster.png" alt="▶ Watch the demo — find and book a mentor inside Claude" width="100%">
+  </a>
 </p>
+<p align="center"><a href="https://github.com/ADPList/adplist-mcp/blob/main/assets/find-a-mentor-demo.mp4"><strong>▶ Watch the 20-second demo</strong></a></p>
 
 ## Install
 
