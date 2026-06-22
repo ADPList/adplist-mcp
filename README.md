@@ -36,10 +36,10 @@ Tell Claude what you're working through — *"I'm a designer trying to break int
 
 <p align="center">
   <a href="https://github.com/ADPList/adplist-mcp/blob/main/assets/find-a-mentor-demo.mp4">
-    <img src="assets/demo-poster.png" alt="▶ Watch the demo — find and book a mentor inside Claude" width="100%">
+    <img src="assets/find-a-mentor-demo.gif" alt="Finding and booking a mentor inside Claude" width="100%">
   </a>
 </p>
-<p align="center"><a href="https://github.com/ADPList/adplist-mcp/blob/main/assets/find-a-mentor-demo.mp4"><strong>▶ Watch the 20-second demo</strong></a></p>
+<p align="center"><em>Finding and booking a mentor, entirely inside Claude.</em> · <a href="https://github.com/ADPList/adplist-mcp/blob/main/assets/find-a-mentor-demo.mp4">Watch in HD with sound →</a></p>
 
 ## Install
 
