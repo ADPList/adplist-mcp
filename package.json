@@ -11,6 +11,7 @@
 		"cf-typegen": "wrangler types",
 		"type-check": "tsc --noEmit",
 		"test": "node --test",
+		"smoke:oauth-registration": "node scripts/smoke-oauth-registration.mjs",
 		"deploy:live": "ALLOW_WORKER_DEPLOY=1 node scripts/deploy.mjs"
 	},
 	"dependencies": {
