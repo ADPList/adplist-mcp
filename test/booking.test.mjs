@@ -18,8 +18,8 @@ test("M3 registers list_availability and book_session MCP tools with confirmatio
 	assert.match(indexSource, /queryID from the earlier search_mentors result/i);
 });
 
-test("availability days default to 14 and clamp to max 30", () => {
-	assert.equal(normalizeAvailabilityDays(undefined), 14);
+test("availability days default to 30 and clamp to max 30", () => {
+	assert.equal(normalizeAvailabilityDays(undefined), 30);
 	assert.equal(normalizeAvailabilityDays(0), 1);
 	assert.equal(normalizeAvailabilityDays(99), 30);
 	assert.equal(normalizeAvailabilityDays(7.9), 7);

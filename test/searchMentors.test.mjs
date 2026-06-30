@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+	buildSearchMentorsUrl,
 	mapSearchMentorsResponse,
 	normalizeMaxResults,
 	searchMentors,
@@ -34,6 +35,34 @@ test("search_mentors calls search-service Explore with compact filters", () => {
 	assert.match(source, /languages/);
 });
 
+test("search_mentors expands weak taxonomy intents instead of forcing brittle discipline facets", () => {
+	const growthUrl = new URL(
+		buildUrl({
+			intent: "need a growth marketing mentor for activation and retention",
+			filters: { discipline: "growth marketing" },
+		}),
+	);
+	assert.equal(growthUrl.searchParams.has("disciplines"), false);
+	assert.match(growthUrl.searchParams.get("q"), /growth marketing acquisition/i);
+
+	const returnshipUrl = new URL(
+		buildUrl({
+			intent: "career coach for returnship after a career break",
+			filters: { discipline: "career coaching" },
+		}),
+	);
+	assert.equal(returnshipUrl.searchParams.has("disciplines"), false);
+	assert.match(returnshipUrl.searchParams.get("q"), /return to work/i);
+
+	const productUrl = new URL(
+		buildUrl({
+			intent: "product design portfolio review",
+			filters: { discipline: "product design" },
+		}),
+	);
+	assert.equal(productUrl.searchParams.get("disciplines"), "product design");
+});
+
 test("search_mentors preserves booking attribution and trims LLM output", () => {
 	assert.match(source, /queryID/);
 	assert.match(source, /expertise\.filter\(Boolean\)\.slice\(0, 3\)/);
@@ -55,7 +84,10 @@ test("search_mentors maps common mentor photo aliases into profile_photo_url", (
 
 test("search_mentors relaxes only discipline after a zero-result taxonomy mismatch", () => {
 	assert.match(source, /firstResult\.mentors\.length > 0 \|\| !input\.filters\?\.discipline/);
-	assert.match(source, /const \{ discipline: _discipline, \.\.\.relaxedFilters \} = input\.filters/);
+	assert.match(
+		source,
+		/const \{ discipline: _discipline, \.\.\.relaxedFilters \} = input\.filters/,
+	);
 	assert.match(source, /relaxed_filters: \["discipline"\]/);
 	assert.match(source, /fetchAndMapSearchMentors/);
 });
@@ -76,6 +108,7 @@ test("search_mentors retries without discipline when the constrained search is e
 					slug: "daniel-tuitt",
 					title: "Lead Service Designer",
 					employer: "Developed Thinking",
+					countryISO: "US",
 					expertise: ["design", "product"],
 					disciplines: ["ux design", "service design"],
 					total_sessions: 100,
@@ -112,13 +145,77 @@ test("search_mentors retries without discipline when the constrained search is e
 	}
 });
 
+test("search_mentors enforces requested country from upstream country fields", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "US Growth Mentor",
+					slug: "us-growth",
+					title: "Growth Marketing Lead",
+					country: { iso: "US" },
+					expertise: ["growth marketing"],
+				},
+				{
+					name: "Canada Product Mentor",
+					slug: "canada-product",
+					title: "Product Designer",
+					countryISO: "CA",
+					expertise: ["product design"],
+				},
+				{
+					name: "Missing Country Mentor",
+					slug: "missing-country",
+					title: "Designer",
+					expertise: ["design"],
+				},
+			],
+		},
+		{
+			intent: "growth marketing mentor in the US",
+			filters: { country: "us", max_results: 9 },
+		},
+	);
+
+	assert.equal(result.mentors.length, 1);
+	assert.equal(result.mentors[0].slug, "us-growth");
+	assert.equal(result.mentors[0].country_iso, "US");
+});
+
+test("why_match cites matched fields instead of only restating expertise tags", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Maya",
+					slug: "maya",
+					title: "Director of Growth Marketing",
+					employer: "Lifecycle Labs",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["marketing"],
+				},
+			],
+		},
+		{
+			intent: "growth marketing mentor for lifecycle retention",
+			filters: { country: "US", max_results: 3 },
+		},
+	);
+
+	assert.match(result.mentors[0].why_match, /title mentions growth and marketing/i);
+	assert.doesNotMatch(result.mentors[0].why_match, /^Strong in marketing/i);
+});
+
 test("search_mentors does not retry when the constrained search has mentors", async () => {
 	const originalFetch = globalThis.fetch;
 	const calls = [];
 	globalThis.fetch = async (url) => {
 		calls.push(String(url));
 		return jsonResponse({
-			results: [{ name: "Elliot Roberts", slug: "elliot-roberts", disciplines: ["product design"] }],
+			results: [
+				{ name: "Elliot Roberts", slug: "elliot-roberts", disciplines: ["product design"] },
+			],
 			queryID: "strict-query",
 			indexUsed: "explore",
 		});
@@ -149,6 +246,10 @@ function jsonResponse(body) {
 		status: 200,
 		headers: { "content-type": "application/json" },
 	});
+}
+
+function buildUrl(input) {
+	return buildSearchMentorsUrl("https://search.example", input);
 }
 
 const AUTHED_PROPS = {
@@ -228,8 +329,7 @@ test("search_mentors clamps profile-enriched queries below Algolia's byte limit"
 			},
 			AUTHED_PROPS,
 			{
-				intent:
-					"product designer based in san francisco looking for a mentor to help with design portfolio reviews and interview preparation for faang google meta amazon apple netflix and high-growth startup product design roles. wants someone with a strong product design background who has hiring or interviewing experience at top tech companies and can give sharp actionable feedback on portfolio storytelling case study structure behavioral whiteboard and app critique interview rounds. prefer mentors based in the usa or canada so timezones and the us north american hiring market align.",
+				intent: "product designer based in san francisco looking for a mentor to help with design portfolio reviews and interview preparation for faang google meta amazon apple netflix and high-growth startup product design roles. wants someone with a strong product design background who has hiring or interviewing experience at top tech companies and can give sharp actionable feedback on portfolio storytelling case study structure behavioral whiteboard and app critique interview rounds. prefer mentors based in the usa or canada so timezones and the us north american hiring market align.",
 				filters: { discipline: "product design", max_results: 6 },
 			},
 		);
@@ -319,7 +419,10 @@ test("search_mentors never fetches the ADPList profile for unauthenticated calle
 		await searchMentors({ SEARCH_SERVICE_URL: "https://search.example" }, undefined, {
 			intent: "anonymous search",
 		});
-		assert.equal(calls.some((url) => url.includes("/users/profile/me")), false);
+		assert.equal(
+			calls.some((url) => url.includes("/users/profile/me")),
+			false,
+		);
 		const q = new URL(calls[0]).searchParams.get("q");
 		assert.equal(q, "anonymous search");
 	} finally {
@@ -364,8 +467,7 @@ test("region-style adplist-bucket S3 photo hosts are rewritten to the CSP-allowl
 				{
 					name: "Hanshuman Tuteja",
 					slug: "hanshuman-tuteja",
-					image:
-						"https://adplist-bucket.s3.us-east-2.amazonaws.com/media/profile_photos/4cdac20c.webp",
+					image: "https://adplist-bucket.s3.us-east-2.amazonaws.com/media/profile_photos/4cdac20c.webp",
 				},
 				{
 					name: "Global Host",
