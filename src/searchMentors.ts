@@ -96,6 +96,7 @@ const MIN_RESULTS = 3;
 const ROW_SIZE = 3;
 const FILTERED_CANDIDATE_PAGE_SIZE = 36;
 const ALGOLIA_QUERY_MAX_BYTES = 500;
+const MIN_MARKETING_DOMAIN_SCORE = 8;
 
 const TAXONOMY_EXPANSIONS: Array<{ pattern: RegExp; expansion: string }> = [
 	{
@@ -352,32 +353,41 @@ function domainFitScore(
 		return rule.strongTerms.filter((term) => includesTerm(text.role, term)).length * 4;
 	}
 
+	return marketingDomainFitScore(text, rule);
+}
+
+function marketingDomainFitScore(
+	text: ReturnType<typeof mentorDomainText>,
+	rule: (typeof DOMAIN_FIT_RULES)[number],
+): number {
 	let score = 0;
 	for (const term of rule.strongTerms) {
-		if (includesTerm(text.titleBio, term)) score += 8;
+		if (includesTerm(text.title, term)) score += 8;
+		if (includesTerm(text.bio, term)) score += 4;
 		if (includesTerm(text.expertise, term)) score += 5;
 		if (includesTerm(text.disciplines, term)) score += 2;
 		if (includesTerm(text.company, term)) score += 1;
 	}
 	for (const term of rule.supportingTerms) {
-		if (includesTerm(text.titleBio, term)) score += 3;
+		if (includesTerm(text.title, term)) score += 3;
+		if (includesTerm(text.bio, term)) score += 1;
 		if (includesTerm(text.expertise, term)) score += 2;
 		if (includesTerm(text.disciplines, term)) score += 1;
 	}
-	if (/\bcmo\b/i.test(text.titleBio)) score += 8;
-	if (isClearlyNonMarketingRole(text.titleBio)) score -= 8;
-	if (includesTerm(text.titleBio, "marketing")) score += 1;
+	if (/\bcmo\b/i.test(text.title)) score += 8;
+	if (isClearlyNonMarketingTitle(text.title)) score -= 10;
+	if (includesTerm(text.title, "marketing")) score += 2;
 	if (includesTerm(text.expertise, "marketing")) score += 1;
 	if (includesTerm(text.disciplines, "marketing")) score += 1;
 	return score;
 }
 
-function isClearlyNonMarketingRole(titleBio: string): boolean {
-	if (/\b(marketing|growth|cmo|go-to-market|gtm|demand generation)\b/i.test(titleBio)) {
+function isClearlyNonMarketingTitle(title: string): boolean {
+	if (/\b(marketing|growth|cmo|go-to-market|gtm|demand generation)\b/i.test(title)) {
 		return false;
 	}
-	return /\b(architect|engineer|engineering|developer|data scientist|designer|design|infrastructure)\b/i.test(
-		titleBio,
+	return /\b(architect|engineer|engineering|developer|data scientist|designer|design|infrastructure|head of product|director of product|product manager|product management|customer success|business development|sales|founder|chief executive|ceo|cio|creative|storyteller|ai|expert in residence|coach|mentor|advisor)\b/i.test(
+		title,
 	);
 }
 
@@ -425,20 +435,28 @@ function matchesMarketingDomainFit(
 	const titleBioStrongMatches = rule.strongTerms.filter((term) =>
 		includesTerm(text.titleBio, term)
 	);
-	if (titleBioStrongMatches.length > 0) return true;
+	if (titleBioStrongMatches.length > 0) {
+		return marketingDomainFitScore(text, rule) >= MIN_MARKETING_DOMAIN_SCORE;
+	}
 
 	const expertiseStrongMatches = rule.strongTerms.filter((term) =>
 		includesTerm(text.expertise, term)
 	);
-	if (expertiseStrongMatches.length > 0) return true;
+	if (expertiseStrongMatches.length > 0) {
+		return marketingDomainFitScore(text, rule) >= MIN_MARKETING_DOMAIN_SCORE;
+	}
 
 	const disciplineStrongMatches = rule.strongTerms.filter((term) =>
 		includesTerm(text.disciplines, term)
 	);
-	if (disciplineStrongMatches.length > 0) return true;
+	if (disciplineStrongMatches.length > 0) {
+		return marketingDomainFitScore(text, rule) >= MIN_MARKETING_DOMAIN_SCORE;
+	}
 
 	const expertiseHasGenericMarketing = includesTerm(text.expertise, "marketing");
-	if (expertiseHasGenericMarketing && hasMarketingCraftSignal(text.titleBio)) return true;
+	if (expertiseHasGenericMarketing && hasMarketingCraftSignal(text.titleBio)) {
+		return marketingDomainFitScore(text, rule) >= MIN_MARKETING_DOMAIN_SCORE;
+	}
 
 	const companyStrongMatches = rule.strongTerms.filter((term) =>
 		includesTerm(text.company, term)
@@ -446,22 +464,30 @@ function matchesMarketingDomainFit(
 	const titleBioSupportingMatches = rule.supportingTerms.filter((term) =>
 		includesTerm(text.titleBio, term)
 	);
-	return companyStrongMatches.length > 0 && titleBioSupportingMatches.length > 0;
+	return (
+		companyStrongMatches.length > 0 &&
+		titleBioSupportingMatches.length > 0 &&
+		marketingDomainFitScore(text, rule) >= MIN_MARKETING_DOMAIN_SCORE
+	);
 }
 
 function mentorDomainText(mentor: SearchServiceMentor): {
 	role: string;
+	title: string;
+	bio: string;
 	titleBio: string;
 	expertise: string;
 	disciplines: string;
 	company: string;
 } {
-	const titleBio = [mentor.title, mentor.bio].join(" ").toLowerCase();
+	const title = (mentor.title ?? "").toLowerCase();
+	const bio = (mentor.bio ?? "").toLowerCase();
+	const titleBio = [title, bio].join(" ").toLowerCase();
 	const expertise = (mentor.expertise ?? []).join(" ").toLowerCase();
 	const disciplines = (mentor.disciplines ?? []).join(" ").toLowerCase();
 	const role = [titleBio, expertise, disciplines].join(" ").toLowerCase();
 	const company = [mentor.employer, mentor.company].join(" ").toLowerCase();
-	return { role, titleBio, expertise, disciplines, company };
+	return { role, title, bio, titleBio, expertise, disciplines, company };
 }
 
 function includesTerm(haystack: string, term: string): boolean {
