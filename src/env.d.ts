@@ -7,6 +7,7 @@ declare global {
 		WELCOME_EMAIL_GIF_URL?: string;
 		WELCOME_EMAIL_FROM_EMAIL?: string;
 		WELCOME_EMAIL_FROM_NAME?: string;
+		ASSETS?: Fetcher;
 	}
 }
 
