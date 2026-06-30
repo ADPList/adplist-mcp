@@ -147,6 +147,10 @@ const DOMAIN_FIT_RULES: Array<{
 			"customer acquisition",
 			"user acquisition",
 			"demand generation",
+			"product marketing",
+			"growth product management",
+			"growth hacking",
+			"account-based marketing",
 			"paid media",
 			"paid social",
 			"seo",
@@ -154,6 +158,7 @@ const DOMAIN_FIT_RULES: Array<{
 			"conversion",
 			"crm",
 			"go-to-market",
+			"product growth",
 		],
 		supportingTerms: ["growth", "activation", "experimentation", "analytics", "funnel"],
 	},
@@ -187,6 +192,7 @@ export function normalizeMaxResults(value: number | undefined): number {
 }
 
 export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput): string {
+	input = withInferredFilters(input);
 	const url = new URL("/search", baseUrl);
 	const filters = input.filters ?? {};
 	const expandedIntent = expandIntentForSearch(input.intent);
@@ -246,12 +252,13 @@ export function mapSearchMentorsResponse(
 	response: SearchServiceResponse,
 	input: SearchMentorsInput,
 ): SearchMentorsOutput {
+	input = withInferredFilters(input);
 	const maxResults = normalizeMaxResults(input.filters?.max_results);
 	const domainRule = domainFitRuleFor(input);
 	const candidates = (response.results ?? [])
 		.filter((mentor) => matchesRequestedCountry(mentor, input.filters?.country))
 		.filter((mentor) => matchesDomainFit(mentor, domainRule));
-	const mentors = candidates
+	const mentors = rankMentorCandidates(candidates, domainRule)
 		.slice(0, maxResults)
 		.map((mentor) => {
 			const expertise = Array.isArray(mentor.expertise)
@@ -321,6 +328,59 @@ export function mapSearchMentorsResponse(
 	};
 }
 
+function rankMentorCandidates(
+	mentors: SearchServiceMentor[],
+	rule: (typeof DOMAIN_FIT_RULES)[number] | undefined,
+): SearchServiceMentor[] {
+	if (!rule) return mentors;
+	return mentors
+		.map((mentor, index) => ({
+			mentor,
+			index,
+			score: domainFitScore(mentor, rule),
+		}))
+		.sort((a, b) => b.score - a.score || a.index - b.index)
+		.map(({ mentor }) => mentor);
+}
+
+function domainFitScore(
+	mentor: SearchServiceMentor,
+	rule: (typeof DOMAIN_FIT_RULES)[number],
+): number {
+	const text = mentorDomainText(mentor);
+	if (rule.name !== "marketing") {
+		return rule.strongTerms.filter((term) => includesTerm(text.role, term)).length * 4;
+	}
+
+	let score = 0;
+	for (const term of rule.strongTerms) {
+		if (includesTerm(text.titleBio, term)) score += 8;
+		if (includesTerm(text.expertise, term)) score += 5;
+		if (includesTerm(text.disciplines, term)) score += 2;
+		if (includesTerm(text.company, term)) score += 1;
+	}
+	for (const term of rule.supportingTerms) {
+		if (includesTerm(text.titleBio, term)) score += 3;
+		if (includesTerm(text.expertise, term)) score += 2;
+		if (includesTerm(text.disciplines, term)) score += 1;
+	}
+	if (/\bcmo\b/i.test(text.titleBio)) score += 8;
+	if (isClearlyNonMarketingRole(text.titleBio)) score -= 8;
+	if (includesTerm(text.titleBio, "marketing")) score += 1;
+	if (includesTerm(text.expertise, "marketing")) score += 1;
+	if (includesTerm(text.disciplines, "marketing")) score += 1;
+	return score;
+}
+
+function isClearlyNonMarketingRole(titleBio: string): boolean {
+	if (/\b(marketing|growth|cmo|go-to-market|gtm|demand generation)\b/i.test(titleBio)) {
+		return false;
+	}
+	return /\b(architect|engineer|engineering|developer|data scientist|designer|design|infrastructure)\b/i.test(
+		titleBio,
+	);
+}
+
 function domainFitRuleFor(input: SearchMentorsInput): (typeof DOMAIN_FIT_RULES)[number] | undefined {
 	const haystack = [input.intent, input.filters?.discipline].filter(Boolean).join(" ");
 	return DOMAIN_FIT_RULES.find((rule) => rule.pattern.test(haystack));
@@ -372,6 +432,11 @@ function matchesMarketingDomainFit(
 	);
 	if (expertiseStrongMatches.length > 0) return true;
 
+	const disciplineStrongMatches = rule.strongTerms.filter((term) =>
+		includesTerm(text.disciplines, term)
+	);
+	if (disciplineStrongMatches.length > 0) return true;
+
 	const expertiseHasGenericMarketing = includesTerm(text.expertise, "marketing");
 	if (expertiseHasGenericMarketing && hasMarketingCraftSignal(text.titleBio)) return true;
 
@@ -388,13 +453,15 @@ function mentorDomainText(mentor: SearchServiceMentor): {
 	role: string;
 	titleBio: string;
 	expertise: string;
+	disciplines: string;
 	company: string;
 } {
 	const titleBio = [mentor.title, mentor.bio].join(" ").toLowerCase();
 	const expertise = (mentor.expertise ?? []).join(" ").toLowerCase();
-	const role = [titleBio, expertise].join(" ").toLowerCase();
+	const disciplines = (mentor.disciplines ?? []).join(" ").toLowerCase();
+	const role = [titleBio, expertise, disciplines].join(" ").toLowerCase();
 	const company = [mentor.employer, mentor.company].join(" ").toLowerCase();
-	return { role, titleBio, expertise, company };
+	return { role, titleBio, expertise, disciplines, company };
 }
 
 function includesTerm(haystack: string, term: string): boolean {
@@ -470,6 +537,39 @@ export async function searchMentors(
 		...bareRelaxedResult,
 		relaxed_filters: ["profile_context", "discipline"],
 	};
+}
+
+function withInferredFilters(input: SearchMentorsInput): SearchMentorsInput {
+	const inferredCountry = input.filters?.country ?? inferCountryFromIntent(input.intent);
+	if (!inferredCountry) return input;
+	return {
+		...input,
+		filters: {
+			...input.filters,
+			country: inferredCountry,
+		},
+	};
+}
+
+function inferCountryFromIntent(intent: string): string | undefined {
+	const requestIntent = intent.includes("Current request:")
+		? (intent.split("Current request:").pop() ?? intent)
+		: intent;
+	if (mentionsNonUsIntent(requestIntent)) return undefined;
+	if (/\bUS\b/.test(requestIntent)) return "US";
+	if (/\bU\.S\.?\b/i.test(requestIntent)) return "US";
+	if (/\bU\.S\.A\.?\b/i.test(requestIntent)) return "US";
+	if (/\bUSA\b/i.test(requestIntent)) return "US";
+	if (/\bUnited States\b/i.test(requestIntent)) return "US";
+	return undefined;
+}
+
+function mentionsNonUsIntent(intent: string): boolean {
+	const usPattern = String.raw`(?:US|U\.S\.?|U\.S\.A\.?|USA|United States)`;
+	return new RegExp(
+		String.raw`\b(?:not|outside|except|excluding|exclude|non[-\s]?|not based in|outside of)\b.{0,40}\b${usPattern}\b`,
+		"i",
+	).test(intent);
 }
 
 function inputWithoutDiscipline(input: SearchMentorsInput): SearchMentorsInput | null {
