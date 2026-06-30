@@ -2,7 +2,7 @@ const SENDGRID_MAIL_SEND_URL = "https://api.sendgrid.com/v3/mail/send";
 const WELCOME_EMAIL_LEASE_SECONDS = 15 * 60;
 const DEFAULT_FROM_EMAIL = "felix@adplist.org";
 const DEFAULT_FROM_NAME = "Felix Lee";
-const DEFAULT_SUBJECT = "You're in. ADPList is connected to Claude.";
+const DEFAULT_SUBJECT = "You just connected ADPList to Claude 🎉";
 
 type WelcomeEmailInput = {
 	userId: string;
