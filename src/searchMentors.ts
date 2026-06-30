@@ -97,12 +97,13 @@ const ROW_SIZE = 3;
 const FILTERED_CANDIDATE_PAGE_SIZE = 36;
 const ALGOLIA_QUERY_MAX_BYTES = 500;
 const MIN_MARKETING_DOMAIN_SCORE = 8;
+const GROWTH_MARKETING_EXPANSION =
+	"growth marketing acquisition lifecycle marketing retention activation experimentation conversion optimization demand generation go-to-market marketing analytics";
 
 const TAXONOMY_EXPANSIONS: Array<{ pattern: RegExp; expansion: string }> = [
 	{
-		pattern: /\b(growth marketing|growth marketer|growth)\b/i,
-		expansion:
-			"growth marketing acquisition lifecycle marketing retention activation experimentation conversion optimization demand generation go-to-market marketing analytics",
+		pattern: /\b(growth marketing|growth marketer)\b/i,
+		expansion: GROWTH_MARKETING_EXPANSION,
 	},
 	{
 		pattern:
@@ -119,6 +120,7 @@ const TAXONOMY_EXPANSIONS: Array<{ pattern: RegExp; expansion: string }> = [
 ];
 
 const BROAD_DISCIPLINE_TERMS = [
+	"growth",
 	"growth marketing",
 	"digital marketing",
 	"performance marketing",
@@ -196,7 +198,7 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 	input = withInferredFilters(input);
 	const url = new URL("/search", baseUrl);
 	const filters = input.filters ?? {};
-	const expandedIntent = expandIntentForSearch(input.intent);
+	const expandedIntent = expandIntentForSearch(input);
 	url.searchParams.set("provider", "explore");
 	url.searchParams.set("q", clampUtf8Bytes(expandedIntent, ALGOLIA_QUERY_MAX_BYTES));
 	url.searchParams.set("page", "1");
@@ -216,11 +218,15 @@ function searchPageSize(input: SearchMentorsInput): number {
 	return normalizeMaxResults(filters.max_results);
 }
 
-function expandIntentForSearch(intent: string): string {
-	const trimmed = intent.trim();
-	const expansions = TAXONOMY_EXPANSIONS.filter(({ pattern }) => pattern.test(trimmed)).map(
+function expandIntentForSearch(input: SearchMentorsInput): string {
+	const trimmed = input.intent.trim();
+	let expansions = TAXONOMY_EXPANSIONS.filter(({ pattern }) => pattern.test(trimmed)).map(
 		({ expansion }) => expansion,
 	);
+	if (input.filters?.discipline?.trim().toLowerCase() === "growth") {
+		expansions.push(GROWTH_MARKETING_EXPANSION);
+	}
+	expansions = Array.from(new Set(expansions));
 	return expansions.length > 0
 		? `${trimmed}. Related search signals: ${expansions.join("; ")}`
 		: trimmed;
@@ -383,15 +389,18 @@ function marketingDomainFitScore(
 }
 
 function isClearlyNonMarketingTitle(title: string): boolean {
-	if (/\b(marketing|growth|cmo|go-to-market|gtm|demand generation)\b/i.test(title)) {
+	if (/\b(marketing|growth|cmo|go-to-market|gtm|demand generation|digital|performance|b2b)\b/i.test(title)) {
 		return false;
 	}
-	return /\b(architect|engineer|engineering|developer|data scientist|designer|design|infrastructure|head of product|director of product|product manager|product management|customer success|business development|sales|founder|chief executive|ceo|cio|creative|storyteller|ai|expert in residence|coach|mentor|advisor)\b/i.test(
+	return /\b(architect|engineer|engineering|developer|data scientist|designer|design|infrastructure|head of product|director of product|product manager|product management|customer success|business development|sales|founder|chief executive|ceo|cio|creative|storyteller|ai|expert in residence|coach|mentor|advisor|consultant)\b/i.test(
 		title,
 	);
 }
 
 function domainFitRuleFor(input: SearchMentorsInput): (typeof DOMAIN_FIT_RULES)[number] | undefined {
+	if (input.filters?.discipline?.trim().toLowerCase() === "growth") {
+		return DOMAIN_FIT_RULES.find((rule) => rule.name === "marketing");
+	}
 	const haystack = [input.intent, input.filters?.discipline].filter(Boolean).join(" ");
 	return DOMAIN_FIT_RULES.find((rule) => rule.pattern.test(haystack));
 }
