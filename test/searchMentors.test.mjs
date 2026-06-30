@@ -356,7 +356,7 @@ test("search_mentors reranks marketing candidates by growth and product marketin
 				{
 					name: "Product Marketing",
 					slug: "product-marketing",
-					title: "Founder",
+					title: "Product Marketing Advisor",
 					countryISO: "US",
 					expertise: ["marketing"],
 					disciplines: ["product marketing"],
@@ -404,11 +404,73 @@ test("search_mentors reranks marketing candidates by growth and product marketin
 	assert.deepEqual(result.mentors.map((mentor) => mentor.slug), [
 		"growth-lead",
 		"product-marketing",
-		"generic-marketing",
-		"generic-marketing-two",
-		"generic-marketing-three",
-		"technical-broad-tags",
 	]);
+});
+
+test("search_mentors does not fill growth marketing results with weak broad-tag matches", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Product AI",
+					slug: "product-ai",
+					title: "Head of Product and AI",
+					countryISO: "US",
+					expertise: ["product", "ai", "marketing"],
+					disciplines: ["platform growth"],
+				},
+				{
+					name: "Founder Product Research",
+					slug: "founder-product-research",
+					title: "Founder",
+					countryISO: "US",
+					expertise: ["product research"],
+					disciplines: ["platform growth"],
+				},
+				{
+					name: "Customer Success",
+					slug: "customer-success",
+					title: "Director of Customer Success",
+					countryISO: "US",
+					expertise: ["product", "sales/bd", "marketing"],
+					disciplines: ["customer success"],
+				},
+				{
+					name: "Creative Design",
+					slug: "creative-design",
+					title: "Creative Leader and Storyteller",
+					countryISO: "US",
+					expertise: ["design", "marketing"],
+					disciplines: ["design"],
+				},
+				{
+					name: "Product Marketing Lead",
+					slug: "product-marketing-lead",
+					title: "Head of Product Marketing",
+					countryISO: "US",
+					expertise: ["marketing", "product"],
+					disciplines: ["product marketing"],
+				},
+				{
+					name: "Growth Lead",
+					slug: "growth-lead",
+					title: "Head of Product Growth",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["growth product management"],
+				},
+			],
+		},
+		{
+			intent: "US growth marketing mentors for acquisition retention lifecycle",
+			filters: { max_results: 9 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["growth-lead", "product-marketing-lead"],
+	);
 });
 
 test("search_mentors removes product-only mentors for career coaching and returnship intents", () => {
