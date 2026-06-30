@@ -94,16 +94,25 @@ const DEFAULT_MAX_RESULTS = 6;
 const MAX_RESULTS = 9;
 const MIN_RESULTS = 3;
 const ROW_SIZE = 3;
-const FILTERED_CANDIDATE_PAGE_SIZE = 36;
+const FILTERED_CANDIDATE_PAGE_SIZE = 72;
 const ALGOLIA_QUERY_MAX_BYTES = 500;
 const MIN_MARKETING_DOMAIN_SCORE = 8;
 const GROWTH_MARKETING_EXPANSION =
 	"growth marketing acquisition lifecycle marketing retention activation experimentation conversion optimization demand generation go-to-market marketing analytics";
+const SPECIALIST_MARKETING_INTENT =
+	/\b(growth marketing|growth marketer|go-to-market|gtm|customer acquisition|user acquisition|retention|lifecycle|activation|demand generation|demand gen|paid media|paid social|performance marketing|seo|sem|conversion|experimentation|marketing analytics|funnel|product growth)\b/i;
+const SPECIALIST_MARKETING_SIGNAL =
+	/\b(growth marketing|growth marketer|go-to-market|gtm|customer acquisition|user acquisition|retention|lifecycle|activation|demand generation|demand gen|paid media|paid social|performance marketing|seo|sem|conversion|experimentation|marketing analytics|funnel|product growth|growth hacking|account-based marketing|abm)\b/i;
 
 const TAXONOMY_EXPANSIONS: Array<{ pattern: RegExp; expansion: string }> = [
 	{
 		pattern: /\b(growth marketing|growth marketer)\b/i,
 		expansion: GROWTH_MARKETING_EXPANSION,
+	},
+	{
+		pattern: /\b(go-to-market|gtm)\b/i,
+		expansion:
+			"go-to-market GTM product marketing launch strategy positioning demand generation customer acquisition growth marketing product growth",
 	},
 	{
 		pattern:
@@ -264,8 +273,8 @@ export function mapSearchMentorsResponse(
 	const domainRule = domainFitRuleFor(input);
 	const candidates = (response.results ?? [])
 		.filter((mentor) => matchesRequestedCountry(mentor, input.filters?.country))
-		.filter((mentor) => matchesDomainFit(mentor, domainRule));
-	const mentors = rankMentorCandidates(candidates, domainRule)
+		.filter((mentor) => matchesDomainFit(mentor, domainRule, input));
+	const mentors = rankMentorCandidates(candidates, domainRule, input)
 		.slice(0, maxResults)
 		.map((mentor) => {
 			const expertise = Array.isArray(mentor.expertise)
@@ -338,13 +347,14 @@ export function mapSearchMentorsResponse(
 function rankMentorCandidates(
 	mentors: SearchServiceMentor[],
 	rule: (typeof DOMAIN_FIT_RULES)[number] | undefined,
+	input: SearchMentorsInput,
 ): SearchServiceMentor[] {
 	if (!rule) return mentors;
 	return mentors
 		.map((mentor, index) => ({
 			mentor,
 			index,
-			score: domainFitScore(mentor, rule),
+			score: domainFitScore(mentor, rule, input),
 		}))
 		.sort((a, b) => b.score - a.score || a.index - b.index)
 		.map(({ mentor }) => mentor);
@@ -353,18 +363,20 @@ function rankMentorCandidates(
 function domainFitScore(
 	mentor: SearchServiceMentor,
 	rule: (typeof DOMAIN_FIT_RULES)[number],
+	input: SearchMentorsInput,
 ): number {
 	const text = mentorDomainText(mentor);
 	if (rule.name !== "marketing") {
 		return rule.strongTerms.filter((term) => includesTerm(text.role, term)).length * 4;
 	}
 
-	return marketingDomainFitScore(text, rule);
+	return marketingDomainFitScore(text, rule, input);
 }
 
 function marketingDomainFitScore(
 	text: ReturnType<typeof mentorDomainText>,
 	rule: (typeof DOMAIN_FIT_RULES)[number],
+	input: SearchMentorsInput,
 ): number {
 	let score = 0;
 	for (const term of rule.strongTerms) {
@@ -385,11 +397,18 @@ function marketingDomainFitScore(
 	if (includesTerm(text.title, "marketing")) score += 2;
 	if (includesTerm(text.expertise, "marketing")) score += 1;
 	if (includesTerm(text.disciplines, "marketing")) score += 1;
+	if (hasSpecialistMarketingIntent(input)) {
+		score += specialistMarketingScore(text);
+	}
 	return score;
 }
 
 function isClearlyNonMarketingTitle(title: string): boolean {
-	if (/\b(marketing|growth|cmo|go-to-market|gtm|demand generation|digital|performance|b2b)\b/i.test(title)) {
+	if (
+		/\b(marketing|growth|cmo|go-to-market|gtm|demand generation|digital|performance|b2b)\b/i.test(
+			title,
+		)
+	) {
 		return false;
 	}
 	return /\b(architect|engineer|engineering|developer|data scientist|designer|design|infrastructure|head of product|director of product|product manager|product management|customer success|business development|sales|founder|chief executive|ceo|cio|creative|storyteller|ai|expert in residence|coach|mentor|advisor|consultant)\b/i.test(
@@ -397,8 +416,13 @@ function isClearlyNonMarketingTitle(title: string): boolean {
 	);
 }
 
-function domainFitRuleFor(input: SearchMentorsInput): (typeof DOMAIN_FIT_RULES)[number] | undefined {
+function domainFitRuleFor(
+	input: SearchMentorsInput,
+): (typeof DOMAIN_FIT_RULES)[number] | undefined {
 	if (input.filters?.discipline?.trim().toLowerCase() === "growth") {
+		return DOMAIN_FIT_RULES.find((rule) => rule.name === "marketing");
+	}
+	if (hasSpecialistMarketingIntent(input)) {
 		return DOMAIN_FIT_RULES.find((rule) => rule.name === "marketing");
 	}
 	const haystack = [input.intent, input.filters?.discipline].filter(Boolean).join(" ");
@@ -408,12 +432,13 @@ function domainFitRuleFor(input: SearchMentorsInput): (typeof DOMAIN_FIT_RULES)[
 function matchesDomainFit(
 	mentor: SearchServiceMentor,
 	rule: (typeof DOMAIN_FIT_RULES)[number] | undefined,
+	input: SearchMentorsInput,
 ): boolean {
 	if (!rule) return true;
 	const text = mentorDomainText(mentor);
 
 	if (rule.name === "marketing") {
-		return matchesMarketingDomainFit(text, rule);
+		return matchesMarketingDomainFit(text, rule, input);
 	}
 
 	const roleStrongMatches = rule.strongTerms.filter((term) => includesTerm(text.role, term));
@@ -424,7 +449,7 @@ function matchesDomainFit(
 		(term) => includesTerm(text.role, term),
 	);
 	const companyHasSearchSignal = ["search", "recruiting", "staffing"].some((term) =>
-		includesTerm(text.company, term)
+		includesTerm(text.company, term),
 	);
 	return roleHasCoach && (roleHasCareerSignal || companyHasSearchSignal);
 }
@@ -432,6 +457,7 @@ function matchesDomainFit(
 function matchesMarketingDomainFit(
 	text: ReturnType<typeof mentorDomainText>,
 	rule: (typeof DOMAIN_FIT_RULES)[number],
+	input: SearchMentorsInput,
 ): boolean {
 	if (
 		hasTalentAcquisitionPollution(text.role) &&
@@ -440,43 +466,50 @@ function matchesMarketingDomainFit(
 	) {
 		return false;
 	}
+	if (
+		hasSpecialistMarketingIntent(input) &&
+		!hasSpecialistMarketingSignal(text.role) &&
+		!(hasProductMarketingIntent(input) && includesTerm(text.role, "product marketing"))
+	) {
+		return false;
+	}
 
 	const titleBioStrongMatches = rule.strongTerms.filter((term) =>
-		includesTerm(text.titleBio, term)
+		includesTerm(text.titleBio, term),
 	);
 	if (titleBioStrongMatches.length > 0) {
-		return marketingDomainFitScore(text, rule) >= MIN_MARKETING_DOMAIN_SCORE;
+		return marketingDomainFitScore(text, rule, { intent: "" }) >= MIN_MARKETING_DOMAIN_SCORE;
 	}
 
 	const expertiseStrongMatches = rule.strongTerms.filter((term) =>
-		includesTerm(text.expertise, term)
+		includesTerm(text.expertise, term),
 	);
 	if (expertiseStrongMatches.length > 0) {
-		return marketingDomainFitScore(text, rule) >= MIN_MARKETING_DOMAIN_SCORE;
+		return marketingDomainFitScore(text, rule, { intent: "" }) >= MIN_MARKETING_DOMAIN_SCORE;
 	}
 
 	const disciplineStrongMatches = rule.strongTerms.filter((term) =>
-		includesTerm(text.disciplines, term)
+		includesTerm(text.disciplines, term),
 	);
 	if (disciplineStrongMatches.length > 0) {
-		return marketingDomainFitScore(text, rule) >= MIN_MARKETING_DOMAIN_SCORE;
+		return marketingDomainFitScore(text, rule, { intent: "" }) >= MIN_MARKETING_DOMAIN_SCORE;
 	}
 
 	const expertiseHasGenericMarketing = includesTerm(text.expertise, "marketing");
 	if (expertiseHasGenericMarketing && hasMarketingCraftSignal(text.titleBio)) {
-		return marketingDomainFitScore(text, rule) >= MIN_MARKETING_DOMAIN_SCORE;
+		return marketingDomainFitScore(text, rule, { intent: "" }) >= MIN_MARKETING_DOMAIN_SCORE;
 	}
 
 	const companyStrongMatches = rule.strongTerms.filter((term) =>
-		includesTerm(text.company, term)
+		includesTerm(text.company, term),
 	);
 	const titleBioSupportingMatches = rule.supportingTerms.filter((term) =>
-		includesTerm(text.titleBio, term)
+		includesTerm(text.titleBio, term),
 	);
 	return (
 		companyStrongMatches.length > 0 &&
 		titleBioSupportingMatches.length > 0 &&
-		marketingDomainFitScore(text, rule) >= MIN_MARKETING_DOMAIN_SCORE
+		marketingDomainFitScore(text, rule, { intent: "" }) >= MIN_MARKETING_DOMAIN_SCORE
 	);
 }
 
@@ -511,6 +544,29 @@ function hasMarketingCraftSignal(value: string): boolean {
 	return /\b(growth|marketing|lifecycle|retention|customer acquisition|user acquisition|demand generation|paid media|paid social|seo|sem|conversion|crm|go-to-market|activation|funnel|experimentation)\b/i.test(
 		value,
 	);
+}
+
+function hasSpecialistMarketingIntent(input: SearchMentorsInput): boolean {
+	const haystack = [input.intent, input.filters?.discipline].filter(Boolean).join(" ");
+	return SPECIALIST_MARKETING_INTENT.test(haystack);
+}
+
+function specialistMarketingScore(text: ReturnType<typeof mentorDomainText>): number {
+	let score = 0;
+	if (hasSpecialistMarketingSignal(text.title)) score += 14;
+	if (hasSpecialistMarketingSignal(text.expertise)) score += 10;
+	if (hasSpecialistMarketingSignal(text.bio)) score += 8;
+	if (hasSpecialistMarketingSignal(text.disciplines)) score += 5;
+	return score;
+}
+
+function hasSpecialistMarketingSignal(value: string): boolean {
+	return SPECIALIST_MARKETING_SIGNAL.test(value);
+}
+
+function hasProductMarketingIntent(input: SearchMentorsInput): boolean {
+	const haystack = [input.intent, input.filters?.discipline].filter(Boolean).join(" ");
+	return /\bproduct marketing\b/i.test(haystack);
 }
 
 export async function searchMentors(
