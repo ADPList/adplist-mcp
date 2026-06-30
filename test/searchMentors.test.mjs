@@ -22,7 +22,8 @@ test("search_mentors instructs at most one search per user request (widget-stack
 	// Loose patterns on purpose: pin the constraint, not the exact wording.
 	assert.match(indexSource, /at most\s+once\s+per user request/i);
 	assert.match(indexSource, /every call renders another.{0,20}card grid/i);
-	assert.match(indexSource, /do not run multiple filter variations/i);
+	assert.match(indexSource, /do not run broad\/narrow\/fallback search variations/i);
+	assert.match(indexSource, /overfetches, reranks, and retries over-strict discipline filters/i);
 });
 
 test("search_mentors calls search-service Explore with compact filters", () => {
@@ -60,7 +61,7 @@ test("search_mentors expands weak taxonomy intents instead of forcing brittle di
 		}),
 	);
 	assert.doesNotMatch(leadershipGrowthUrl.searchParams.get("q"), /growth marketing acquisition/i);
-	assert.notEqual(leadershipGrowthUrl.searchParams.get("pageSize"), "36");
+	assert.notEqual(leadershipGrowthUrl.searchParams.get("pageSize"), "72");
 
 	const returnshipUrl = new URL(
 		buildUrl({
@@ -131,7 +132,16 @@ test("search_mentors overfetches candidates when a domain-fit gate is active", (
 			filters: { max_results: 6 },
 		}),
 	);
-	assert.equal(growthUrl.searchParams.get("pageSize"), "36");
+	assert.equal(growthUrl.searchParams.get("pageSize"), "72");
+
+	const gtmUrl = new URL(
+		buildUrl({
+			intent: "go-to-market mentor for a startup launch",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(gtmUrl.searchParams.get("pageSize"), "72");
+	assert.match(gtmUrl.searchParams.get("q"), /product marketing launch strategy/i);
 
 	const productUrl = new URL(
 		buildUrl({
@@ -418,10 +428,107 @@ test("search_mentors reranks marketing candidates by growth and product marketin
 		},
 	);
 
-	assert.deepEqual(result.mentors.map((mentor) => mentor.slug), [
-		"growth-lead",
-		"product-marketing",
-	]);
+	assert.deepEqual(result.mentors.map((mentor) => mentor.slug), ["growth-lead"]);
+});
+
+test("search_mentors ranks specialist growth marketing evidence over general marketing", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "General Marketing",
+					slug: "general-marketing",
+					title: "Marketing Manager",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["marketing"],
+				},
+				{
+					name: "Product Marketing",
+					slug: "product-marketing",
+					title: "Product Marketing Manager",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["product marketing"],
+				},
+				{
+					name: "Lifecycle Specialist",
+					slug: "lifecycle-specialist",
+					title: "Lifecycle Marketing Lead",
+					countryISO: "US",
+					expertise: ["retention", "activation"],
+					disciplines: ["marketing"],
+				},
+				{
+					name: "Demand Gen Specialist",
+					slug: "demand-gen-specialist",
+					title: "Demand Generation Lead",
+					countryISO: "US",
+					expertise: ["customer acquisition", "paid media"],
+					disciplines: ["growth marketing"],
+				},
+				{
+					name: "Product Growth",
+					slug: "product-growth",
+					title: "Head of Product Growth",
+					countryISO: "US",
+					expertise: ["experimentation", "conversion"],
+					disciplines: ["growth product management"],
+				},
+			],
+		},
+		{
+			intent: "US growth marketing mentors for customer acquisition retention lifecycle and go-to-market",
+			filters: { max_results: 9 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["demand-gen-specialist", "product-growth", "lifecycle-specialist"],
+	);
+});
+
+test("search_mentors keeps explicit product marketing candidates for hybrid GTM asks", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Product Marketing",
+					slug: "product-marketing",
+					title: "Product Marketing Manager",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["product marketing"],
+				},
+				{
+					name: "GTM Specialist",
+					slug: "gtm-specialist",
+					title: "Strategic GTM Architect",
+					countryISO: "US",
+					expertise: ["go-to-market", "customer acquisition"],
+					disciplines: ["product marketing"],
+				},
+				{
+					name: "Generic Marketing",
+					slug: "generic-marketing",
+					title: "Marketing Manager",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["marketing"],
+				},
+			],
+		},
+		{
+			intent: "product marketing mentor to help with go-to-market strategy",
+			filters: { max_results: 9 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["gtm-specialist", "product-marketing"],
+	);
 });
 
 test("search_mentors does not fill growth marketing results with weak broad-tag matches", () => {
@@ -486,7 +593,7 @@ test("search_mentors does not fill growth marketing results with weak broad-tag 
 
 	assert.deepEqual(
 		result.mentors.map((mentor) => mentor.slug),
-		["growth-lead", "product-marketing-lead"],
+		["growth-lead"],
 	);
 });
 
