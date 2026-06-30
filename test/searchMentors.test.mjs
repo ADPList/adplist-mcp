@@ -109,7 +109,7 @@ test("search_mentors maps common mentor photo aliases into profile_photo_url", (
 });
 
 test("search_mentors relaxes only discipline after a zero-result taxonomy mismatch", () => {
-	assert.match(source, /firstResult\.mentors\.length > 0 \|\| !input\.filters\?\.discipline/);
+	assert.match(source, /const relaxedInput = inputWithoutDiscipline\(input\)/);
 	assert.match(
 		source,
 		/const \{ discipline: _discipline, \.\.\.relaxedFilters \} = input\.filters/,
@@ -429,11 +429,71 @@ test("search_mentors merges the user's own ADPList profile into the search query
 		assert.equal(profileCall.init.headers.Authorization, "Bearer cognito-token");
 
 		const searchCall = calls.find((c) => c.url.includes("/search?"));
+		const searchCalls = calls.filter((c) => c.url.includes("/search?"));
+		assert.equal(searchCalls.length, 2);
 		const q = new URL(searchCall.url).searchParams.get("q");
 		assert.match(q, /Senior Product Manager at Finch Fintech/);
 		assert.match(q, /product management/);
 		assert.match(q, /transition into UX research/);
 		assert.match(q, /Current request: help running first discovery interviews/);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors retries the bare intent when profile enrichment returns no mentors", async () => {
+	const originalFetch = globalThis.fetch;
+	const searchCalls = [];
+	globalThis.fetch = async (url) => {
+		const href = String(url);
+		if (href.includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
+
+		searchCalls.push(href);
+		const q = new URL(href).searchParams.get("q");
+		if (q.includes("Current request:")) {
+			return jsonResponse({ results: [], queryID: "profile-query", indexUsed: "explore" });
+		}
+		return jsonResponse({
+			results: [
+				{
+					name: "Growth Mentor",
+					slug: "growth-mentor",
+					title: "Head of Growth Marketing",
+					employer: "Acme",
+					countryISO: "US",
+					expertise: ["marketing"],
+					total_sessions: 22,
+					next_7_day_slots_count: 1,
+				},
+			],
+			queryID: "bare-query",
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+				PROFILE_DB: EMPTY_PROFILE_DB,
+			},
+			AUTHED_PROPS,
+			{
+				intent: "US growth marketing mentor for retention and lifecycle",
+				filters: { country: "US", max_results: 6 },
+			},
+		);
+
+		assert.equal(searchCalls.length, 2);
+		assert.match(new URL(searchCalls[0]).searchParams.get("q"), /Current request:/);
+		const bareQuery = new URL(searchCalls[1]).searchParams.get("q");
+		assert.match(bareQuery, /^US growth marketing mentor for retention and lifecycle/);
+		assert.doesNotMatch(bareQuery, /Current request:/);
+		assert.equal(result.mentors.length, 1);
+		assert.equal(result.mentors[0].slug, "growth-mentor");
+		assert.equal(result.queryID, "bare-query");
+		assert.deepEqual(result.relaxed_filters, ["profile_context"]);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

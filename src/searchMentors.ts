@@ -426,26 +426,58 @@ export async function searchMentors(
 	};
 
 	const firstResult = await fetchAndMapSearchMentors(baseUrl, props, searchInput, input);
-	if (firstResult.mentors.length > 0 || !input.filters?.discipline) return firstResult;
+	if (firstResult.mentors.length > 0) return firstResult;
 
-	const { discipline: _discipline, ...relaxedFilters } = input.filters;
-	const relaxedInput = {
-		...input,
-		filters: Object.keys(relaxedFilters).length > 0 ? relaxedFilters : undefined,
-	};
-	const relaxedSearchInput = {
-		...searchInput,
-		filters: relaxedInput.filters,
-	};
-	const relaxedResult = await fetchAndMapSearchMentors(
+	const relaxedInput = inputWithoutDiscipline(input);
+	let emptyRelaxedResult: SearchMentorsOutput | null = null;
+	if (relaxedInput) {
+		const relaxedSearchInput = {
+			...searchInput,
+			filters: relaxedInput.filters,
+		};
+		const relaxedResult = await fetchAndMapSearchMentors(
+			baseUrl,
+			props,
+			relaxedSearchInput,
+			relaxedInput,
+		);
+		if (relaxedResult.mentors.length > 0) {
+			return { ...relaxedResult, relaxed_filters: ["discipline"] };
+		}
+		emptyRelaxedResult = relaxedResult;
+	}
+
+	if (!profileText.trim()) {
+		return emptyRelaxedResult
+			? { ...emptyRelaxedResult, relaxed_filters: ["discipline"] }
+			: firstResult;
+	}
+
+	const bareResult = await fetchAndMapSearchMentors(baseUrl, props, input, input);
+	if (bareResult.mentors.length > 0) {
+		return { ...bareResult, relaxed_filters: ["profile_context"] };
+	}
+
+	if (!relaxedInput) return { ...bareResult, relaxed_filters: ["profile_context"] };
+
+	const bareRelaxedResult = await fetchAndMapSearchMentors(
 		baseUrl,
 		props,
-		relaxedSearchInput,
+		relaxedInput,
 		relaxedInput,
 	);
 	return {
-		...relaxedResult,
-		relaxed_filters: ["discipline"],
+		...bareRelaxedResult,
+		relaxed_filters: ["profile_context", "discipline"],
+	};
+}
+
+function inputWithoutDiscipline(input: SearchMentorsInput): SearchMentorsInput | null {
+	if (!input.filters?.discipline) return null;
+	const { discipline: _discipline, ...relaxedFilters } = input.filters;
+	return {
+		...input,
+		filters: Object.keys(relaxedFilters).length > 0 ? relaxedFilters : undefined,
 	};
 }
 
