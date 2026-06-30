@@ -63,6 +63,50 @@ test("search_mentors expands weak taxonomy intents instead of forcing brittle di
 	assert.equal(productUrl.searchParams.get("disciplines"), "product design");
 });
 
+test("search_mentors infers US country filter from natural language intent", () => {
+	const url = new URL(
+		buildUrl({
+			intent: "Find US growth marketing mentors for retention",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(url.searchParams.get("countries"), "US");
+
+	const lowerCasePronounUrl = new URL(
+		buildUrl({
+			intent: "help us find growth marketing mentors",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(lowerCasePronounUrl.searchParams.has("countries"), false);
+
+	const outsideUsUrl = new URL(
+		buildUrl({
+			intent: "find growth marketing mentors outside the US",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(outsideUsUrl.searchParams.has("countries"), false);
+
+	const enrichedProfileOnlyUrl = new URL(
+		buildUrl({
+			intent:
+				"Stored ADPList career context: Role: Founder. Based in United States\nCurrent request: find growth marketing mentors",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(enrichedProfileOnlyUrl.searchParams.has("countries"), false);
+
+	const enrichedRequestUrl = new URL(
+		buildUrl({
+			intent:
+				"Stored ADPList career context: Role: Founder. Based in Canada\nCurrent request: find US growth marketing mentors",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(enrichedRequestUrl.searchParams.get("countries"), "US");
+});
+
 test("search_mentors overfetches candidates when a domain-fit gate is active", () => {
 	const growthUrl = new URL(
 		buildUrl({
@@ -208,6 +252,36 @@ test("search_mentors enforces requested country from upstream country fields", (
 	assert.equal(result.mentors[0].country_iso, "US");
 });
 
+test("search_mentors enforces country inferred from intent when Claude omits the filter", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "US Growth Mentor",
+					slug: "us-growth",
+					title: "Growth Marketing Lead",
+					countryISO: "US",
+					expertise: ["growth marketing"],
+				},
+				{
+					name: "Canada Growth Mentor",
+					slug: "canada-growth",
+					title: "Growth Marketing Lead",
+					countryISO: "CA",
+					expertise: ["growth marketing"],
+				},
+			],
+		},
+		{
+			intent: "US growth marketing mentor for retention",
+			filters: { max_results: 6 },
+		},
+	);
+
+	assert.equal(result.mentors.length, 1);
+	assert.equal(result.mentors[0].slug, "us-growth");
+});
+
 test("search_mentors removes design-only mentors for marketing intents", () => {
 	const result = mapSearchMentorsResponse(
 		{
@@ -265,6 +339,76 @@ test("search_mentors removes design-only mentors for marketing intents", () => {
 		result.mentors.map((mentor) => mentor.slug),
 		["growth-marketer", "ta-growth-craft"],
 	);
+});
+
+test("search_mentors reranks marketing candidates by growth and product marketing evidence", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Generic Marketing",
+					slug: "generic-marketing",
+					title: "Marketing Project Manager",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["event marketing"],
+				},
+				{
+					name: "Product Marketing",
+					slug: "product-marketing",
+					title: "Founder",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["product marketing"],
+				},
+				{
+					name: "Growth Lead",
+					slug: "growth-lead",
+					title: "Head of Product Growth",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["growth product management", "growth hacking"],
+				},
+				{
+					name: "Technical Broad Tags",
+					slug: "technical-broad-tags",
+					title: "Solution Architect",
+					countryISO: "US",
+					expertise: ["marketing", "product"],
+					disciplines: ["growth product management", "product marketing"],
+				},
+				{
+					name: "Generic Marketing Two",
+					slug: "generic-marketing-two",
+					title: "Marketing Coordinator",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["event marketing"],
+				},
+				{
+					name: "Generic Marketing Three",
+					slug: "generic-marketing-three",
+					title: "Marketing Manager",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["event marketing"],
+				},
+			],
+		},
+		{
+			intent: "US growth marketing mentors",
+			filters: { max_results: 6 },
+		},
+	);
+
+	assert.deepEqual(result.mentors.map((mentor) => mentor.slug), [
+		"growth-lead",
+		"product-marketing",
+		"generic-marketing",
+		"generic-marketing-two",
+		"generic-marketing-three",
+		"technical-broad-tags",
+	]);
 });
 
 test("search_mentors removes product-only mentors for career coaching and returnship intents", () => {
