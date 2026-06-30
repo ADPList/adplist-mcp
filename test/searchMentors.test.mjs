@@ -63,6 +63,24 @@ test("search_mentors expands weak taxonomy intents instead of forcing brittle di
 	assert.equal(productUrl.searchParams.get("disciplines"), "product design");
 });
 
+test("search_mentors overfetches candidates when a domain-fit gate is active", () => {
+	const growthUrl = new URL(
+		buildUrl({
+			intent: "need a growth marketing mentor for activation and retention",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(growthUrl.searchParams.get("pageSize"), "36");
+
+	const productUrl = new URL(
+		buildUrl({
+			intent: "product design mentor",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(productUrl.searchParams.get("pageSize"), "6");
+});
+
 test("search_mentors preserves booking attribution and trims LLM output", () => {
 	assert.match(source, /queryID/);
 	assert.match(source, /expertise\.filter\(Boolean\)\.slice\(0, 3\)/);

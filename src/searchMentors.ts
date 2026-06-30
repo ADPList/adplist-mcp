@@ -193,7 +193,7 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 	url.searchParams.set("provider", "explore");
 	url.searchParams.set("q", clampUtf8Bytes(expandedIntent, ALGOLIA_QUERY_MAX_BYTES));
 	url.searchParams.set("page", "1");
-	url.searchParams.set("pageSize", String(searchPageSize(filters)));
+	url.searchParams.set("pageSize", String(searchPageSize(input)));
 	if (filters.discipline && shouldUseDisciplineFilter(filters.discipline))
 		url.searchParams.set("disciplines", filters.discipline.trim().toLowerCase());
 	if (filters.country) url.searchParams.set("countries", filters.country.trim().toUpperCase());
@@ -201,10 +201,12 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 	return url.toString();
 }
 
-function searchPageSize(filters: SearchMentorsFilters): number {
-	return filters.country || filters.language
-		? FILTERED_CANDIDATE_PAGE_SIZE
-		: normalizeMaxResults(filters.max_results);
+function searchPageSize(input: SearchMentorsInput): number {
+	const filters = input.filters ?? {};
+	if (filters.country || filters.language || domainFitRuleFor(input)) {
+		return FILTERED_CANDIDATE_PAGE_SIZE;
+	}
+	return normalizeMaxResults(filters.max_results);
 }
 
 function expandIntentForSearch(intent: string): string {
