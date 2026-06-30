@@ -45,6 +45,23 @@ test("search_mentors expands weak taxonomy intents instead of forcing brittle di
 	assert.equal(growthUrl.searchParams.has("disciplines"), false);
 	assert.match(growthUrl.searchParams.get("q"), /growth marketing acquisition/i);
 
+	const broadGrowthUrl = new URL(
+		buildUrl({
+			intent: "US growth mentors",
+			filters: { discipline: "Growth" },
+		}),
+	);
+	assert.equal(broadGrowthUrl.searchParams.has("disciplines"), false);
+	assert.match(broadGrowthUrl.searchParams.get("q"), /growth marketing acquisition/i);
+
+	const leadershipGrowthUrl = new URL(
+		buildUrl({
+			intent: "leadership growth mentor",
+		}),
+	);
+	assert.doesNotMatch(leadershipGrowthUrl.searchParams.get("q"), /growth marketing acquisition/i);
+	assert.notEqual(leadershipGrowthUrl.searchParams.get("pageSize"), "36");
+
 	const returnshipUrl = new URL(
 		buildUrl({
 			intent: "career coach for returnship after a career break",
@@ -470,6 +487,106 @@ test("search_mentors does not fill growth marketing results with weak broad-tag 
 	assert.deepEqual(
 		result.mentors.map((mentor) => mentor.slug),
 		["growth-lead", "product-marketing-lead"],
+	);
+});
+
+test("search_mentors gates broader growth retries with marketing fit", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "CRM Consultant",
+					slug: "crm-consultant",
+					title: "Microsoft Dynamics 365/CRM/Power Apps Consultant",
+					countryISO: "US",
+					expertise: ["no/low code", "engineering", "product"],
+					disciplines: ["growth"],
+				},
+				{
+					name: "Product Designer",
+					slug: "product-designer",
+					title: "Sr Director Product Design",
+					countryISO: "US",
+					expertise: ["design", "product"],
+					disciplines: ["growth"],
+				},
+				{
+					name: "Founder",
+					slug: "founder",
+					title: "Founder",
+					countryISO: "US",
+					expertise: ["marketing", "product"],
+					disciplines: ["growth"],
+				},
+				{
+					name: "Growth Marketer",
+					slug: "growth-marketer",
+					title: "Growth Marketing Lead",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["growth"],
+				},
+				{
+					name: "Product Growth",
+					slug: "product-growth",
+					title: "Head of Product Growth",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["growth product management"],
+				},
+			],
+		},
+		{
+			intent: "US growth mentors",
+			filters: { discipline: "Growth", max_results: 9 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["growth-marketer", "product-growth"],
+	);
+});
+
+test("search_mentors keeps marketing-adjacent consultants while filtering CRM consultants", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "CRM Consultant",
+					slug: "crm-consultant",
+					title: "Microsoft Dynamics 365/CRM/Power Apps Consultant",
+					countryISO: "US",
+					expertise: ["no/low code", "engineering", "product"],
+					disciplines: ["growth"],
+				},
+				{
+					name: "Digital Consultant",
+					slug: "digital-consultant",
+					title: "Digital Strategy Consultant",
+					countryISO: "US",
+					expertise: ["digital marketing", "performance marketing"],
+					disciplines: ["marketing"],
+				},
+				{
+					name: "Performance Consultant",
+					slug: "performance-consultant",
+					title: "Performance Consultant",
+					countryISO: "US",
+					expertise: ["paid media", "conversion"],
+					disciplines: ["marketing"],
+				},
+			],
+		},
+		{
+			intent: "US growth marketing mentors",
+			filters: { max_results: 9 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["digital-consultant", "performance-consultant"],
 	);
 });
 
