@@ -12,7 +12,9 @@
 	"vars": {
 		"AUTH_SERVICE_URL": "https://api.adplist.org",
 		"SEARCH_SERVICE_URL": "https://api.adplist.org",
-		"MEETINGS_SERVICE_URL": "https://api.adplist.org"
+		"MEETINGS_SERVICE_URL": "https://api.adplist.org",
+		"WELCOME_EMAIL_FROM_EMAIL": "felix@adplist.org",
+		"WELCOME_EMAIL_FROM_NAME": "Felix Lee"
 	},
 	"routes": [
 		{

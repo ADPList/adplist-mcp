@@ -1,5 +1,4 @@
 const SENDGRID_MAIL_SEND_URL = "https://api.sendgrid.com/v3/mail/send";
-const WELCOME_EMAIL_LEASE_SECONDS = 15 * 60;
 const DEFAULT_FROM_EMAIL = "felix@adplist.org";
 const DEFAULT_FROM_NAME = "Felix Lee";
 const DEFAULT_SUBJECT = "You just connected ADPList to Claude 🎉";
@@ -36,18 +35,29 @@ export async function sendWelcomeEmailOnce(env: Env, input: WelcomeEmailInput): 
 		const claimed = await claimWelcomeEmailSend(env, input.userId, nowSeconds);
 		if (!claimed) return;
 
+		const firstName = await fetchWelcomeFirstName(env, input.accessToken).catch(() => "");
 		try {
-			const firstName = await fetchWelcomeFirstName(env, input.accessToken).catch(() => "");
 			await triggerSendGridWelcomeEmail(env, {
 				email: input.email,
 				firstName: firstName || input.firstName || "",
 				gifUrl: welcomeEmailGifUrl(env, input.origin),
 			});
-			await markWelcomeEmailSent(env, input.userId, Math.floor(Date.now() / 1000));
 		} catch (error) {
 			await releaseWelcomeEmailClaim(env, input.userId);
 			console.warn(
 				JSON.stringify({ event: "welcome_email_send_failed", error: String(error) }),
+			);
+			return;
+		}
+
+		try {
+			await markWelcomeEmailSent(env, input.userId, Math.floor(Date.now() / 1000));
+		} catch (error) {
+			console.warn(
+				JSON.stringify({
+					event: "welcome_email_mark_sent_failed_after_send",
+					error: String(error),
+				}),
 			);
 		}
 	} catch (error) {
@@ -69,15 +79,14 @@ async function claimWelcomeEmailSend(
 		.bind(userId)
 		.run();
 
-	const staleBefore = nowSeconds - WELCOME_EMAIL_LEASE_SECONDS;
 	const result = await env.PROFILE_DB.prepare(
 		`UPDATE user_mcp_welcome
 		 SET welcome_email_in_flight_at = ?
 		 WHERE user_id = ?
 		   AND welcome_email_sent_at IS NULL
-		   AND (welcome_email_in_flight_at IS NULL OR welcome_email_in_flight_at < ?)`,
+		   AND welcome_email_in_flight_at IS NULL`,
 	)
-		.bind(nowSeconds, userId, staleBefore)
+		.bind(nowSeconds, userId)
 		.run();
 
 	return (result.meta.changes ?? 0) > 0;
@@ -147,8 +156,8 @@ async function triggerSendGridWelcomeEmail(
 		},
 		body: JSON.stringify({
 			personalizations: [{ to: [{ email: input.email }] }],
-			from: { email: DEFAULT_FROM_EMAIL, name: DEFAULT_FROM_NAME },
-			reply_to: { email: DEFAULT_FROM_EMAIL, name: DEFAULT_FROM_NAME },
+			from: { email: welcomeEmailFromEmail(env), name: welcomeEmailFromName(env) },
+			reply_to: { email: welcomeEmailFromEmail(env), name: welcomeEmailFromName(env) },
 			subject: DEFAULT_SUBJECT,
 			content: [
 				{ type: "text/plain", value: welcomeEmailText(input.firstName) },
@@ -162,7 +171,7 @@ async function triggerSendGridWelcomeEmail(
 }
 
 function welcomeEmailText(firstName: string): string {
-	return `Hey ${firstName},
+	return `Hey ${welcomeGreetingName(firstName)},
 
 
 You're in. ADPList is now connected to Claude, which means you can book a mentor without ever leaving your chat.
@@ -197,7 +206,7 @@ function welcomeEmailHtml(firstName: string, gifUrl: string): string {
 <html>
 	<body style="margin:0;padding:0;background:#ffffff;color:#1f2328;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.55;">
 		<div style="max-width:640px;margin:0 auto;padding:32px 24px;">
-			<p>Hey ${escapeHtml(firstName)},</p>
+			<p>Hey ${escapeHtml(welcomeGreetingName(firstName))},</p>
 			<p>You're in. ADPList is now connected to Claude, which means you can book a mentor without ever leaving your chat.</p>
 			<p>Try this first: ask Claude something like<br><strong>&ldquo;Book me a mentor who can help me prep for a product design interview.&rdquo;</strong></p>
 			<p>It'll find the right expert from 40K+ mentors and set up the call for you.</p>
@@ -210,6 +219,18 @@ function welcomeEmailHtml(firstName: string, gifUrl: string): string {
 		</div>
 	</body>
 </html>`;
+}
+
+function welcomeGreetingName(firstName: string): string {
+	return firstName.trim() || "there";
+}
+
+function welcomeEmailFromEmail(env: Env): string {
+	return env.WELCOME_EMAIL_FROM_EMAIL || DEFAULT_FROM_EMAIL;
+}
+
+function welcomeEmailFromName(env: Env): string {
+	return env.WELCOME_EMAIL_FROM_NAME || DEFAULT_FROM_NAME;
 }
 
 function welcomeEmailGifUrl(env: Env, origin: string | undefined): string {

@@ -30,6 +30,25 @@ test("sendWelcomeEmailOnce sends the SendGrid welcome email and marks the user w
 	assert.equal(env.rows.get("user-1").welcome_email_in_flight_at, null);
 });
 
+test("sendWelcomeEmailOnce uses configured sender details", async () => {
+	const env = {
+		...createEnv(),
+		WELCOME_EMAIL_FROM_EMAIL: "hello@adplist.org",
+		WELCOME_EMAIL_FROM_NAME: "ADPList",
+	};
+	const calls = await withFetch(async () => {
+		await sendWelcomeEmailOnce(env, {
+			userId: "user-1",
+			email: "ada@example.com",
+			nowSeconds: 1_000,
+		});
+	});
+
+	const body = JSON.parse(calls[0].body);
+	assert.deepEqual(body.from, { email: "hello@adplist.org", name: "ADPList" });
+	assert.deepEqual(body.reply_to, { email: "hello@adplist.org", name: "ADPList" });
+});
+
 test("sendWelcomeEmailOnce skips users who were already welcomed", async () => {
 	const env = createEnv();
 	env.rows.set("user-1", {
@@ -83,6 +102,23 @@ test("sendWelcomeEmailOnce prefers first name from the ADPList profile", async (
 	assert.match(sendGridBody.content[1].value, /Hey Grace,/);
 });
 
+test("sendWelcomeEmailOnce falls back to a generic greeting without a first name", async () => {
+	const env = createEnv();
+
+	const calls = await withFetch(async () => {
+		await sendWelcomeEmailOnce(env, {
+			userId: "user-1",
+			email: "ada@example.com",
+			firstName: "",
+			nowSeconds: 1_000,
+		});
+	});
+
+	const body = JSON.parse(calls[0].body);
+	assert.match(body.content[0].value, /Hey there,/);
+	assert.match(body.content[1].value, /Hey there,/);
+});
+
 test("sendWelcomeEmailOnce does not mark welcomed when SendGrid fails", async () => {
 	const env = createEnv();
 
@@ -102,6 +138,27 @@ test("sendWelcomeEmailOnce does not mark welcomed when SendGrid fails", async ()
 	assert.equal(env.rows.get("user-1").welcome_email_in_flight_at, null);
 });
 
+test("sendWelcomeEmailOnce keeps the claim if marking sent fails after SendGrid accepts", async () => {
+	const env = createEnv({ failMarkSent: true });
+
+	const calls = await withFetch(async () => {
+		await sendWelcomeEmailOnce(env, {
+			userId: "user-1",
+			email: "ada@example.com",
+			nowSeconds: 1_000,
+		});
+		await sendWelcomeEmailOnce(env, {
+			userId: "user-1",
+			email: "ada@example.com",
+			nowSeconds: 2_000,
+		});
+	});
+
+	assert.equal(calls.length, 1);
+	assert.equal(env.rows.get("user-1").welcome_email_sent_at, null);
+	assert.equal(env.rows.get("user-1").welcome_email_in_flight_at, 1_000);
+});
+
 test("sendWelcomeEmailOnce uses the D1 lease to avoid duplicate concurrent sends", async () => {
 	const env = createEnv();
 	env.rows.set("user-1", {
@@ -116,7 +173,7 @@ test("sendWelcomeEmailOnce uses the D1 lease to avoid duplicate concurrent sends
 		await sendWelcomeEmailOnce(env, {
 			userId: "user-1",
 			email: "ada@example.com",
-			nowSeconds: 1_000,
+			nowSeconds: 3_000,
 		});
 	});
 
@@ -139,23 +196,25 @@ test("sendWelcomeEmailOnce skips when email or SendGrid config is missing", asyn
 	assert.equal(env.rows.has("user-1"), false);
 });
 
-function createEnv() {
+function createEnv(options = {}) {
 	const rows = new Map();
 	return {
 		SENDGRID_API_KEY: "sendgrid-key",
+		...options,
 		rows,
 		PROFILE_DB: {
 			prepare(sql) {
-				return new Statement(rows, sql);
+				return new Statement(rows, sql, options);
 			},
 		},
 	};
 }
 
 class Statement {
-	constructor(rows, sql) {
+	constructor(rows, sql, options) {
 		this.rows = rows;
 		this.sql = sql;
+		this.options = options;
 		this.values = [];
 	}
 
@@ -190,13 +249,12 @@ class Statement {
 			return { meta: { changes: 0 } };
 		}
 		if (/SET welcome_email_in_flight_at = \?/.test(this.sql)) {
-			const [nowSeconds, userId, staleBefore] = this.values;
+			const [nowSeconds, userId] = this.values;
 			const row = this.rows.get(userId);
 			if (
 				row &&
 				row.welcome_email_sent_at === null &&
-				(row.welcome_email_in_flight_at === null ||
-					row.welcome_email_in_flight_at < staleBefore)
+				row.welcome_email_in_flight_at === null
 			) {
 				row.welcome_email_in_flight_at = nowSeconds;
 				return { meta: { changes: 1 } };
@@ -204,6 +262,7 @@ class Statement {
 			return { meta: { changes: 0 } };
 		}
 		if (/SET welcome_email_sent_at = \?/.test(this.sql)) {
+			if (this.options.failMarkSent) throw new Error("mark sent failed");
 			const [sentAt, userId] = this.values;
 			const row = this.rows.get(userId);
 			if (row) {
