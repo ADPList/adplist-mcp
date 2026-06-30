@@ -706,7 +706,7 @@ function buildWhyMatch(mentor: SearchServiceMentor, input: SearchMentorsInput): 
 		["discipline", disciplines.join(" ")],
 		["bio", mentor.bio],
 	] as const;
-	const intentTerms = intentSignalTerms(input.intent);
+	const intentTerms = intentSignalTerms(expandIntentForSearch(input));
 	const matchedFields = searchableFields
 		.map(([field, value]) => ({
 			field,
@@ -775,6 +775,9 @@ const STOP_WORDS = new Set([
 	"want",
 	"someone",
 	"career",
+	"related",
+	"signal",
+	"signals",
 ]);
 
 function matchedTerms(value: unknown, terms: string[]): string[] {

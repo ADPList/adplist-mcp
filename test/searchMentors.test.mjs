@@ -765,6 +765,33 @@ test("why_match cites matched fields instead of only restating expertise tags", 
 	assert.doesNotMatch(result.mentors[0].why_match, /^Strong in marketing/i);
 });
 
+test("why_match explains taxonomy-expanded GTM matches", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Parth",
+					slug: "parth",
+					title: "Senior Marketing Manager - Demand Generation",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["marketing"],
+					next_7_day_slots_count: 4,
+				},
+			],
+		},
+		{
+			intent: "go-to-market mentor for a startup launch in the US",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.match(result.mentors[0].why_match, /title mentions/i);
+	assert.match(result.mentors[0].why_match, /marketing/i);
+	assert.match(result.mentors[0].why_match, /demand/i);
+	assert.doesNotMatch(result.mentors[0].why_match, /^Based in US; has availability/i);
+});
+
 test("search_mentors does not retry when the constrained search has mentors", async () => {
 	const originalFetch = globalThis.fetch;
 	const calls = [];
