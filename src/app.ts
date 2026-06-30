@@ -3,7 +3,7 @@ import { html, raw } from "hono/html";
 import { MCP_SCOPES } from "./config";
 import { sendOtp, verifyOtp } from "./adplistAuth";
 import { accessTokenExpiresAt, persistRefreshTokenOnSignIn } from "./adplistTokenRefresh";
-import { sendWelcomeEmailOnce } from "./welcomeEmail";
+import { recordMcpConnectionSuccess, sendWelcomeEmailOnce } from "./welcomeEmail";
 import type { Bindings, McpUserProps, StoredLogin, StoredRevoke } from "./types";
 
 const LOGIN_TTL_SECONDS = 60 * 60;
@@ -213,6 +213,10 @@ app.post("/oauth/verify", async (c) => {
 		);
 	}
 
+	await recordMcpConnectionSuccess(c.env, {
+		userId: verified.userId,
+		email: stored.email,
+	});
 	if (stored.email) {
 		c.executionCtx.waitUntil(
 			sendWelcomeEmailOnce(c.env, {

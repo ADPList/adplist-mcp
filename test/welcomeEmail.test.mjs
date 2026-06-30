@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sendWelcomeEmailOnce } from "../src/welcomeEmail.ts";
+import { recordMcpConnectionSuccess, sendWelcomeEmailOnce } from "../src/welcomeEmail.ts";
 
 test("sendWelcomeEmailOnce sends the SendGrid welcome email and marks the user welcomed", async () => {
 	const env = createEnv();
@@ -28,6 +28,30 @@ test("sendWelcomeEmailOnce sends the SendGrid welcome email and marks the user w
 	assert.match(body.content[1].value, /https:\/\/mcp\.adplist\.org\/assets\/claude-mcp\.gif/);
 	assert.equal(env.rows.get("user-1").welcome_email_sent_at > 0, true);
 	assert.equal(env.rows.get("user-1").welcome_email_in_flight_at, null);
+});
+
+test("recordMcpConnectionSuccess records first and latest MCP OAuth verify success", async () => {
+	const env = createEnv();
+
+	await recordMcpConnectionSuccess(env, {
+		userId: "user-1",
+		email: "ada@example.com",
+		nowSeconds: 1_000,
+	});
+	await recordMcpConnectionSuccess(env, {
+		userId: "user-1",
+		email: "new@example.com",
+		nowSeconds: 2_000,
+	});
+
+	assert.deepEqual(env.rows.get("user-1"), {
+		user_id: "user-1",
+		welcome_email_sent_at: null,
+		welcome_email_in_flight_at: null,
+		first_connected_at: 1_000,
+		last_connected_at: 2_000,
+		connected_email: "ada@example.com",
+	});
 });
 
 test("sendWelcomeEmailOnce uses configured sender details", async () => {
@@ -243,10 +267,32 @@ class Statement {
 					user_id: userId,
 					welcome_email_sent_at: null,
 					welcome_email_in_flight_at: null,
+					first_connected_at: null,
+					last_connected_at: null,
+					connected_email: null,
 				});
 				return { meta: { changes: 1 } };
 			}
 			return { meta: { changes: 0 } };
+		}
+		if (/INSERT INTO user_mcp_welcome/.test(this.sql)) {
+			const [userId, firstConnectedAt, lastConnectedAt, connectedEmail] = this.values;
+			const existing = this.rows.get(userId);
+			if (existing) {
+				existing.first_connected_at ??= firstConnectedAt;
+				existing.last_connected_at = lastConnectedAt;
+				existing.connected_email ??= connectedEmail;
+				return { meta: { changes: 1 } };
+			}
+			this.rows.set(userId, {
+				user_id: userId,
+				welcome_email_sent_at: null,
+				welcome_email_in_flight_at: null,
+				first_connected_at: firstConnectedAt,
+				last_connected_at: lastConnectedAt,
+				connected_email: connectedEmail,
+			});
+			return { meta: { changes: 1 } };
 		}
 		if (/SET welcome_email_in_flight_at = \?/.test(this.sql)) {
 			const [nowSeconds, userId] = this.values;

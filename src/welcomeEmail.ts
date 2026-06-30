@@ -12,9 +12,42 @@ type WelcomeEmailInput = {
 	nowSeconds?: number;
 };
 
+type McpConnectionInput = {
+	userId: string;
+	email?: string | null;
+	nowSeconds?: number;
+};
+
 type WelcomeProfileRow = {
 	welcome_email_sent_at: number | null;
 };
+
+export async function recordMcpConnectionSuccess(
+	env: Env,
+	input: McpConnectionInput,
+): Promise<void> {
+	try {
+		if (!input.userId) return;
+		const nowSeconds = input.nowSeconds ?? Math.floor(Date.now() / 1000);
+		await env.PROFILE_DB.prepare(
+			`INSERT INTO user_mcp_welcome (
+				 user_id,
+				 first_connected_at,
+				 last_connected_at,
+				 connected_email
+			 )
+			 VALUES (?, ?, ?, ?)
+			 ON CONFLICT(user_id) DO UPDATE SET
+				 first_connected_at = COALESCE(user_mcp_welcome.first_connected_at, excluded.first_connected_at),
+				 last_connected_at = excluded.last_connected_at,
+				 connected_email = COALESCE(user_mcp_welcome.connected_email, excluded.connected_email)`,
+		)
+			.bind(input.userId, nowSeconds, nowSeconds, input.email ?? null)
+			.run();
+	} catch (error) {
+		console.warn(JSON.stringify({ event: "mcp_connection_audit_failed", error: String(error) }));
+	}
+}
 
 export async function sendWelcomeEmailOnce(env: Env, input: WelcomeEmailInput): Promise<void> {
 	try {
