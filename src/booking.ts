@@ -59,7 +59,7 @@ export type BookSessionOutput = {
 	expected_confirmation_time: string;
 };
 
-const DEFAULT_DAYS = 14;
+const DEFAULT_DAYS = 30;
 const MAX_DAYS = 30;
 const MAX_SLOTS = 20;
 

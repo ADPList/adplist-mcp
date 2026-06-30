@@ -207,7 +207,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"list_availability",
 			{
 				description:
-					"List available ADPList mentorship booking slots for a mentor over the next N days. Use this after search_mentors when the user has picked a mentor. Returns at most 20 compact UTC slots plus a localized display string. MCP Apps hosts should render the attached clean Airbnb-like date/time picker; always ask the user to confirm the exact selected slot before booking. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
+					"List available ADPList mentorship booking slots for a mentor over the next N days. Defaults to 30 days so mentors with sparse near-term availability are not incorrectly shown as unavailable. Use this after search_mentors when the user has picked a mentor. Returns at most 20 compact UTC slots plus a localized display string. MCP Apps hosts should render the attached clean Airbnb-like date/time picker; always ask the user to confirm the exact selected slot before booking. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
 				_meta: appToolMeta(UI_RESOURCES.slotPicker),
 				annotations: {
 					title: "List mentor availability",
@@ -228,7 +228,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.min(1)
 						.max(30)
 						.optional()
-						.describe("Lookahead window in days. Defaults to 14, max 30."),
+						.describe("Lookahead window in days. Defaults to 30, max 30."),
 				},
 			},
 			async (input) =>
