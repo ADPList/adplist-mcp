@@ -79,6 +79,14 @@ test("search_mentors overfetches candidates when a domain-fit gate is active", (
 		}),
 	);
 	assert.equal(productUrl.searchParams.get("pageSize"), "6");
+
+	const talentAcquisitionUrl = new URL(
+		buildUrl({
+			intent: "talent acquisition mentor",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(talentAcquisitionUrl.searchParams.get("pageSize"), "6");
 });
 
 test("search_mentors preserves booking attribution and trims LLM output", () => {
@@ -222,11 +230,27 @@ test("search_mentors removes design-only mentors for marketing intents", () => {
 					disciplines: ["design"],
 				},
 				{
+					name: "Talent Acquisition Product Leader",
+					slug: "talent-acquisition-product",
+					title: "Product Design Lead",
+					countryISO: "US",
+					expertise: ["talent acquisition", "marketing"],
+					disciplines: ["product", "design"],
+				},
+				{
 					name: "Growth Marketer",
 					slug: "growth-marketer",
 					title: "Growth Marketing Lead",
 					countryISO: "US",
 					expertise: ["lifecycle marketing", "retention"],
+					disciplines: ["marketing"],
+				},
+				{
+					name: "Talent Acquisition With Growth Craft",
+					slug: "ta-growth-craft",
+					title: "Talent Acquisition Lead",
+					countryISO: "US",
+					expertise: ["customer acquisition", "demand generation"],
 					disciplines: ["marketing"],
 				},
 			],
@@ -239,7 +263,7 @@ test("search_mentors removes design-only mentors for marketing intents", () => {
 
 	assert.deepEqual(
 		result.mentors.map((mentor) => mentor.slug),
-		["growth-marketer"],
+		["growth-marketer", "ta-growth-craft"],
 	);
 });
 

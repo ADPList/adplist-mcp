@@ -137,15 +137,15 @@ const DOMAIN_FIT_RULES: Array<{
 	{
 		name: "marketing",
 		pattern:
-			/\b(growth marketing|digital marketing|performance marketing|paid marketing|paid social|sem|seo|lifecycle marketing|retention|acquisition|demand generation)\b/i,
+			/\b(growth marketing|digital marketing|performance marketing|paid marketing|paid social|sem|seo|lifecycle marketing|retention|customer acquisition|user acquisition|demand generation)\b/i,
 		strongTerms: [
 			"growth marketing",
 			"digital marketing",
 			"performance marketing",
-			"marketing",
 			"lifecycle",
 			"retention",
-			"acquisition",
+			"customer acquisition",
+			"user acquisition",
 			"demand generation",
 			"paid media",
 			"paid social",
@@ -332,18 +332,13 @@ function matchesDomainFit(
 ): boolean {
 	if (!rule) return true;
 	const text = mentorDomainText(mentor);
-	const roleStrongMatches = rule.strongTerms.filter((term) => includesTerm(text.role, term));
-	if (roleStrongMatches.length > 0) return true;
 
 	if (rule.name === "marketing") {
-		const companyStrongMatches = rule.strongTerms.filter((term) =>
-			includesTerm(text.company, term)
-		);
-		const roleSupportingMatches = rule.supportingTerms.filter((term) =>
-			includesTerm(text.role, term)
-		);
-		return companyStrongMatches.length > 0 && roleSupportingMatches.length > 0;
+		return matchesMarketingDomainFit(text, rule);
 	}
+
+	const roleStrongMatches = rule.strongTerms.filter((term) => includesTerm(text.role, term));
+	if (roleStrongMatches.length > 0) return true;
 
 	const roleHasCoach = ["coach", "coaching"].some((term) => includesTerm(text.role, term));
 	const roleHasCareerSignal = ["career", "job search", "interview", "resume", "hiring"].some(
@@ -355,18 +350,65 @@ function matchesDomainFit(
 	return roleHasCoach && (roleHasCareerSignal || companyHasSearchSignal);
 }
 
-function mentorDomainText(mentor: SearchServiceMentor): { role: string; company: string } {
-	const role = [
-		mentor.title,
-		mentor.bio,
-		...(mentor.expertise ?? []),
-	].join(" ").toLowerCase();
+function matchesMarketingDomainFit(
+	text: ReturnType<typeof mentorDomainText>,
+	rule: (typeof DOMAIN_FIT_RULES)[number],
+): boolean {
+	if (
+		hasTalentAcquisitionPollution(text.role) &&
+		!hasMarketingCraftSignal(text.titleBio) &&
+		!hasMarketingCraftSignal(text.expertise)
+	) {
+		return false;
+	}
+
+	const titleBioStrongMatches = rule.strongTerms.filter((term) =>
+		includesTerm(text.titleBio, term)
+	);
+	if (titleBioStrongMatches.length > 0) return true;
+
+	const expertiseStrongMatches = rule.strongTerms.filter((term) =>
+		includesTerm(text.expertise, term)
+	);
+	if (expertiseStrongMatches.length > 0) return true;
+
+	const expertiseHasGenericMarketing = includesTerm(text.expertise, "marketing");
+	if (expertiseHasGenericMarketing && hasMarketingCraftSignal(text.titleBio)) return true;
+
+	const companyStrongMatches = rule.strongTerms.filter((term) =>
+		includesTerm(text.company, term)
+	);
+	const titleBioSupportingMatches = rule.supportingTerms.filter((term) =>
+		includesTerm(text.titleBio, term)
+	);
+	return companyStrongMatches.length > 0 && titleBioSupportingMatches.length > 0;
+}
+
+function mentorDomainText(mentor: SearchServiceMentor): {
+	role: string;
+	titleBio: string;
+	expertise: string;
+	company: string;
+} {
+	const titleBio = [mentor.title, mentor.bio].join(" ").toLowerCase();
+	const expertise = (mentor.expertise ?? []).join(" ").toLowerCase();
+	const role = [titleBio, expertise].join(" ").toLowerCase();
 	const company = [mentor.employer, mentor.company].join(" ").toLowerCase();
-	return { role, company };
+	return { role, titleBio, expertise, company };
 }
 
 function includesTerm(haystack: string, term: string): boolean {
 	return haystack.includes(term.toLowerCase());
+}
+
+function hasTalentAcquisitionPollution(value: string): boolean {
+	return /\b(talent acquisition|recruiter|recruiting|sourcing|staffing)\b/i.test(value);
+}
+
+function hasMarketingCraftSignal(value: string): boolean {
+	return /\b(growth|marketing|lifecycle|retention|customer acquisition|user acquisition|demand generation|paid media|paid social|seo|sem|conversion|crm|go-to-market|activation|funnel|experimentation)\b/i.test(
+		value,
+	);
 }
 
 export async function searchMentors(
