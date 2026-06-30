@@ -63,6 +63,24 @@ test("search_mentors expands weak taxonomy intents instead of forcing brittle di
 	assert.equal(productUrl.searchParams.get("disciplines"), "product design");
 });
 
+test("search_mentors overfetches candidates when a domain-fit gate is active", () => {
+	const growthUrl = new URL(
+		buildUrl({
+			intent: "need a growth marketing mentor for activation and retention",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(growthUrl.searchParams.get("pageSize"), "36");
+
+	const productUrl = new URL(
+		buildUrl({
+			intent: "product design mentor",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(productUrl.searchParams.get("pageSize"), "6");
+});
+
 test("search_mentors preserves booking attribution and trims LLM output", () => {
 	assert.match(source, /queryID/);
 	assert.match(source, /expertise\.filter\(Boolean\)\.slice\(0, 3\)/);
@@ -180,6 +198,92 @@ test("search_mentors enforces requested country from upstream country fields", (
 	assert.equal(result.mentors.length, 1);
 	assert.equal(result.mentors[0].slug, "us-growth");
 	assert.equal(result.mentors[0].country_iso, "US");
+});
+
+test("search_mentors removes design-only mentors for marketing intents", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Design Only",
+					slug: "design-only",
+					title: "Product Design Manager",
+					countryISO: "US",
+					expertise: ["product design"],
+					disciplines: ["design"],
+				},
+				{
+					name: "Design At Marketing Company",
+					slug: "design-marketing-company",
+					title: "Product Design Director",
+					company: "Stagwell Marketing Cloud",
+					countryISO: "US",
+					expertise: ["product design"],
+					disciplines: ["design"],
+				},
+				{
+					name: "Growth Marketer",
+					slug: "growth-marketer",
+					title: "Growth Marketing Lead",
+					countryISO: "US",
+					expertise: ["lifecycle marketing", "retention"],
+					disciplines: ["marketing"],
+				},
+			],
+		},
+		{
+			intent: "growth marketing mentor for activation and retention",
+			filters: { country: "US", max_results: 6 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["growth-marketer"],
+	);
+});
+
+test("search_mentors removes product-only mentors for career coaching and returnship intents", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Product Only",
+					slug: "product-only",
+					title: "Senior Product Manager",
+					countryISO: "US",
+					expertise: ["product strategy"],
+					disciplines: ["product management"],
+				},
+				{
+					name: "LinkedIn Only",
+					slug: "linkedin-only",
+					title: "Staff Software Engineer",
+					company: "LinkedIn",
+					countryISO: "US",
+					expertise: ["software engineering"],
+					disciplines: ["engineering"],
+				},
+				{
+					name: "Career Coach",
+					slug: "career-coach",
+					title: "Career Coach",
+					countryISO: "US",
+					expertise: ["interview preparation", "job search"],
+					disciplines: ["career coaching"],
+				},
+			],
+		},
+		{
+			intent: "career coach for returnship after a career break",
+			filters: { country: "US", max_results: 6 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["career-coach"],
+	);
 });
 
 test("why_match cites matched fields instead of only restating expertise tags", () => {

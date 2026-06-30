@@ -128,6 +128,56 @@ const BROAD_DISCIPLINE_TERMS = [
 	"reentry",
 ];
 
+const DOMAIN_FIT_RULES: Array<{
+	name: "marketing" | "career coaching";
+	pattern: RegExp;
+	strongTerms: string[];
+	supportingTerms: string[];
+}> = [
+	{
+		name: "marketing",
+		pattern:
+			/\b(growth marketing|digital marketing|performance marketing|paid marketing|paid social|sem|seo|lifecycle marketing|retention|acquisition|demand generation)\b/i,
+		strongTerms: [
+			"growth marketing",
+			"digital marketing",
+			"performance marketing",
+			"marketing",
+			"lifecycle",
+			"retention",
+			"acquisition",
+			"demand generation",
+			"paid media",
+			"paid social",
+			"seo",
+			"sem",
+			"conversion",
+			"crm",
+			"go-to-market",
+		],
+		supportingTerms: ["growth", "activation", "experimentation", "analytics", "funnel"],
+	},
+	{
+		name: "career coaching",
+		pattern:
+			/\b(career coach|career coaching|returnship|returnships|re-entry|reentry|return to work|career break|job search|interview preparation)\b/i,
+		strongTerms: [
+			"career coach",
+			"career coaching",
+			"returnship",
+			"return to work",
+			"career transition",
+			"job search",
+			"interview",
+			"resume",
+			"recruiting",
+			"recruiter",
+			"talent acquisition",
+		],
+		supportingTerms: ["coach", "coaching", "hiring", "re-entry", "reentry", "career break"],
+	},
+];
+
 // Results render in a 3-column card grid, so counts snap to full rows (3/6/9).
 // Floors rather than rounds so max_results stays an upper bound for callers.
 export function normalizeMaxResults(value: number | undefined): number {
@@ -143,7 +193,7 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 	url.searchParams.set("provider", "explore");
 	url.searchParams.set("q", clampUtf8Bytes(expandedIntent, ALGOLIA_QUERY_MAX_BYTES));
 	url.searchParams.set("page", "1");
-	url.searchParams.set("pageSize", String(searchPageSize(filters)));
+	url.searchParams.set("pageSize", String(searchPageSize(input)));
 	if (filters.discipline && shouldUseDisciplineFilter(filters.discipline))
 		url.searchParams.set("disciplines", filters.discipline.trim().toLowerCase());
 	if (filters.country) url.searchParams.set("countries", filters.country.trim().toUpperCase());
@@ -151,10 +201,12 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 	return url.toString();
 }
 
-function searchPageSize(filters: SearchMentorsFilters): number {
-	return filters.country || filters.language
-		? FILTERED_CANDIDATE_PAGE_SIZE
-		: normalizeMaxResults(filters.max_results);
+function searchPageSize(input: SearchMentorsInput): number {
+	const filters = input.filters ?? {};
+	if (filters.country || filters.language || domainFitRuleFor(input)) {
+		return FILTERED_CANDIDATE_PAGE_SIZE;
+	}
+	return normalizeMaxResults(filters.max_results);
 }
 
 function expandIntentForSearch(intent: string): string {
@@ -195,8 +247,11 @@ export function mapSearchMentorsResponse(
 	input: SearchMentorsInput,
 ): SearchMentorsOutput {
 	const maxResults = normalizeMaxResults(input.filters?.max_results);
-	const mentors = (response.results ?? [])
+	const domainRule = domainFitRuleFor(input);
+	const candidates = (response.results ?? [])
 		.filter((mentor) => matchesRequestedCountry(mentor, input.filters?.country))
+		.filter((mentor) => matchesDomainFit(mentor, domainRule));
+	const mentors = candidates
 		.slice(0, maxResults)
 		.map((mentor) => {
 			const expertise = Array.isArray(mentor.expertise)
@@ -264,6 +319,54 @@ export function mapSearchMentorsResponse(
 		queryID: response.queryID,
 		indexUsed: response.indexUsed,
 	};
+}
+
+function domainFitRuleFor(input: SearchMentorsInput): (typeof DOMAIN_FIT_RULES)[number] | undefined {
+	const haystack = [input.intent, input.filters?.discipline].filter(Boolean).join(" ");
+	return DOMAIN_FIT_RULES.find((rule) => rule.pattern.test(haystack));
+}
+
+function matchesDomainFit(
+	mentor: SearchServiceMentor,
+	rule: (typeof DOMAIN_FIT_RULES)[number] | undefined,
+): boolean {
+	if (!rule) return true;
+	const text = mentorDomainText(mentor);
+	const roleStrongMatches = rule.strongTerms.filter((term) => includesTerm(text.role, term));
+	if (roleStrongMatches.length > 0) return true;
+
+	if (rule.name === "marketing") {
+		const companyStrongMatches = rule.strongTerms.filter((term) =>
+			includesTerm(text.company, term)
+		);
+		const roleSupportingMatches = rule.supportingTerms.filter((term) =>
+			includesTerm(text.role, term)
+		);
+		return companyStrongMatches.length > 0 && roleSupportingMatches.length > 0;
+	}
+
+	const roleHasCoach = ["coach", "coaching"].some((term) => includesTerm(text.role, term));
+	const roleHasCareerSignal = ["career", "job search", "interview", "resume", "hiring"].some(
+		(term) => includesTerm(text.role, term),
+	);
+	const companyHasSearchSignal = ["search", "recruiting", "staffing"].some((term) =>
+		includesTerm(text.company, term)
+	);
+	return roleHasCoach && (roleHasCareerSignal || companyHasSearchSignal);
+}
+
+function mentorDomainText(mentor: SearchServiceMentor): { role: string; company: string } {
+	const role = [
+		mentor.title,
+		mentor.bio,
+		...(mentor.expertise ?? []),
+	].join(" ").toLowerCase();
+	const company = [mentor.employer, mentor.company].join(" ").toLowerCase();
+	return { role, company };
+}
+
+function includesTerm(haystack: string, term: string): boolean {
+	return haystack.includes(term.toLowerCase());
 }
 
 export async function searchMentors(
