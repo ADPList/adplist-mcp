@@ -52,6 +52,17 @@ test("CONFIG_ERROR is not retryable by the user", () => {
 	assert.match(result.error.user_action, /server operator/i);
 });
 
+test("unknown taxonomy discipline is a structured validation error", () => {
+	const result = formatToolError(
+		new Error(
+			'Unknown discipline "Product Management". Try: Generalist Product Management, Group Product Management, Technical Product Management.',
+		),
+	);
+	assert.equal(result.error.code, "VALIDATION_ERROR");
+	assert.equal(result.error.retryable, false);
+	assert.match(result.error.message, /Generalist Product Management/);
+});
+
 test("toolResponse preserves success output and marks failures as MCP tool errors", async () => {
 	const success = await toolResponse(async () => ({ ok: true }));
 	assert.deepEqual(JSON.parse(success.content[0].text), { ok: true });

@@ -183,17 +183,79 @@ test("search_mentors maps common mentor photo aliases into profile_photo_url", (
 	assert.match(source, /trimmed\.startsWith\("\/"\)/);
 });
 
-test("search_mentors relaxes only discipline after a zero-result taxonomy mismatch", () => {
+test("search_mentors validates taxonomy discipline values before search", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		return jsonResponse({ results: [], queryID: "should-not-search", indexUsed: "explore" });
+	};
+
+	try {
+		await assert.rejects(
+			() =>
+				searchMentors({ SEARCH_SERVICE_URL: "https://search.example" }, undefined, {
+					intent: "need a product mentor",
+					filters: { discipline: "Product Management", max_results: 6 },
+				}),
+			/Unknown discipline "Product Management"\. Try: .*Generalist Product Management.*Group Product Management.*Technical Product Management/,
+		);
+		assert.equal(calls.length, 0);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors preserves broad non-taxonomy discipline prompts as keyword expansion", () => {
+	const url = new URL(
+		buildUrl({
+			intent: "need a growth marketing mentor",
+			filters: { discipline: "growth marketing", max_results: 6 },
+		}),
+	);
+	assert.equal(url.searchParams.has("disciplines"), false);
+	assert.match(url.searchParams.get("q"), /growth marketing acquisition/i);
+});
+
+test("search_mentors dedupes and diversifies unknown discipline suggestions", async () => {
+	await assert.rejects(
+		() =>
+			searchMentors({ SEARCH_SERVICE_URL: "https://search.example" }, undefined, {
+				intent: "need data mentor",
+				filters: { discipline: "Data Strategy", max_results: 6 },
+			}),
+		(error) => {
+			assert.equal(
+				(error.message.match(/Data Engineering/g) ?? []).length,
+				1,
+				"Data Engineering should not be suggested twice",
+			);
+			return true;
+		},
+	);
+
+	await assert.rejects(
+		() =>
+			searchMentors({ SEARCH_SERVICE_URL: "https://search.example" }, undefined, {
+				intent: "need revenue mentor",
+				filters: { discipline: "Chief Revenue Officer", max_results: 6 },
+			}),
+		/Product Design, Generalist Product Management, Front-end, Data Analysis, Product Marketing, Customer Success Management/,
+	);
+});
+
+test("search_mentors relaxes valid discipline filters after a zero-result over-strict search", () => {
 	assert.match(source, /const relaxedInput = inputWithoutDiscipline\(input\)/);
 	assert.match(
 		source,
 		/const \{ discipline: _discipline, \.\.\.relaxedFilters \} = input\.filters/,
 	);
 	assert.match(source, /relaxed_filters: \["discipline"\]/);
+	assert.match(source, /validateDisciplineFilter\(input\)/);
 	assert.match(source, /fetchAndMapSearchMentors/);
 });
 
-test("search_mentors retries without discipline when the constrained search is empty", async () => {
+test("search_mentors retries without valid discipline when the constrained search is empty", async () => {
 	const originalFetch = globalThis.fetch;
 	const calls = [];
 	globalThis.fetch = async (url) => {
@@ -226,13 +288,13 @@ test("search_mentors retries without discipline when the constrained search is e
 			{ SEARCH_SERVICE_URL: "https://search.example" },
 			undefined,
 			{
-				intent: "senior designer mentors helping new grads break into tech design",
-				filters: { discipline: "tech design", country: "us", max_results: 5 },
+				intent: "senior designer mentors helping new grads break into design",
+				filters: { discipline: "UX Design", country: "us", max_results: 5 },
 			},
 		);
 
 		assert.equal(calls.length, 2);
-		assert.equal(new URL(calls[0]).searchParams.get("disciplines"), "tech design");
+		assert.equal(new URL(calls[0]).searchParams.get("disciplines"), "ux design");
 		assert.equal(new URL(calls[0]).searchParams.get("countries"), "US");
 		assert.equal(new URL(calls[1]).searchParams.has("disciplines"), false);
 		assert.equal(new URL(calls[1]).searchParams.get("countries"), "US");

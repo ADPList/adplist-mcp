@@ -140,6 +140,92 @@ const BROAD_DISCIPLINE_TERMS = [
 	"reentry",
 ];
 
+// Source-of-truth taxonomy snapshot from identity-service production discipline mapper.
+// Keep broad non-taxonomy prompts (for example "growth marketing") on the existing
+// keyword-expansion path, but reject specific unknown discipline facets before search.
+const VALID_DISCIPLINES = [
+	"Graphic Design",
+	"UX Design",
+	"UI/ Visual Design",
+	"Industrial Design",
+	"Motion Design",
+	"Game Design",
+	"Branding and Identity Design",
+	"Multimedia Design",
+	"XR Design",
+	"3D Design",
+	"Design Operations",
+	"Service Design",
+	"Content Design",
+	"Product Design",
+	"Interaction Design",
+	"Growth Design",
+	"Customer Experience (CX)",
+	"Generalist Product Management",
+	"Technical Product Management",
+	"Growth Product Management",
+	"Data Product Management",
+	"Platform Product Management",
+	"Group Product Management",
+	"Program Management",
+	"Project Management",
+	"UX Testing",
+	"UX Research",
+	"Service Design Research",
+	"Front-end",
+	"Back-end",
+	"Full stack",
+	"UX Engineering",
+	"AI/ML Engineering",
+	"iOS Engineering",
+	"Android Engineering",
+	"Development Operations",
+	"QA Engineer",
+	"Architectural Engineering",
+	"Security Engineering",
+	"Site Reliability",
+	"Data Engineering",
+	"Data Analysis",
+	"Data Scientist",
+	"Creative writing",
+	"Technical writing",
+	"Scriptwriting",
+	"Content Strategy",
+	"Copywriting",
+	"Social media writing",
+	"UX writing",
+	"Branding",
+	"Digital Marketing",
+	"Content Marketing",
+	"Event Marketing",
+	"Guerilla Marketing",
+	"Growth Hacking",
+	"Sales",
+	"Business Development",
+	"Offline Marketing",
+	"Direct Marketing",
+	"Account-based Marketing (ABM)",
+	"Customer Success Management",
+	"Community Management",
+	"Product Marketing",
+	"Content Creation",
+	"Hardware Design",
+	"Business Transformation",
+	"OutSystems",
+	"General Writing",
+	"AI Design",
+	"Design Systems",
+	"Systems Design",
+	"Game Development",
+	"Natural Language Processing",
+	"Computer Vision",
+	"Generative AI",
+	"AI Product Management",
+	"AI Ethics",
+];
+
+const VALID_DISCIPLINE_SET = new Set(VALID_DISCIPLINES.map(normalizeDiscipline));
+
 const DOMAIN_FIT_RULES: Array<{
 	name: "marketing" | "career coaching";
 	pattern: RegExp;
@@ -204,6 +290,7 @@ export function normalizeMaxResults(value: number | undefined): number {
 }
 
 export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput): string {
+	validateDisciplineFilter(input);
 	input = withInferredFilters(input);
 	const url = new URL("/search", baseUrl);
 	const filters = input.filters ?? {};
@@ -242,8 +329,56 @@ function expandIntentForSearch(input: SearchMentorsInput): string {
 }
 
 function shouldUseDisciplineFilter(discipline: string): boolean {
-	const normalized = discipline.trim().toLowerCase();
+	const normalized = normalizeDiscipline(discipline);
 	return !BROAD_DISCIPLINE_TERMS.some((term) => normalized.includes(term));
+}
+
+function validateDisciplineFilter(input: SearchMentorsInput): void {
+	const discipline = input.filters?.discipline?.trim();
+	if (!discipline || !shouldUseDisciplineFilter(discipline)) return;
+	if (VALID_DISCIPLINE_SET.has(normalizeDiscipline(discipline))) return;
+	const suggestions = suggestedDisciplines(discipline);
+	throw new Error(`Unknown discipline "${discipline}". Try: ${suggestions.join(", ")}.`);
+}
+
+function suggestedDisciplines(discipline: string): string[] {
+	const normalized = normalizeDiscipline(discipline);
+	if (normalized === "product management") {
+		return [
+			"Generalist Product Management",
+			"Group Product Management",
+			"Technical Product Management",
+			"Growth Product Management",
+			"Data Product Management",
+			"Platform Product Management",
+		];
+	}
+	const tokens = normalized.split(" ").filter((token) => token.length > 2);
+	const scored = VALID_DISCIPLINES.map((value) => {
+		const candidate = normalizeDiscipline(value);
+		let score = 0;
+		if (candidate.includes(normalized) || normalized.includes(candidate)) score += 8;
+		for (const token of tokens) {
+			if (candidate.includes(token)) score += 2;
+		}
+		return { value, score };
+	})
+		.filter(({ score }) => score > 0)
+		.sort((a, b) => b.score - a.score || a.value.localeCompare(b.value))
+		.map(({ value }) => value);
+	if (scored.length > 0) return scored.slice(0, 6);
+	return [
+		"Product Design",
+		"Generalist Product Management",
+		"Front-end",
+		"Data Analysis",
+		"Product Marketing",
+		"Customer Success Management",
+	];
+}
+
+function normalizeDiscipline(value: string): string {
+	return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function clampUtf8Bytes(value: string, maxBytes: number): string {
@@ -617,6 +752,7 @@ export async function searchMentors(
 ): Promise<SearchMentorsOutput> {
 	const baseUrl = env.SEARCH_SERVICE_URL;
 	if (!baseUrl) throw new Error("SEARCH_SERVICE_URL is not configured");
+	validateDisciplineFilter(input);
 
 	const profileText = await getProfileTextForSearch(env, props).catch(() => "");
 	const searchInput = {

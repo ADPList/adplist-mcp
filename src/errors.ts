@@ -195,6 +195,7 @@ function isValidationMessage(lower: string): boolean {
 		lower.includes("must be") ||
 		lower.includes(" is required") ||
 		lower.includes("requires an updates object") ||
-		lower.includes("paid sessions are out of scope")
+		lower.includes("paid sessions are out of scope") ||
+		lower.includes("unknown discipline")
 	);
 }
