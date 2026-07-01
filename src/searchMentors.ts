@@ -988,6 +988,13 @@ export async function searchMentors(
 			bestResult,
 			targetResultCount,
 		);
+		bestResult = await topUpWithCanonicalProductManagement(
+			baseUrl,
+			props,
+			input,
+			bestResult,
+			targetResultCount,
+		);
 		if (bestResult.mentors.length > 0) return bestResult;
 		return emptyRelaxedResult
 			? { ...emptyRelaxedResult, relaxed_filters: ["discipline"] }
@@ -1004,6 +1011,13 @@ export async function searchMentors(
 	}
 
 	bestResult = await topUpWithCanonicalMarketing(
+		baseUrl,
+		props,
+		input,
+		bestResult,
+		targetResultCount,
+	);
+	bestResult = await topUpWithCanonicalProductManagement(
 		baseUrl,
 		props,
 		input,
@@ -1173,22 +1187,58 @@ async function topUpWithCanonicalMarketing(
 	targetResultCount: number,
 ): Promise<SearchMentorsOutput> {
 	const canonicalMarketingInput = marketingTopUpInput(input);
-	if (!canonicalMarketingInput || bestResult.mentors.length >= targetResultCount) {
+	return topUpWithCanonicalInput(
+		baseUrl,
+		props,
+		input,
+		canonicalMarketingInput,
+		bestResult,
+		targetResultCount,
+	);
+}
+
+async function topUpWithCanonicalProductManagement(
+	baseUrl: string,
+	props: McpUserProps | undefined,
+	input: SearchMentorsInput,
+	bestResult: SearchMentorsOutput,
+	targetResultCount: number,
+): Promise<SearchMentorsOutput> {
+	const canonicalProductManagementInput = productManagementTopUpInput(input);
+	return topUpWithCanonicalInput(
+		baseUrl,
+		props,
+		input,
+		canonicalProductManagementInput,
+		bestResult,
+		targetResultCount,
+	);
+}
+
+async function topUpWithCanonicalInput(
+	baseUrl: string,
+	props: McpUserProps | undefined,
+	input: SearchMentorsInput,
+	canonicalInput: SearchMentorsInput | null,
+	bestResult: SearchMentorsOutput,
+	targetResultCount: number,
+): Promise<SearchMentorsOutput> {
+	if (!canonicalInput || bestResult.mentors.length >= targetResultCount) {
 		return bestResult;
 	}
 
-	const canonicalMarketingResult = await fetchAndMapSearchMentors(
+	const canonicalResult = await fetchAndMapSearchMentors(
 		baseUrl,
 		props,
-		canonicalMarketingInput,
-		canonicalMarketingInput,
+		canonicalInput,
+		canonicalInput,
 	);
-	if (canonicalMarketingResult.mentors.length === 0) return bestResult;
+	if (canonicalResult.mentors.length === 0) return bestResult;
 
 	return mergeSearchMentorOutputs(input, [
 		bestResult,
 		{
-			...canonicalMarketingResult,
+			...canonicalResult,
 			relaxed_filters: [...(input.filters?.discipline ? ["discipline"] : []), "query"],
 		},
 	]);
@@ -1327,6 +1377,19 @@ function marketingTopUpInput(input: SearchMentorsInput): SearchMentorsInput | nu
 		...inferredInput,
 		intent:
 			"growth marketing acquisition retention lifecycle product marketing go-to-market demand generation",
+		filters:
+			Object.keys(filtersWithoutDiscipline).length > 0 ? filtersWithoutDiscipline : undefined,
+	};
+}
+
+function productManagementTopUpInput(input: SearchMentorsInput): SearchMentorsInput | null {
+	if (!hasProductManagementIntent(input)) return null;
+	const inferredInput = withInferredFilters(input);
+	const { discipline: _discipline, ...filtersWithoutDiscipline } =
+		inferredInput.filters ?? {};
+	return {
+		...inferredInput,
+		intent: "product management product manager roadmap roadmapping product strategy prioritization product discovery",
 		filters:
 			Object.keys(filtersWithoutDiscipline).length > 0 ? filtersWithoutDiscipline : undefined,
 	};

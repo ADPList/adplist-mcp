@@ -264,6 +264,74 @@ test("search_mentors keeps PM filtering when product management intent mentions 
 	);
 });
 
+test("search_mentors tops up sparse product management results with a canonical PM query", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		const parsed = new URL(String(url));
+		if (parsed.searchParams.get("q")?.startsWith("product management product manager")) {
+			return jsonResponse({
+				results: [
+					{
+						name: "Second Product Manager",
+						slug: "second-product-manager",
+						title: "Product Manager",
+						countryISO: "US",
+						expertise: ["Prioritization"],
+						disciplines: ["Generalist Product Management"],
+					},
+				],
+				queryID: "canonical-pm-query",
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({
+			results: [
+				{
+					name: "Product Designer",
+					slug: "product-designer",
+					title: "Product Designer",
+					countryISO: "US",
+					expertise: ["Product", "Design"],
+					disciplines: ["Product Design"],
+				},
+				{
+					name: "First Product Manager",
+					slug: "first-product-manager",
+					title: "Product Manager",
+					countryISO: "US",
+					expertise: ["Roadmapping"],
+					disciplines: ["Generalist Product Management"],
+				},
+			],
+			queryID: "initial-query",
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example" },
+			undefined,
+			{
+				intent: "product management mentor for roadmap and strategy",
+				filters: { max_results: 6 },
+			},
+		);
+
+		assert.equal(new URL(calls[0]).searchParams.get("pageSize"), "72");
+		assert.equal(calls.length, 2);
+		assert.deepEqual(
+			result.mentors.map((mentor) => mentor.slug),
+			["first-product-manager", "second-product-manager"],
+		);
+		assert.deepEqual(result.relaxed_filters, ["query"]);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("search_mentors strips result-count instructions from search query text", () => {
 	const url = new URL(
 		buildUrl({
