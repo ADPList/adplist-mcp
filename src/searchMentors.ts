@@ -969,12 +969,24 @@ function inferExperienceLevelFromIntent(intent: string): ExperienceLevel | undef
 	)
 		return "Executive";
 	if (/\b(director|head of product|head of .+)\b/i.test(requestIntent)) return "Director";
-	if (
-		/\b(lead (?:product|designer|design|engineer|engineering|marketing|growth)|(?:tech|team|product|design|engineering|marketing|growth) lead|group product manager|gpm)\b/i.test(
-			requestIntent,
-		)
-	)
-		return "Lead";
+	const leadTitleTerms = [
+		"lead product",
+		"lead designer",
+		"lead design",
+		"lead engineer",
+		"lead engineering",
+		"lead marketing",
+		"lead growth",
+		"tech lead",
+		"team lead",
+		"product lead",
+		"design lead",
+		"engineering lead",
+		"marketing lead",
+		"growth lead",
+	];
+	if (leadTitleTerms.some((term) => requestIntent.toLowerCase().includes(term))) return "Lead";
+	if (/\b(group product manager|gpm)\b/i.test(requestIntent)) return "Lead";
 	if (/\b(senior|sr\.?|staff|principal)\b/i.test(requestIntent)) return "Senior";
 	return undefined;
 }
