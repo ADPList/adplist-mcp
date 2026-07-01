@@ -228,6 +228,22 @@ test("readJournal refuses a journal that is not associated with the authenticate
 	}
 });
 
+test("readJournal fails closed when the journal has no participant IDs", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () =>
+		Response.json(journal({ participants: [{ name: "Nameless", slug: "nameless" }] }));
+	try {
+		await assert.rejects(
+			readJournal({ MEETINGS_SERVICE_URL: "https://meetings.example" }, props, {
+				journal_id: "journal-1",
+			}),
+			/not associated with the authenticated user/,
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("journal tools require authenticated ADPList user", async () => {
 	await assert.rejects(
 		listJournals({ MEETINGS_SERVICE_URL: "https://meetings.example" }, undefined, {}),

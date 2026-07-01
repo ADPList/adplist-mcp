@@ -176,3 +176,4 @@ dist
 
 .dev.vars
 .wrangler/
+.gstack/

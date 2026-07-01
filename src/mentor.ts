@@ -10,12 +10,14 @@ export type RespondToMentorRequestInput = {
 	session_id: string;
 	action: "accept" | "decline";
 	message?: string;
+	user_confirmed: true;
 };
 
 export type RescheduleAsMentorInput = {
 	session_id: string;
 	new_slot_iso: string;
 	message?: string;
+	user_confirmed: true;
 };
 
 export type MentorRequest = {
@@ -309,10 +311,7 @@ export async function rescheduleAsMentor(
 
 	const startDateTime = Math.floor(slotDate.getTime() / 1000);
 
-	const url = new URL(
-		`/meetings/reschedule/${encodeURIComponent(sessionId)}`,
-		baseUrl,
-	);
+	const url = new URL(`/meetings/reschedule/${encodeURIComponent(sessionId)}`, baseUrl);
 
 	const response = await fetch(url.toString(), {
 		method: "POST",

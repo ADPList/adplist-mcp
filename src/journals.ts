@@ -243,7 +243,11 @@ function assertJournalBelongsToUser(journal: JournalRecord, props: McpUserProps)
 	const participantIds = (journal.participants ?? [])
 		.map((participant) => participant.id)
 		.filter((id): id is string => typeof id === "string" && id.length > 0);
-	if (participantIds.length > 0 && !participantIds.includes(props.userId)) {
+	// Fail closed: only return the journal when the authenticated user is provably
+	// one of its participants. An empty/absent participant list is treated as
+	// "not mine" so a journal that lacks ownership metadata can never leak another
+	// user's session summary if meetings-service ever stops scoping by token.
+	if (!participantIds.includes(props.userId)) {
 		throw new Error(
 			"read_journal refused a journal that is not associated with the authenticated user",
 		);
