@@ -509,13 +509,15 @@ function resultMaxResults(
 function mentionsExplicitResultLimit(intent: string): boolean {
 	const currentRequest = intent.match(/(?:^|\n)Current request:\s*(.+)$/i)?.[1] ?? intent;
 	return (
-		/\b(?:show|give|find|return|list|only|top)\s+(?:me\s+)?(?:exactly\s+)?(?:3|three|6|six|9|nine|a few|few)\b/i.test(
+		/\b(?:show|give|find|return|list)\s+(?:me\s+)?(?:exactly|only|just)\s+(?:3|three|6|six|9|nine|a few|few)\b/i.test(
 			currentRequest,
 		) ||
-		/\b(?:3|three|6|six|9|nine)\s+(?:growth|marketing|mentors?|results?|candidates?)\b/i.test(
+		/\b(?:exactly|only|just)\s+(?:3|three|6|six|9|nine|a few|few)\s+(?:growth|marketing|mentors?|results?|candidates?)\b/i.test(
 			currentRequest,
 		) ||
-		/\b(?:only|just)\s+(?:3|three|6|six|9|nine|a few|few)\b/i.test(currentRequest)
+		/\b(?:exactly|only|just)\s+(?:3|three|6|six|9|nine|a few|few)\b/i.test(
+			currentRequest,
+		)
 	);
 }
 

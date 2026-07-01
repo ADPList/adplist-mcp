@@ -753,12 +753,54 @@ test("search_mentors respects explicit smaller user counts for marketing searche
 			})),
 		},
 		{
-			intent: "show me 3 US growth marketing mentors",
+			intent: "show me exactly 3 US growth marketing mentors",
 			filters: { max_results: 3 },
 		},
 	);
 
 	assert.equal(result.mentors.length, 3);
+});
+
+test("search_mentors respects standalone exactly-N marketing caps", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: Array.from({ length: 9 }, (_, index) => ({
+				name: `Growth ${index}`,
+				slug: `growth-${index}`,
+				title: "Growth Marketing Lead",
+				countryISO: "US",
+				expertise: ["marketing"],
+				disciplines: ["growth marketing"],
+			})),
+		},
+		{
+			intent: "I want exactly 3",
+			filters: { discipline: "Marketing", max_results: 3 },
+		},
+	);
+
+	assert.equal(result.mentors.length, 3);
+});
+
+test("search_mentors does not treat top-N ranking language as a hard marketing cap", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: Array.from({ length: 9 }, (_, index) => ({
+				name: `Growth ${index}`,
+				slug: `growth-${index}`,
+				title: "Growth Marketing Lead",
+				countryISO: "US",
+				expertise: ["marketing"],
+				disciplines: ["growth marketing"],
+			})),
+		},
+		{
+			intent: "top 3 US growth marketing mentors",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.equal(result.mentors.length, 9);
 });
 
 test("search_mentors tops up sparse domain results inside one tool call", async () => {
