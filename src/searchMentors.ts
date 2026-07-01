@@ -474,6 +474,7 @@ export function mapSearchMentorsResponse(
 	const resultCount = resultMaxResults(input, domainRule);
 	const candidates = (response.results ?? [])
 		.filter((mentor) => matchesRequestedCountry(mentor, input.filters?.country))
+		.filter((mentor) => matchesProductManagementFit(mentor, input))
 		.filter((mentor) => matchesDomainFit(mentor, domainRule, input));
 	const mentors = rankMentorCandidates(candidates, domainRule, input)
 		.slice(0, resultCount)
@@ -551,14 +552,16 @@ function rankMentorCandidates(
 	input: SearchMentorsInput,
 ): SearchServiceMentor[] {
 	const requestedLevel = requestedExperienceLevel(input);
-	if (!rule && !requestedLevel) return mentors;
+	const productManagementIntent = hasProductManagementIntent(input);
+	if (!rule && !requestedLevel && !productManagementIntent) return mentors;
 	return mentors
 		.map((mentor, index) => ({
 			mentor,
 			index,
 			score:
 				(rule ? domainFitScore(mentor, rule, input) : 0) +
-				seniorityFitScore(mentor, requestedLevel),
+				seniorityFitScore(mentor, requestedLevel) +
+				(productManagementIntent ? productManagementFitScore(mentor) : 0),
 		}))
 		.sort((a, b) => b.score - a.score || a.index - b.index)
 		.map(({ mentor }) => mentor);
@@ -613,6 +616,41 @@ function seniorityFitScore(
 		)
 			score += 25;
 	}
+	return score;
+}
+
+function hasProductManagementIntent(input: SearchMentorsInput): boolean {
+	const haystack = [input.intent, input.filters?.discipline].filter(Boolean).join(" ");
+	if (/\b(product design|product marketing)\b/i.test(haystack)) return false;
+	return /\b(product management|product managers?|product leaders?|vp of product|head of product|director of product|chief product officer|cpo|group product manager|gpm|technical product manager|product strategy|roadmap|roadmapping)\b/i.test(
+		haystack,
+	);
+}
+
+function matchesProductManagementFit(
+	mentor: SearchServiceMentor,
+	input: SearchMentorsInput,
+): boolean {
+	if (!hasProductManagementIntent(input)) return true;
+	const text = mentorDomainText(mentor);
+	if (hasProductManagementRoleSignal(text) || hasProductManagementDiscipline(text)) return true;
+	return !(
+		hasGenericProductExpertise(text) &&
+		/\b(designer|design|engineer|engineering|developer|data scientist|data analyst|researcher|writer|marketer|marketing|sales|customer success)\b/i.test(
+			text.title,
+		)
+	);
+}
+
+function productManagementFitScore(mentor: SearchServiceMentor): number {
+	const text = mentorDomainText(mentor);
+	let score = 0;
+	if (hasProductManagementRoleSignal(text)) score += 30;
+	if (hasProductManagementDiscipline(text)) score += 24;
+	if (/\b(product strategy|roadmap|roadmapping|prioritization|product discovery)\b/i.test(text.expertise)) {
+		score += 8;
+	}
+	if (hasGenericProductExpertise(text) && !hasProductManagementRoleSignal(text)) score -= 8;
 	return score;
 }
 
@@ -846,6 +884,22 @@ function hasGrowthRoleSignal(text: ReturnType<typeof mentorDomainText>): boolean
 			text.disciplines,
 		)
 	);
+}
+
+function hasProductManagementRoleSignal(text: ReturnType<typeof mentorDomainText>): boolean {
+	return /\b(product manager|product management|group product manager|gpm|technical product manager|head of product|director of product|vp of product|chief product officer|cpo)\b/i.test(
+		text.titleBio,
+	);
+}
+
+function hasProductManagementDiscipline(text: ReturnType<typeof mentorDomainText>): boolean {
+	return /\b(generalist product management|technical product management|growth product management|data product management|platform product management|group product management|ai product management)\b/i.test(
+		text.disciplines,
+	);
+}
+
+function hasGenericProductExpertise(text: ReturnType<typeof mentorDomainText>): boolean {
+	return /\bproduct\b/i.test(text.expertise);
 }
 
 function hasSpecialistMarketingIntent(input: SearchMentorsInput): boolean {

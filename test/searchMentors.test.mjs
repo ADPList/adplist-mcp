@@ -159,6 +159,77 @@ test("search_mentors reranks executive product leaders above IC PMs and unrelate
 	assert.equal(result.mentors[0].title, "VP of Product");
 });
 
+test("search_mentors does not let generic Product expertise satisfy product management intent", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Product Designer",
+					slug: "product-designer",
+					title: "Product Designer",
+					countryISO: "US",
+					expertise: ["Product", "Design", "UX"],
+					disciplines: ["Product Design"],
+					total_sessions: 30,
+				},
+				{
+					name: "Product Engineer",
+					slug: "product-engineer",
+					title: "Software Engineer",
+					countryISO: "US",
+					expertise: ["Product", "Architecture"],
+					disciplines: ["Full stack"],
+					total_sessions: 50,
+				},
+				{
+					name: "Product Manager",
+					slug: "product-manager",
+					title: "Senior Product Manager",
+					countryISO: "US",
+					expertise: ["Roadmapping", "Product Strategy"],
+					disciplines: ["Generalist Product Management"],
+					total_sessions: 10,
+				},
+			],
+		},
+		{
+			intent: "product management mentor for roadmap and strategy",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["product-manager"],
+	);
+});
+
+test("search_mentors keeps product designers for product design intent", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Product Designer",
+					slug: "product-designer",
+					title: "Product Designer",
+					countryISO: "US",
+					expertise: ["Product", "Design", "UX"],
+					disciplines: ["Product Design"],
+				},
+			],
+		},
+		{
+			intent: "product design portfolio mentor",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["product-designer"],
+	);
+});
+
 test("search_mentors strips result-count instructions from search query text", () => {
 	const url = new URL(
 		buildUrl({
