@@ -16,8 +16,8 @@ export type StoredLogin = {
 export type StoredRevoke = {
 	createdAt: number;
 	email: string;
-	cognitoSession: string;
-	cognitoUserId: string;
+	cognitoSession?: string;
+	cognitoUserId?: string;
 };
 
 export type McpUserProps = {

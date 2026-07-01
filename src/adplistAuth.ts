@@ -1,4 +1,4 @@
-import { requiredEnv } from "./config";
+import { requiredEnv } from "./config.ts";
 
 export type SendOtpResult = {
 	session: string;

@@ -1,14 +1,22 @@
 import { Hono } from "hono";
 import { html, raw } from "hono/html";
-import { MCP_SCOPES } from "./config";
-import { sendOtp, verifyOtp } from "./adplistAuth";
-import { accessTokenExpiresAt, persistRefreshTokenOnSignIn } from "./adplistTokenRefresh";
-import { recordMcpConnectionSuccess, sendWelcomeEmailOnce } from "./welcomeEmail";
+import { MCP_SCOPES } from "./config.ts";
+import { sendOtp, verifyOtp } from "./adplistAuth.ts";
+import { accessTokenExpiresAt, persistRefreshTokenOnSignIn } from "./adplistTokenRefresh.ts";
+import { recordMcpConnectionSuccess, sendWelcomeEmailOnce } from "./welcomeEmail.ts";
 import type { Bindings, McpUserProps, StoredLogin, StoredRevoke } from "./types";
 
 const LOGIN_TTL_SECONDS = 60 * 60;
 const OTP_RATE_LIMIT = 5;
 const OTP_RATE_WINDOW_SECONDS = 15 * 60;
+// Per-email send throttle (independent of the per-IP limit) so a distributed
+// attacker can't mail-bomb a single ADPList user across many IPs.
+const OTP_EMAIL_RATE_LIMIT = 5;
+const OTP_EMAIL_RATE_WINDOW_SECONDS = 60 * 60;
+// Cap OTP guesses per sign-in/revoke session, then burn the session. Defense in
+// depth: the app no longer relies on the upstream Cognito challenge session
+// becoming single-use to bound brute-forcing of the 6-digit code.
+const OTP_VERIFY_MAX_ATTEMPTS = 5;
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -50,36 +58,34 @@ app.get("/account/revoke", (c) => c.html(renderRevokeEmailPage()));
 
 app.post("/account/revoke/login", async (c) => {
 	const body = await c.req.parseBody();
-	const email = stringField(body.email)?.trim().toLowerCase();
+	const email = emailField(body.email);
 	if (!email) {
 		return c.html(renderErrorPage("Please enter your email address."), 400);
 	}
 
 	const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-	if (await consumeRateLimit(c.env, `otp_rate:${ip}`)) {
+	if (await otpSendThrottled(c.env, ip, email)) {
 		return c.html(
 			renderErrorPage("Too many sign-in attempts. Please wait a few minutes and retry."),
 			429,
 		);
 	}
 
-	let otp;
-	try {
-		otp = await sendOtp(c.env, email);
-	} catch {
-		return c.html(
-			renderErrorPage("We couldn't email a sign-in code. Check the address and try again."),
-			502,
-		);
-	}
-
+	// Never reveal whether the account exists: render the same code-entry page
+	// whether or not sendOtp succeeded. A missing session just surfaces as
+	// "session expired" at the verify step.
 	const revokeId = crypto.randomUUID();
-	await putRevoke(c.env, revokeId, {
-		createdAt: Date.now(),
-		email,
-		cognitoSession: otp.session,
-		cognitoUserId: otp.cognitoUserId,
-	});
+	try {
+		const otp = await sendOtp(c.env, email);
+		await putRevoke(c.env, revokeId, {
+			createdAt: Date.now(),
+			email,
+			cognitoSession: otp.session,
+			cognitoUserId: otp.cognitoUserId,
+		});
+	} catch {
+		await putRevoke(c.env, revokeId, { createdAt: Date.now(), email });
+	}
 
 	return c.html(renderRevokeOtpPage(revokeId, email));
 });
@@ -93,8 +99,18 @@ app.post("/account/revoke/verify", async (c) => {
 	}
 
 	const stored = await getRevoke(c.env, revokeId);
-	if (!stored) {
+	if (!stored?.cognitoSession || !stored.cognitoUserId) {
 		return c.html(renderErrorPage("Your revoke session expired. Please start again."), 400);
+	}
+
+	const attemptsKey = `oauth_revoke_attempts:${revokeId}`;
+	if (await otpAttemptsExhausted(c.env, attemptsKey)) {
+		await c.env.OAUTH_KV.delete(`oauth_revoke:${revokeId}`);
+		await c.env.OAUTH_KV.delete(attemptsKey);
+		return c.html(
+			renderErrorPage("Too many incorrect codes. Please start again to retry."),
+			429,
+		);
 	}
 
 	let verified;
@@ -105,11 +121,16 @@ app.post("/account/revoke/verify", async (c) => {
 			session: stored.cognitoSession,
 		});
 	} catch {
+		if ((await registerFailedOtpAttempt(c.env, attemptsKey)) >= OTP_VERIFY_MAX_ATTEMPTS) {
+			await c.env.OAUTH_KV.delete(`oauth_revoke:${revokeId}`);
+			await c.env.OAUTH_KV.delete(attemptsKey);
+		}
 		return c.html(
 			renderErrorPage("That code was incorrect or expired. Please start again to retry."),
 			400,
 		);
 	}
+	await c.env.OAUTH_KV.delete(attemptsKey);
 
 	let revokedCount = 0;
 	let cursor: string | undefined;
@@ -146,7 +167,7 @@ app.get("/oauth/authorize", async (c) => {
 app.post("/oauth/login", async (c) => {
 	const body = await c.req.parseBody();
 	const loginId = stringField(body.loginId);
-	const email = stringField(body.email)?.trim().toLowerCase();
+	const email = emailField(body.email);
 	if (!loginId || !email) {
 		return c.html(renderErrorPage("Please enter your email address."), 400);
 	}
@@ -157,29 +178,34 @@ app.post("/oauth/login", async (c) => {
 	}
 
 	const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-	if (await consumeRateLimit(c.env, `otp_rate:${ip}`)) {
+	if (await otpSendThrottled(c.env, ip, email)) {
 		return c.html(
 			renderErrorPage("Too many sign-in attempts. Please wait a few minutes and retry."),
 			429,
 		);
 	}
 
-	let otp;
+	// Never reveal whether the account exists: render the same code-entry page
+	// whether or not sendOtp succeeded. A missing session just surfaces as
+	// "session expired" at the verify step.
 	try {
-		otp = await sendOtp(c.env, email);
+		const otp = await sendOtp(c.env, email);
+		await putLogin(c.env, loginId, {
+			...stored,
+			email,
+			cognitoSession: otp.session,
+			cognitoUserId: otp.cognitoUserId,
+		});
 	} catch {
-		return c.html(
-			renderErrorPage("We couldn't email a sign-in code. Check the address and try again."),
-			502,
-		);
+		// Clear any Cognito session from a prior successful send on this loginId so a
+		// failed resend can't leave the old code verifiable against a new email address.
+		await putLogin(c.env, loginId, {
+			...stored,
+			email,
+			cognitoSession: undefined,
+			cognitoUserId: undefined,
+		});
 	}
-
-	await putLogin(c.env, loginId, {
-		...stored,
-		email,
-		cognitoSession: otp.session,
-		cognitoUserId: otp.cognitoUserId,
-	});
 	return c.html(renderOtpPage(loginId, email, stored.clientName));
 });
 
@@ -197,6 +223,18 @@ app.post("/oauth/verify", async (c) => {
 		return c.html(renderErrorPage("Your sign-in session expired. Please start again."), 400);
 	}
 
+	const attemptsKey = `oauth_verify_attempts:${loginId}`;
+	if (await otpAttemptsExhausted(c.env, attemptsKey)) {
+		await c.env.OAUTH_KV.delete(`oauth_login:${loginId}`);
+		await c.env.OAUTH_KV.delete(attemptsKey);
+		return c.html(
+			renderErrorPage(
+				"Too many incorrect codes. Close this window and click Connect again to retry.",
+			),
+			429,
+		);
+	}
+
 	let verified;
 	try {
 		verified = await verifyOtp(c.env, {
@@ -205,6 +243,10 @@ app.post("/oauth/verify", async (c) => {
 			session: stored.cognitoSession,
 		});
 	} catch {
+		if ((await registerFailedOtpAttempt(c.env, attemptsKey)) >= OTP_VERIFY_MAX_ATTEMPTS) {
+			await c.env.OAUTH_KV.delete(`oauth_login:${loginId}`);
+			await c.env.OAUTH_KV.delete(attemptsKey);
+		}
 		return c.html(
 			renderErrorPage(
 				"That code was incorrect or expired. Close this window and click Connect again to retry.",
@@ -212,6 +254,7 @@ app.post("/oauth/verify", async (c) => {
 			400,
 		);
 	}
+	await c.env.OAUTH_KV.delete(attemptsKey);
 
 	await recordMcpConnectionSuccess(c.env, {
 		userId: verified.userId,
@@ -294,18 +337,65 @@ async function getRevoke(env: Bindings, revokeId: string): Promise<StoredRevoke 
 	}
 }
 
-// Best-effort per-IP throttle so the OTP email endpoint can't be abused as a mailer.
-async function consumeRateLimit(env: Bindings, key: string): Promise<boolean> {
+// Best-effort fixed-window throttle. Returns true when the caller is over the
+// limit (and should be rejected). Used for both per-IP and per-email OTP sends.
+async function consumeRateLimit(
+	env: Bindings,
+	key: string,
+	limit = OTP_RATE_LIMIT,
+	windowSeconds = OTP_RATE_WINDOW_SECONDS,
+): Promise<boolean> {
 	const raw = await env.OAUTH_KV.get(key);
 	const parsed = Number(raw ?? "0");
 	const count = Number.isFinite(parsed) ? parsed : 0;
-	if (count >= OTP_RATE_LIMIT) return true;
-	await env.OAUTH_KV.put(key, String(count + 1), { expirationTtl: OTP_RATE_WINDOW_SECONDS });
+	if (count >= limit) return true;
+	await env.OAUTH_KV.put(key, String(count + 1), { expirationTtl: windowSeconds });
 	return false;
+}
+
+// Reject any OTP send that trips either the per-IP or the per-email budget.
+// Check the IP budget FIRST and bail before touching the email counter — otherwise
+// an already-throttled IP (which no longer increments) could still drain any
+// victim's per-email budget, locking them out without a single OTP being sent.
+async function otpSendThrottled(env: Bindings, ip: string, email: string): Promise<boolean> {
+	if (await consumeRateLimit(env, `otp_rate:${ip}`)) return true;
+	return consumeRateLimit(
+		env,
+		`otp_email_rate:${email}`,
+		OTP_EMAIL_RATE_LIMIT,
+		OTP_EMAIL_RATE_WINDOW_SECONDS,
+	);
+}
+
+// Track failed OTP guesses per sign-in/revoke session so the code can't be
+// brute-forced. Returns the running failure count.
+async function registerFailedOtpAttempt(env: Bindings, key: string): Promise<number> {
+	const raw = await env.OAUTH_KV.get(key);
+	const parsed = Number(raw ?? "0");
+	const count = (Number.isFinite(parsed) ? parsed : 0) + 1;
+	await env.OAUTH_KV.put(key, String(count), { expirationTtl: LOGIN_TTL_SECONDS });
+	return count;
+}
+
+async function otpAttemptsExhausted(env: Bindings, key: string): Promise<boolean> {
+	const raw = await env.OAUTH_KV.get(key);
+	const parsed = Number(raw ?? "0");
+	const count = Number.isFinite(parsed) ? parsed : 0;
+	return count >= OTP_VERIFY_MAX_ATTEMPTS;
 }
 
 function stringField(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+// Normalize and bound an email before it is ever used (notably as an `otp_email_rate:`
+// KV key). RFC 5321 caps addresses at 254 chars; rejecting longer input keeps the key
+// under Cloudflare KV's 512-byte limit so a direct POST can't turn the throttle into a 500.
+const MAX_EMAIL_LENGTH = 254;
+function emailField(value: unknown): string | undefined {
+	const email = stringField(value)?.trim().toLowerCase();
+	if (!email || email.length > MAX_EMAIL_LENGTH) return undefined;
+	return email;
 }
 
 const STYLES = `:root{color-scheme:light}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#f3f4f6;color:#111827;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem}.card{background:#fff;max-width:25rem;width:100%;border-radius:.875rem;box-shadow:0 1px 3px rgba(0,0,0,.08),0 12px 28px rgba(0,0,0,.07);padding:2rem;box-sizing:border-box}.brand{font-weight:700;font-size:1.05rem;letter-spacing:-.01em}h1{font-size:1.3rem;margin:1.1rem 0 .35rem}p{color:#4b5563;line-height:1.55;margin:.35rem 0;font-size:.95rem}label{display:block;font-weight:600;font-size:.85rem;margin:1.2rem 0 .4rem}input{width:100%;box-sizing:border-box;padding:.7rem .8rem;border:1px solid #d1d5db;border-radius:.55rem;font-size:1rem}input:focus{outline:2px solid #111827;outline-offset:0;border-color:#111827}button,.button{display:block;text-align:center;text-decoration:none;box-sizing:border-box;width:100%;margin-top:1.3rem;border:0;border-radius:.55rem;padding:.8rem 1rem;font-weight:600;font-size:1rem;background:#111827;color:#fff;cursor:pointer}button:hover,.button:hover{background:#1f2937}.scopes{background:#f9fafb;border:1px solid #e5e7eb;border-radius:.55rem;padding:.7rem .85rem;margin-top:1.1rem;font-size:.85rem;color:#4b5563}.scopes div{margin-top:.25rem}.muted{font-size:.82rem;color:#6b7280;margin-top:1.1rem}`;
