@@ -358,6 +358,7 @@ function searchPageSize(input: SearchMentorsInput): number {
 		filters.country ||
 		filters.language ||
 		filters.experience_level ||
+		hasProductManagementIntent(input) ||
 		domainFitRuleFor(input)
 	) {
 		return FILTERED_CANDIDATE_PAGE_SIZE;
@@ -621,7 +622,6 @@ function seniorityFitScore(
 
 function hasProductManagementIntent(input: SearchMentorsInput): boolean {
 	const haystack = [input.intent, input.filters?.discipline].filter(Boolean).join(" ");
-	if (/\b(product design|product marketing)\b/i.test(haystack)) return false;
 	return /\b(product management|product managers?|product leaders?|vp of product|head of product|director of product|chief product officer|cpo|group product manager|gpm|technical product manager|product strategy|roadmap|roadmapping)\b/i.test(
 		haystack,
 	);
@@ -946,7 +946,9 @@ export async function searchMentors(
 	const firstResult = await fetchAndMapSearchMentors(baseUrl, props, searchInput, input);
 	let bestResult = firstResult;
 	const targetResultCount = resultMaxResults(input);
-	const shouldTopUpSparseResults = Boolean(domainFitRuleFor(input));
+	const shouldTopUpSparseResults = Boolean(
+		domainFitRuleFor(input) || hasProductManagementIntent(input),
+	);
 	if (
 		firstResult.mentors.length > 0 &&
 		(firstResult.mentors.length >= targetResultCount || !shouldTopUpSparseResults)
