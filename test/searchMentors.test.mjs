@@ -159,6 +159,213 @@ test("search_mentors reranks executive product leaders above IC PMs and unrelate
 	assert.equal(result.mentors[0].title, "VP of Product");
 });
 
+test("search_mentors does not let generic Product expertise satisfy product management intent", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Product Designer",
+					slug: "product-designer",
+					title: "Product Designer",
+					countryISO: "US",
+					expertise: ["Product", "Design", "UX"],
+					disciplines: ["Product Design"],
+					total_sessions: 30,
+				},
+				{
+					name: "Product Engineer",
+					slug: "product-engineer",
+					title: "Software Engineer",
+					countryISO: "US",
+					expertise: ["Product", "Architecture"],
+					disciplines: ["Full stack"],
+					total_sessions: 50,
+				},
+				{
+					name: "Product Manager",
+					slug: "product-manager",
+					title: "Senior Product Manager",
+					countryISO: "US",
+					expertise: ["Roadmapping", "Product Strategy"],
+					disciplines: ["Generalist Product Management"],
+					total_sessions: 10,
+				},
+			],
+		},
+		{
+			intent: "product management mentor for roadmap and strategy",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["product-manager"],
+	);
+});
+
+test("search_mentors keeps product designers for product design intent", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Product Designer",
+					slug: "product-designer",
+					title: "Product Designer",
+					countryISO: "US",
+					expertise: ["Product", "Design", "UX"],
+					disciplines: ["Product Design"],
+				},
+			],
+		},
+		{
+			intent: "product design portfolio mentor",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["product-designer"],
+	);
+});
+
+test("search_mentors filters non-PM titles without Product expertise for PM intent", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "UX Researcher",
+					slug: "ux-researcher",
+					title: "UX Researcher",
+					countryISO: "US",
+					expertise: ["Research", "User Interviews"],
+					disciplines: ["UX Research"],
+				},
+				{
+					name: "Product Manager",
+					slug: "product-manager",
+					title: "Product Manager",
+					countryISO: "US",
+					expertise: ["Roadmapping"],
+					disciplines: ["Generalist Product Management"],
+				},
+			],
+		},
+		{
+			intent: "product management mentor for roadmap and strategy",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["product-manager"],
+	);
+});
+
+test("search_mentors keeps PM filtering when product management intent mentions adjacent product roles", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Product Marketing Mentor",
+					slug: "product-marketing",
+					title: "Product Marketing Manager",
+					countryISO: "US",
+					expertise: ["Product", "Marketing"],
+					disciplines: ["Product Marketing"],
+				},
+				{
+					name: "Product Manager",
+					slug: "product-manager",
+					title: "Product Manager",
+					countryISO: "US",
+					expertise: ["Roadmapping"],
+					disciplines: ["Generalist Product Management"],
+				},
+			],
+		},
+		{
+			intent: "transition from product marketing to product management",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["product-manager"],
+	);
+});
+
+test("search_mentors tops up sparse product management results with a canonical PM query", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		const parsed = new URL(String(url));
+		if (parsed.searchParams.get("q")?.startsWith("product management product manager")) {
+			return jsonResponse({
+				results: [
+					{
+						name: "Second Product Manager",
+						slug: "second-product-manager",
+						title: "Product Manager",
+						countryISO: "US",
+						expertise: ["Prioritization"],
+						disciplines: ["Generalist Product Management"],
+					},
+				],
+				queryID: "canonical-pm-query",
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({
+			results: [
+				{
+					name: "Product Designer",
+					slug: "product-designer",
+					title: "Product Designer",
+					countryISO: "US",
+					expertise: ["Product", "Design"],
+					disciplines: ["Product Design"],
+				},
+				{
+					name: "First Product Manager",
+					slug: "first-product-manager",
+					title: "Product Manager",
+					countryISO: "US",
+					expertise: ["Roadmapping"],
+					disciplines: ["Generalist Product Management"],
+				},
+			],
+			queryID: "initial-query",
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example" },
+			undefined,
+			{
+				intent: "product management mentor for roadmap and strategy",
+				filters: { max_results: 6 },
+			},
+		);
+
+		assert.equal(new URL(calls[0]).searchParams.get("pageSize"), "72");
+		assert.equal(calls.length, 2);
+		assert.deepEqual(
+			result.mentors.map((mentor) => mentor.slug),
+			["first-product-manager", "second-product-manager"],
+		);
+		assert.deepEqual(result.relaxed_filters, ["query"]);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("search_mentors strips result-count instructions from search query text", () => {
 	const url = new URL(
 		buildUrl({
@@ -242,6 +449,22 @@ test("search_mentors overfetches candidates when a domain-fit gate is active", (
 		}),
 	);
 	assert.equal(productUrl.searchParams.get("pageSize"), "6");
+
+	const productManagementUrl = new URL(
+		buildUrl({
+			intent: "product management mentor for roadmap and strategy",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(productManagementUrl.searchParams.get("pageSize"), "72");
+
+	const careerRoadmapUrl = new URL(
+		buildUrl({
+			intent: "career roadmap for engineers",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(careerRoadmapUrl.searchParams.get("pageSize"), "6");
 
 	const talentAcquisitionUrl = new URL(
 		buildUrl({
