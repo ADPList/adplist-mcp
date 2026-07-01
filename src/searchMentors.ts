@@ -194,6 +194,7 @@ const VALID_DISCIPLINES = [
 	"Copywriting",
 	"Social media writing",
 	"UX writing",
+	"Marketing",
 	"Branding",
 	"Digital Marketing",
 	"Content Marketing",
