@@ -1374,6 +1374,8 @@ test("search_mentors resolves a literal mentor name through the profile endpoint
 		assert.equal(result.mentors[0].slug, "brennan-collins");
 		assert.equal(result.mentors[0].name, "Brennan Collins");
 		assert.equal(result.mentors[0].title, "Chief Product Officer");
+		assert.equal(result.mentors[0].sessions_count, null);
+		assert.equal(result.mentors[0].next_7_day_slots_count, null);
 		assert.equal(result.mentors[0].country_iso, "US");
 		assert.equal(result.mentors[0].why_match, "Exact ADPList mentor profile name match.");
 	} finally {
@@ -1442,6 +1444,36 @@ test("search_mentors falls back to Explore when a literal profile candidate does
 		assert.equal(new URL(calls[1]).pathname, "/search");
 		assert.equal(result.mentors[0].slug, "explore-brennan");
 		assert.equal(result.queryID, "explore-query");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors falls back to Explore when literal profile filters do not match", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		if (String(url).includes("/users/profile/mentor/brennan-collins")) {
+			return jsonResponse(BRENNAN_PROFILE_RESPONSE);
+		}
+		return jsonResponse({
+			results: [{ name: "Filtered Explore", slug: "filtered-explore", countryISO: "CA" }],
+			queryID: "filtered-query",
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "Brennan Collins", filters: { country: "CA" } },
+		);
+
+		assert.equal(calls.length, 2);
+		assert.equal(result.mentors[0].slug, "filtered-explore");
+		assert.equal(result.queryID, "filtered-query");
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

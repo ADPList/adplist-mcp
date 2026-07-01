@@ -81,8 +81,8 @@ export type SearchMentorResult = {
 	company: string;
 	expertise: string[];
 	rating: number | null;
-	sessions_count: number;
-	next_7_day_slots_count: number;
+	sessions_count: number | null;
+	next_7_day_slots_count: number | null;
 	country_iso: string;
 	profile_url: string;
 	profile_photo_url: string;
@@ -105,6 +105,7 @@ const ROW_SIZE = 3;
 const FILTERED_CANDIDATE_PAGE_SIZE = 72;
 const ALGOLIA_QUERY_MAX_BYTES = 500;
 const MIN_MARKETING_DOMAIN_SCORE = 8;
+const LITERAL_NAME_LOOKUP_TIMEOUT_MS = 2000;
 const LITERAL_NAME_STOP_WORDS = new Set([
 	"find",
 	"show",
@@ -990,7 +991,10 @@ async function searchMentorByLiteralName(
 				`/users/profile/mentor/${encodeURIComponent(slug)}`,
 				env.AUTH_SERVICE_URL,
 			).toString(),
-			{ headers: { Accept: "application/json" } },
+			{
+				headers: { Accept: "application/json" },
+				signal: AbortSignal.timeout(LITERAL_NAME_LOOKUP_TIMEOUT_MS),
+			},
 		);
 		if (response.status === 404) return null;
 		if (!response.ok) return null;
@@ -999,6 +1003,7 @@ async function searchMentorByLiteralName(
 		if (Object.keys(profile).length === 0) return null;
 		const returnedName = textOf(profile.fullName);
 		if (!isSameLiteralName(candidateName, returnedName)) return null;
+		if (!literalProfileMatchesFilters(profile, input.filters)) return null;
 
 		return {
 			mentors: [mapLiteralProfileToSearchResult(profile, slug)],
@@ -1048,6 +1053,34 @@ function isSameLiteralName(requested: string, returned: string): boolean {
 	return slugifyLiteralName(requested) === slugifyLiteralName(returned);
 }
 
+function literalProfileMatchesFilters(
+	profile: Record<string, unknown>,
+	filters: SearchMentorsFilters | undefined,
+): boolean {
+	if (!filters) return true;
+	const experiences = asRecord(profile.experiences);
+	const preferences = asRecord(profile.preferences);
+	const country = asRecord(profile.country);
+	if (filters.country && textOf(country.iso).toUpperCase() !== filters.country.trim().toUpperCase()) {
+		return false;
+	}
+	if (filters.language && !includesIgnoreCase(splitLabels(labelsOf(preferences.languages)), filters.language)) {
+		return false;
+	}
+	if (
+		filters.discipline &&
+		shouldUseDisciplineFilter(filters.discipline) &&
+		!includesIgnoreCase(splitLabels(labelsOf(experiences.disciplines)), filters.discipline)
+	) {
+		return false;
+	}
+	const expectedLevel = normalizeExperienceLevel(filters.experience_level);
+	if (expectedLevel && normalizeExperienceLevel(labelsOf(experiences.experienceLevel)) !== expectedLevel) {
+		return false;
+	}
+	return true;
+}
+
 function mapLiteralProfileToSearchResult(
 	profile: Record<string, unknown>,
 	slug: string,
@@ -1063,8 +1096,8 @@ function mapLiteralProfileToSearchResult(
 		company: textOf(profileDetails.organization),
 		expertise,
 		rating: null,
-		sessions_count: 0,
-		next_7_day_slots_count: 0,
+		sessions_count: null,
+		next_7_day_slots_count: null,
 		country_iso: textOf(country.iso).toUpperCase(),
 		profile_url: `https://adplist.org/mentors/${encodeURIComponent(slug)}`,
 		profile_photo_url: normalizeImageUrl(profileDetails.image),
