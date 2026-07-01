@@ -569,6 +569,9 @@ function createOAuthProvider(env: Env) {
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		try {
+			if (new URL(request.url).pathname === "/assets/claude-mcp.gif" && env.ASSETS) {
+				return env.ASSETS.fetch(request);
+			}
 			return await createOAuthProvider(env).fetch(request, env, ctx);
 		} catch (error) {
 			const response = tokenRefreshErrorResponse(error);

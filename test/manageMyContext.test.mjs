@@ -11,6 +11,10 @@ const migrationSource = readFileSync(
 	new URL("../migrations/0001_user_mcp_profile.sql", import.meta.url),
 	"utf8",
 );
+const welcomeEmailMigrationSource = readFileSync(
+	new URL("../migrations/0002_user_mcp_welcome_email.sql", import.meta.url),
+	"utf8",
+);
 
 test("M2 registers manage_my_context with explicit-only memory instructions", () => {
 	assert.match(indexSource, /registerTool\(\s*"manage_my_context"/);
@@ -27,6 +31,8 @@ test("D1 profile schema is bound and migrated", () => {
 	assert.match(migrationSource, /user_id TEXT PRIMARY KEY/);
 	assert.match(migrationSource, /profile_json TEXT NOT NULL/);
 	assert.match(migrationSource, /updated_at INTEGER NOT NULL/);
+	assert.match(welcomeEmailMigrationSource, /CREATE TABLE IF NOT EXISTS user_mcp_welcome/);
+	assert.match(welcomeEmailMigrationSource, /welcome_email_sent_at INTEGER/);
 });
 
 test("manage_my_context implements read, shallow merge, and clear", () => {
