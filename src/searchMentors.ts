@@ -105,6 +105,8 @@ const SPECIALIST_MARKETING_INTENT =
 	/\b(growth marketing|growth marketer|go-to-market|gtm|customer acquisition|user acquisition|retention|lifecycle|activation|demand generation|demand gen|paid media|paid social|performance marketing|seo|sem|conversion|experimentation|marketing analytics|funnel|product growth)\b/i;
 const SPECIALIST_MARKETING_SIGNAL =
 	/\b(growth marketing|growth marketer|go-to-market|gtm|customer acquisition|user acquisition|retention|lifecycle|activation|demand generation|demand gen|paid media|paid social|performance marketing|seo|sem|conversion|experimentation|marketing analytics|funnel|product growth|growth hacking|account-based marketing|abm)\b/i;
+const GROWTH_MARKETING_TOP_UP_INTENT =
+	/\b(growth marketing|growth marketer|go-to-market|gtm|customer acquisition|user acquisition|retention|lifecycle|activation|demand generation|demand gen|conversion|experimentation|funnel|product growth)\b/i;
 
 const EXPERIENCE_LEVELS = ["Senior", "Lead", "Director", "Executive"] as const;
 type ExperienceLevel = (typeof EXPERIENCE_LEVELS)[number];
@@ -330,7 +332,7 @@ function searchPageSize(input: SearchMentorsInput): number {
 }
 
 function expandIntentForSearch(input: SearchMentorsInput): string {
-	const trimmed = input.intent.trim();
+	const trimmed = stripResultCountLanguage(input.intent).trim();
 	let expansions = TAXONOMY_EXPANSIONS.filter(({ pattern }) => pattern.test(trimmed)).map(
 		({ expansion }) => expansion,
 	);
@@ -341,6 +343,21 @@ function expandIntentForSearch(input: SearchMentorsInput): string {
 	return expansions.length > 0
 		? `${trimmed}. Related search signals: ${expansions.join("; ")}`
 		: trimmed;
+}
+
+function stripResultCountLanguage(intent: string): string {
+	return intent
+		.replace(/\btop\s+(?:3|three|6|six|9|nine|a few|few)\b/gi, "")
+		.replace(
+			/\s*(?:and\s+)?\b(?:only|just|exactly)?\s*(?:return|show|give|find|list)\s+(?:me\s+)?(?:only|just|exactly)?\s*(?:3|three|6|six|9|nine|a few|few)\s+(?:mentors?|results?|candidates?)\b/gi,
+			"",
+		)
+		.replace(
+			/\s*(?:and\s+)?\b(?:only|just|exactly)\s+(?:3|three|6|six|9|nine|a few|few)\s+(?:mentors?|results?|candidates?)\b/gi,
+			"",
+		)
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
 function shouldUseDisciplineFilter(discipline: string): boolean {
@@ -577,6 +594,9 @@ function resultMaxResults(
 
 function mentionsExplicitResultLimit(intent: string): boolean {
 	const currentRequest = intent.match(/(?:^|\n)Current request:\s*(.+)$/i)?.[1] ?? intent;
+	if (/\btop\s+(?:3|three|6|six|9|nine|a few|few)\b/i.test(currentRequest)) {
+		return false;
+	}
 	return (
 		/\b(?:show|give|find|return|list)\s+(?:me\s+)?(?:exactly|only|just)\s+(?:3|three|6|six|9|nine|a few|few)\b/i.test(
 			currentRequest,
@@ -868,6 +888,13 @@ export async function searchMentors(
 	}
 
 	if (!profileText.trim()) {
+		bestResult = await topUpWithCanonicalMarketing(
+			baseUrl,
+			props,
+			input,
+			bestResult,
+			targetResultCount,
+		);
 		if (bestResult.mentors.length > 0) return bestResult;
 		return emptyRelaxedResult
 			? { ...emptyRelaxedResult, relaxed_filters: ["discipline"] }
@@ -882,6 +909,15 @@ export async function searchMentors(
 		]);
 		if (bestResult.mentors.length >= targetResultCount) return bestResult;
 	}
+
+	bestResult = await topUpWithCanonicalMarketing(
+		baseUrl,
+		props,
+		input,
+		bestResult,
+		targetResultCount,
+	);
+	if (bestResult.mentors.length >= targetResultCount) return bestResult;
 
 	if (!relaxedInput) {
 		return bestResult.mentors.length > 0
@@ -898,6 +934,35 @@ export async function searchMentors(
 	return mergeSearchMentorOutputs(input, [
 		bestResult,
 		{ ...bareRelaxedResult, relaxed_filters: ["profile_context", "discipline"] },
+	]);
+}
+
+async function topUpWithCanonicalMarketing(
+	baseUrl: string,
+	props: McpUserProps | undefined,
+	input: SearchMentorsInput,
+	bestResult: SearchMentorsOutput,
+	targetResultCount: number,
+): Promise<SearchMentorsOutput> {
+	const canonicalMarketingInput = marketingTopUpInput(input);
+	if (!canonicalMarketingInput || bestResult.mentors.length >= targetResultCount) {
+		return bestResult;
+	}
+
+	const canonicalMarketingResult = await fetchAndMapSearchMentors(
+		baseUrl,
+		props,
+		canonicalMarketingInput,
+		canonicalMarketingInput,
+	);
+	if (canonicalMarketingResult.mentors.length === 0) return bestResult;
+
+	return mergeSearchMentorOutputs(input, [
+		bestResult,
+		{
+			...canonicalMarketingResult,
+			relaxed_filters: [...(input.filters?.discipline ? ["discipline"] : []), "query"],
+		},
 	]);
 }
 
@@ -1020,6 +1085,22 @@ function inputWithoutDiscipline(input: SearchMentorsInput): SearchMentorsInput |
 	return {
 		...input,
 		filters: Object.keys(relaxedFilters).length > 0 ? relaxedFilters : undefined,
+	};
+}
+
+function marketingTopUpInput(input: SearchMentorsInput): SearchMentorsInput | null {
+	const rule = domainFitRuleFor(input);
+	if (rule?.name !== "marketing") return null;
+	if (!GROWTH_MARKETING_TOP_UP_INTENT.test(input.intent)) return null;
+	const inferredInput = withInferredFilters(input);
+	const { discipline: _discipline, ...filtersWithoutDiscipline } =
+		inferredInput.filters ?? {};
+	return {
+		...inferredInput,
+		intent:
+			"growth marketing acquisition retention lifecycle product marketing go-to-market demand generation",
+		filters:
+			Object.keys(filtersWithoutDiscipline).length > 0 ? filtersWithoutDiscipline : undefined,
 	};
 }
 

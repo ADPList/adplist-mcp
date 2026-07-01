@@ -159,6 +159,22 @@ test("search_mentors reranks executive product leaders above IC PMs and unrelate
 	assert.equal(result.mentors[0].title, "VP of Product");
 });
 
+test("search_mentors strips result-count instructions from search query text", () => {
+	const url = new URL(
+		buildUrl({
+			intent:
+				"Find the top 3 US growth marketing mentors and only return 3 candidates for acquisition retention lifecycle",
+			filters: { discipline: "Marketing", country: "US", max_results: 3 },
+		}),
+	);
+	const query = url.searchParams.get("q") ?? "";
+
+	assert.doesNotMatch(query, /top 3/i);
+	assert.doesNotMatch(query, /only return 3 candidates/i);
+	assert.match(query, /growth marketing/i);
+	assert.match(query, /acquisition retention lifecycle/i);
+});
+
 test("search_mentors infers US country filter from natural language intent", () => {
 	const url = new URL(
 		buildUrl({
@@ -881,6 +897,27 @@ test("search_mentors does not treat top-N ranking language as a hard marketing c
 	assert.equal(result.mentors.length, 9);
 });
 
+test("search_mentors keeps full marketing grids when top-N intent includes cap-like wording", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: Array.from({ length: 9 }, (_, index) => ({
+				name: `Growth ${index}`,
+				slug: `growth-${index}`,
+				title: "Growth Marketing Lead",
+				countryISO: "US",
+				expertise: ["marketing"],
+				disciplines: ["growth marketing"],
+			})),
+		},
+		{
+			intent: "Find the top 3 US growth marketing mentors and only return 3 candidates",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.equal(result.mentors.length, 9);
+});
+
 test("search_mentors tops up sparse domain results inside one tool call", async () => {
 	const originalFetch = globalThis.fetch;
 	const calls = [];
@@ -945,9 +982,11 @@ test("search_mentors tops up sparse domain results inside one tool call", async 
 			},
 		);
 
-		assert.equal(calls.length, 2);
+		assert.equal(calls.length, 3);
 		assert.equal(new URL(calls[0]).searchParams.has("disciplines"), true);
 		assert.equal(new URL(calls[1]).searchParams.has("disciplines"), false);
+		assert.match(new URL(calls[2]).searchParams.get("q"), /^growth marketing acquisition/);
+		assert.equal(new URL(calls[2]).searchParams.get("countries"), "US");
 		assert.deepEqual(
 			result.mentors.map((mentor) => mentor.slug),
 			["lifecycle-specialist", "demand-gen", "product-growth"],
@@ -957,7 +996,56 @@ test("search_mentors tops up sparse domain results inside one tool call", async 
 			result.mentors.map((mentor) => mentor.queryID),
 			["strict-query", "relaxed-query", "relaxed-query"],
 		);
-		assert.deepEqual(result.relaxed_filters, ["discipline"]);
+		assert.deepEqual(result.relaxed_filters, ["discipline", "query"]);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors does not use growth top-up for non-growth marketing specialties", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		const parsed = new URL(String(url));
+		if (parsed.searchParams.has("disciplines")) {
+			return jsonResponse({
+				results: [
+					{
+						name: "SEO Specialist",
+						slug: "seo-specialist",
+						title: "SEO Marketing Lead",
+						countryISO: "US",
+						expertise: ["SEO"],
+						disciplines: ["marketing"],
+					},
+				],
+				queryID: "strict-query",
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({ results: [], queryID: "relaxed-query", indexUsed: "explore" });
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example" },
+			undefined,
+			{
+				intent: "US SEO mentors",
+				filters: { discipline: "Marketing", max_results: 3 },
+			},
+		);
+
+		assert.equal(calls.length, 2);
+		assert.doesNotMatch(
+			new URL(calls.at(-1)).searchParams.get("q") ?? "",
+			/^growth marketing acquisition/,
+		);
+		assert.deepEqual(
+			result.mentors.map((mentor) => mentor.slug),
+			["seo-specialist"],
+		);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
@@ -1375,15 +1463,16 @@ test("search_mentors retries the bare intent when profile enrichment returns no 
 			},
 		);
 
-		assert.equal(searchCalls.length, 2);
+		assert.equal(searchCalls.length, 3);
 		assert.match(new URL(searchCalls[0]).searchParams.get("q"), /Current request:/);
 		const bareQuery = new URL(searchCalls[1]).searchParams.get("q");
 		assert.match(bareQuery, /^US growth marketing mentor for retention and lifecycle/);
 		assert.doesNotMatch(bareQuery, /Current request:/);
+		assert.match(new URL(searchCalls[2]).searchParams.get("q"), /^growth marketing acquisition/);
 		assert.equal(result.mentors.length, 1);
 		assert.equal(result.mentors[0].slug, "growth-mentor");
 		assert.equal(result.queryID, "bare-query");
-		assert.deepEqual(result.relaxed_filters, ["profile_context"]);
+		assert.deepEqual(result.relaxed_filters, ["profile_context", "query"]);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
