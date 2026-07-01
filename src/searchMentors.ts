@@ -622,7 +622,7 @@ function seniorityFitScore(
 
 function hasProductManagementIntent(input: SearchMentorsInput): boolean {
 	const haystack = [input.intent, input.filters?.discipline].filter(Boolean).join(" ");
-	return /\b(product management|product managers?|product leaders?|vp of product|head of product|director of product|chief product officer|cpo|group product manager|gpm|technical product manager|product strategy|roadmap|roadmapping)\b/i.test(
+	return /\b(product management|product managers?|product leaders?|vp of product|head of product|director of product|chief product officer|cpo|group product manager|gpm|technical product manager|product strategy|product roadmap|roadmapping)\b/i.test(
 		haystack,
 	);
 }
@@ -634,12 +634,7 @@ function matchesProductManagementFit(
 	if (!hasProductManagementIntent(input)) return true;
 	const text = mentorDomainText(mentor);
 	if (hasProductManagementRoleSignal(text) || hasProductManagementDiscipline(text)) return true;
-	return !(
-		hasGenericProductExpertise(text) &&
-		/\b(designer|design|engineer|engineering|developer|data scientist|data analyst|researcher|writer|marketer|marketing|sales|customer success)\b/i.test(
-			text.title,
-		)
-	);
+	return hasProductManagementExpertiseSignal(text) && !isClearlyNonProductManagementTitle(text.title);
 }
 
 function productManagementFitScore(mentor: SearchServiceMentor): number {
@@ -895,6 +890,18 @@ function hasProductManagementRoleSignal(text: ReturnType<typeof mentorDomainText
 function hasProductManagementDiscipline(text: ReturnType<typeof mentorDomainText>): boolean {
 	return /\b(generalist product management|technical product management|growth product management|data product management|platform product management|group product management|ai product management)\b/i.test(
 		text.disciplines,
+	);
+}
+
+function hasProductManagementExpertiseSignal(text: ReturnType<typeof mentorDomainText>): boolean {
+	return /\b(product strategy|product roadmap|roadmapping|prioritization|product discovery)\b/i.test(
+		text.expertise,
+	);
+}
+
+function isClearlyNonProductManagementTitle(title: string): boolean {
+	return /\b(designer|design|engineer|engineering|developer|data scientist|data analyst|researcher|writer|marketer|marketing|sales|customer success)\b/i.test(
+		title,
 	);
 }
 

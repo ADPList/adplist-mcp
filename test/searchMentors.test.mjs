@@ -230,6 +230,40 @@ test("search_mentors keeps product designers for product design intent", () => {
 	);
 });
 
+test("search_mentors filters non-PM titles without Product expertise for PM intent", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "UX Researcher",
+					slug: "ux-researcher",
+					title: "UX Researcher",
+					countryISO: "US",
+					expertise: ["Research", "User Interviews"],
+					disciplines: ["UX Research"],
+				},
+				{
+					name: "Product Manager",
+					slug: "product-manager",
+					title: "Product Manager",
+					countryISO: "US",
+					expertise: ["Roadmapping"],
+					disciplines: ["Generalist Product Management"],
+				},
+			],
+		},
+		{
+			intent: "product management mentor for roadmap and strategy",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["product-manager"],
+	);
+});
+
 test("search_mentors keeps PM filtering when product management intent mentions adjacent product roles", () => {
 	const result = mapSearchMentorsResponse(
 		{
@@ -423,6 +457,14 @@ test("search_mentors overfetches candidates when a domain-fit gate is active", (
 		}),
 	);
 	assert.equal(productManagementUrl.searchParams.get("pageSize"), "72");
+
+	const careerRoadmapUrl = new URL(
+		buildUrl({
+			intent: "career roadmap for engineers",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(careerRoadmapUrl.searchParams.get("pageSize"), "6");
 
 	const talentAcquisitionUrl = new URL(
 		buildUrl({
