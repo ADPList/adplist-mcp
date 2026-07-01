@@ -157,6 +157,14 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 								.optional()
 								.describe("ISO 3166-1 alpha-2 country code, e.g. US or SG."),
 							language: z.string().trim().min(1).optional(),
+							experience_level: z
+								.string()
+								.trim()
+								.min(1)
+								.optional()
+								.describe(
+									"Mentor seniority tier to prioritize/filter, e.g. Executive for VP/CPO/Head-level requests.",
+								),
 							max_results: z
 								.number()
 								.int()
@@ -436,7 +444,9 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.min(1)
 						.max(1000)
 						.optional()
-						.describe("Optional message to the mentee (e.g. reason for declining, a warm welcome)."),
+						.describe(
+							"Optional message to the mentee (e.g. reason for declining, a warm welcome).",
+						),
 				},
 			},
 			async (input) =>

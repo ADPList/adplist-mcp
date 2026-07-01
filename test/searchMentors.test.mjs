@@ -85,6 +85,71 @@ test("search_mentors expands weak taxonomy intents instead of forcing brittle di
 	assert.equal(productUrl.searchParams.get("disciplines"), "product design");
 });
 
+test("search_mentors exposes and infers seniority filters for executive product intent", () => {
+	assert.match(indexSource, /experience_level: z/);
+	assert.match(source, /experience_level\?: string/);
+
+	const explicitUrl = new URL(
+		buildUrl({
+			intent: "Find product leaders in the US",
+			filters: { experience_level: "Executive", max_results: 6 },
+		}),
+	);
+	assert.equal(explicitUrl.searchParams.get("level"), "executive");
+	assert.equal(explicitUrl.searchParams.get("pageSize"), "72");
+
+	const inferredUrl = new URL(
+		buildUrl({
+			intent: "VP of Product in the US",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(inferredUrl.searchParams.get("level"), "executive");
+	assert.equal(inferredUrl.searchParams.get("countries"), "US");
+});
+
+test("search_mentors reranks executive product leaders above IC PMs and unrelated roles", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "IC PM",
+					slug: "ic-pm",
+					title: "Product Manager",
+					countryISO: "US",
+					expertise: ["Product"],
+					disciplines: ["Generalist Product Management"],
+					total_sessions: 20,
+				},
+				{
+					name: "Product Exec",
+					slug: "product-exec",
+					title: "VP of Product",
+					countryISO: "US",
+					expertise: ["Product Strategy"],
+					disciplines: ["Generalist Product Management"],
+					total_sessions: 8,
+				},
+				{
+					name: "Design Exec",
+					slug: "design-exec",
+					title: "VP of Design",
+					countryISO: "US",
+					expertise: ["Design"],
+					disciplines: ["Product Design"],
+					total_sessions: 30,
+				},
+			],
+			queryID: "q",
+			indexUsed: "explore",
+		},
+		{ intent: "VP of Product in the US", filters: { country: "US", max_results: 3 } },
+	);
+
+	assert.equal(result.mentors[0].slug, "product-exec");
+	assert.equal(result.mentors[0].title, "VP of Product");
+});
+
 test("search_mentors infers US country filter from natural language intent", () => {
 	const url = new URL(
 		buildUrl({
@@ -112,8 +177,7 @@ test("search_mentors infers US country filter from natural language intent", () 
 
 	const enrichedProfileOnlyUrl = new URL(
 		buildUrl({
-			intent:
-				"Stored ADPList career context: Role: Founder. Based in United States\nCurrent request: find growth marketing mentors",
+			intent: "Stored ADPList career context: Role: Founder. Based in United States\nCurrent request: find growth marketing mentors",
 			filters: { max_results: 6 },
 		}),
 	);
@@ -121,8 +185,7 @@ test("search_mentors infers US country filter from natural language intent", () 
 
 	const enrichedRequestUrl = new URL(
 		buildUrl({
-			intent:
-				"Stored ADPList career context: Role: Founder. Based in Canada\nCurrent request: find US growth marketing mentors",
+			intent: "Stored ADPList career context: Role: Founder. Based in Canada\nCurrent request: find US growth marketing mentors",
 			filters: { max_results: 6 },
 		}),
 	);
@@ -494,7 +557,10 @@ test("search_mentors reranks marketing candidates by growth and product marketin
 		},
 	);
 
-	assert.deepEqual(result.mentors.map((mentor) => mentor.slug), ["growth-lead"]);
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["growth-lead"],
+	);
 });
 
 test("search_mentors ranks specialist growth marketing evidence over general marketing", () => {
@@ -608,7 +674,10 @@ test("search_mentors keeps genuine growth-role mentors for specialist marketing 
 		},
 	);
 
-	assert.deepEqual(result.mentors.map((mentor) => mentor.slug), ["growth-advisor"]);
+	assert.deepEqual(
+		result.mentors.map((mentor) => mentor.slug),
+		["growth-advisor"],
+	);
 });
 
 test("search_mentors keeps explicit product marketing candidates for hybrid GTM asks", () => {

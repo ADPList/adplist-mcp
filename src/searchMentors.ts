@@ -5,6 +5,7 @@ export type SearchMentorsFilters = {
 	discipline?: string;
 	country?: string;
 	language?: string;
+	experience_level?: string;
 	max_results?: number;
 };
 
@@ -53,6 +54,7 @@ type SearchServiceMentor = {
 	expertise?: string[];
 	disciplines?: string[];
 	languages?: string[];
+	experience_level?: string;
 	average_rating?: number;
 	total_sessions?: number;
 	next_7_day_slots_count?: number;
@@ -103,6 +105,9 @@ const SPECIALIST_MARKETING_INTENT =
 	/\b(growth marketing|growth marketer|go-to-market|gtm|customer acquisition|user acquisition|retention|lifecycle|activation|demand generation|demand gen|paid media|paid social|performance marketing|seo|sem|conversion|experimentation|marketing analytics|funnel|product growth)\b/i;
 const SPECIALIST_MARKETING_SIGNAL =
 	/\b(growth marketing|growth marketer|go-to-market|gtm|customer acquisition|user acquisition|retention|lifecycle|activation|demand generation|demand gen|paid media|paid social|performance marketing|seo|sem|conversion|experimentation|marketing analytics|funnel|product growth|growth hacking|account-based marketing|abm)\b/i;
+
+const EXPERIENCE_LEVELS = ["Senior", "Lead", "Director", "Executive"] as const;
+type ExperienceLevel = (typeof EXPERIENCE_LEVELS)[number];
 
 const TAXONOMY_EXPANSIONS: Array<{ pattern: RegExp; expansion: string }> = [
 	{
@@ -304,12 +309,19 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 		url.searchParams.set("disciplines", filters.discipline.trim().toLowerCase());
 	if (filters.country) url.searchParams.set("countries", filters.country.trim().toUpperCase());
 	if (filters.language) url.searchParams.set("languages", filters.language.trim().toLowerCase());
+	if (filters.experience_level)
+		url.searchParams.set("level", filters.experience_level.trim().toLowerCase());
 	return url.toString();
 }
 
 function searchPageSize(input: SearchMentorsInput): number {
 	const filters = input.filters ?? {};
-	if (filters.country || filters.language || domainFitRuleFor(input)) {
+	if (
+		filters.country ||
+		filters.language ||
+		filters.experience_level ||
+		domainFitRuleFor(input)
+	) {
 		return FILTERED_CANDIDATE_PAGE_SIZE;
 	}
 	return normalizeMaxResults(filters.max_results);
@@ -485,15 +497,70 @@ function rankMentorCandidates(
 	rule: (typeof DOMAIN_FIT_RULES)[number] | undefined,
 	input: SearchMentorsInput,
 ): SearchServiceMentor[] {
-	if (!rule) return mentors;
+	const requestedLevel = requestedExperienceLevel(input);
+	if (!rule && !requestedLevel) return mentors;
 	return mentors
 		.map((mentor, index) => ({
 			mentor,
 			index,
-			score: domainFitScore(mentor, rule, input),
+			score:
+				(rule ? domainFitScore(mentor, rule, input) : 0) +
+				seniorityFitScore(mentor, requestedLevel),
 		}))
 		.sort((a, b) => b.score - a.score || a.index - b.index)
 		.map(({ mentor }) => mentor);
+}
+
+function requestedExperienceLevel(input: SearchMentorsInput): ExperienceLevel | undefined {
+	return normalizeExperienceLevel(input.filters?.experience_level);
+}
+
+function normalizeExperienceLevel(value: string | undefined): ExperienceLevel | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (!normalized) return undefined;
+	if (/\b(senior|sr\.?|staff|principal)\b/.test(normalized)) return "Senior";
+	if (/\b(lead|group)\b/.test(normalized)) return "Lead";
+	if (/\b(director|head)\b/.test(normalized)) return "Director";
+	if (/\b(executive|vp|vice president|svp|evp|cpo|chief)\b/.test(normalized)) return "Executive";
+	return EXPERIENCE_LEVELS.find((level) => level.toLowerCase() === normalized);
+}
+
+function seniorityFitScore(
+	mentor: SearchServiceMentor,
+	requestedLevel: ExperienceLevel | undefined,
+): number {
+	if (!requestedLevel) return 0;
+	const actualLevel = normalizeExperienceLevel(mentor.experience_level);
+	const title = (mentor.title ?? "").toLowerCase();
+	const bio = (mentor.bio ?? "").toLowerCase();
+	const roleText = `${title} ${bio}`;
+	let score = 0;
+	if (actualLevel === requestedLevel) score += 50;
+	if (requestedLevel === "Executive") {
+		if (
+			/\b(cpo|chief product officer|chief|vp|vice president|svp|evp|head of product|executive)\b/i.test(
+				roleText,
+			)
+		)
+			score += 40;
+		if (/\b(product manager|pm|designer|engineer|developer)\b/i.test(title)) score -= 12;
+	}
+	if (requestedLevel === "Director") {
+		if (/\b(director|head of|group product manager|gpm)\b/i.test(roleText)) score += 35;
+		if (/\b(vp|vice president|cpo|chief product officer)\b/i.test(roleText)) score += 20;
+	}
+	if (requestedLevel === "Lead") {
+		if (/\b(lead|group product manager|gpm|staff|principal)\b/i.test(roleText)) score += 30;
+	}
+	if (requestedLevel === "Senior") {
+		if (
+			/\b(senior|sr\.?|staff|principal|lead|director|head of|vp|vice president|cpo)\b/i.test(
+				roleText,
+			)
+		)
+			score += 25;
+	}
+	return score;
 }
 
 function resultMaxResults(
@@ -843,7 +910,9 @@ function mergeSearchMentorOutputs(
 		for (const mentor of output.mentors) {
 			const key =
 				mentor.slug ||
-				(mentor.name || mentor.title ? `${mentor.name}:${mentor.title}` : mentor.profile_url);
+				(mentor.name || mentor.title
+					? `${mentor.name}:${mentor.title}`
+					: mentor.profile_url);
 			if (seen.has(key)) continue;
 			seen.add(key);
 			mentors.push(mentor);
@@ -874,14 +943,33 @@ function mergeSearchMentorOutputs(
 
 function withInferredFilters(input: SearchMentorsInput): SearchMentorsInput {
 	const inferredCountry = input.filters?.country ?? inferCountryFromIntent(input.intent);
-	if (!inferredCountry) return input;
+	const inferredExperienceLevel =
+		input.filters?.experience_level ?? inferExperienceLevelFromIntent(input.intent);
+	if (!inferredCountry && !inferredExperienceLevel) return input;
 	return {
 		...input,
 		filters: {
 			...input.filters,
-			country: inferredCountry,
+			...(inferredCountry ? { country: inferredCountry } : {}),
+			...(inferredExperienceLevel ? { experience_level: inferredExperienceLevel } : {}),
 		},
 	};
+}
+
+function inferExperienceLevelFromIntent(intent: string): ExperienceLevel | undefined {
+	const requestIntent = intent.includes("Current request:")
+		? (intent.split("Current request:").pop() ?? intent)
+		: intent;
+	if (
+		/\b(cpo|chief product officer|chief .+ officer|vp|vice president|svp|evp|executive)\b/i.test(
+			requestIntent,
+		)
+	)
+		return "Executive";
+	if (/\b(director|head of product|head of .+)\b/i.test(requestIntent)) return "Director";
+	if (/\b(lead|group product manager|gpm)\b/i.test(requestIntent)) return "Lead";
+	if (/\b(senior|sr\.?|staff|principal)\b/i.test(requestIntent)) return "Senior";
+	return undefined;
 }
 
 function inferCountryFromIntent(intent: string): string | undefined {
