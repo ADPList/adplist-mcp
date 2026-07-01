@@ -58,7 +58,7 @@ app.get("/account/revoke", (c) => c.html(renderRevokeEmailPage()));
 
 app.post("/account/revoke/login", async (c) => {
 	const body = await c.req.parseBody();
-	const email = stringField(body.email)?.trim().toLowerCase();
+	const email = emailField(body.email);
 	if (!email) {
 		return c.html(renderErrorPage("Please enter your email address."), 400);
 	}
@@ -123,6 +123,7 @@ app.post("/account/revoke/verify", async (c) => {
 	} catch {
 		if ((await registerFailedOtpAttempt(c.env, attemptsKey)) >= OTP_VERIFY_MAX_ATTEMPTS) {
 			await c.env.OAUTH_KV.delete(`oauth_revoke:${revokeId}`);
+			await c.env.OAUTH_KV.delete(attemptsKey);
 		}
 		return c.html(
 			renderErrorPage("That code was incorrect or expired. Please start again to retry."),
@@ -166,7 +167,7 @@ app.get("/oauth/authorize", async (c) => {
 app.post("/oauth/login", async (c) => {
 	const body = await c.req.parseBody();
 	const loginId = stringField(body.loginId);
-	const email = stringField(body.email)?.trim().toLowerCase();
+	const email = emailField(body.email);
 	if (!loginId || !email) {
 		return c.html(renderErrorPage("Please enter your email address."), 400);
 	}
@@ -196,7 +197,14 @@ app.post("/oauth/login", async (c) => {
 			cognitoUserId: otp.cognitoUserId,
 		});
 	} catch {
-		await putLogin(c.env, loginId, { ...stored, email });
+		// Clear any Cognito session from a prior successful send on this loginId so a
+		// failed resend can't leave the old code verifiable against a new email address.
+		await putLogin(c.env, loginId, {
+			...stored,
+			email,
+			cognitoSession: undefined,
+			cognitoUserId: undefined,
+		});
 	}
 	return c.html(renderOtpPage(loginId, email, stored.clientName));
 });
@@ -237,6 +245,7 @@ app.post("/oauth/verify", async (c) => {
 	} catch {
 		if ((await registerFailedOtpAttempt(c.env, attemptsKey)) >= OTP_VERIFY_MAX_ATTEMPTS) {
 			await c.env.OAUTH_KV.delete(`oauth_login:${loginId}`);
+			await c.env.OAUTH_KV.delete(attemptsKey);
 		}
 		return c.html(
 			renderErrorPage(
@@ -345,17 +354,17 @@ async function consumeRateLimit(
 }
 
 // Reject any OTP send that trips either the per-IP or the per-email budget.
+// Check the IP budget FIRST and bail before touching the email counter — otherwise
+// an already-throttled IP (which no longer increments) could still drain any
+// victim's per-email budget, locking them out without a single OTP being sent.
 async function otpSendThrottled(env: Bindings, ip: string, email: string): Promise<boolean> {
-	const [ipThrottled, emailThrottled] = await Promise.all([
-		consumeRateLimit(env, `otp_rate:${ip}`),
-		consumeRateLimit(
-			env,
-			`otp_email_rate:${email}`,
-			OTP_EMAIL_RATE_LIMIT,
-			OTP_EMAIL_RATE_WINDOW_SECONDS,
-		),
-	]);
-	return ipThrottled || emailThrottled;
+	if (await consumeRateLimit(env, `otp_rate:${ip}`)) return true;
+	return consumeRateLimit(
+		env,
+		`otp_email_rate:${email}`,
+		OTP_EMAIL_RATE_LIMIT,
+		OTP_EMAIL_RATE_WINDOW_SECONDS,
+	);
 }
 
 // Track failed OTP guesses per sign-in/revoke session so the code can't be
@@ -377,6 +386,16 @@ async function otpAttemptsExhausted(env: Bindings, key: string): Promise<boolean
 
 function stringField(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+// Normalize and bound an email before it is ever used (notably as an `otp_email_rate:`
+// KV key). RFC 5321 caps addresses at 254 chars; rejecting longer input keeps the key
+// under Cloudflare KV's 512-byte limit so a direct POST can't turn the throttle into a 500.
+const MAX_EMAIL_LENGTH = 254;
+function emailField(value: unknown): string | undefined {
+	const email = stringField(value)?.trim().toLowerCase();
+	if (!email || email.length > MAX_EMAIL_LENGTH) return undefined;
+	return email;
 }
 
 const STYLES = `:root{color-scheme:light}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#f3f4f6;color:#111827;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem}.card{background:#fff;max-width:25rem;width:100%;border-radius:.875rem;box-shadow:0 1px 3px rgba(0,0,0,.08),0 12px 28px rgba(0,0,0,.07);padding:2rem;box-sizing:border-box}.brand{font-weight:700;font-size:1.05rem;letter-spacing:-.01em}h1{font-size:1.3rem;margin:1.1rem 0 .35rem}p{color:#4b5563;line-height:1.55;margin:.35rem 0;font-size:.95rem}label{display:block;font-weight:600;font-size:.85rem;margin:1.2rem 0 .4rem}input{width:100%;box-sizing:border-box;padding:.7rem .8rem;border:1px solid #d1d5db;border-radius:.55rem;font-size:1rem}input:focus{outline:2px solid #111827;outline-offset:0;border-color:#111827}button,.button{display:block;text-align:center;text-decoration:none;box-sizing:border-box;width:100%;margin-top:1.3rem;border:0;border-radius:.55rem;padding:.8rem 1rem;font-weight:600;font-size:1rem;background:#111827;color:#fff;cursor:pointer}button:hover,.button:hover{background:#1f2937}.scopes{background:#f9fafb;border:1px solid #e5e7eb;border-radius:.55rem;padding:.7rem .85rem;margin-top:1.1rem;font-size:.85rem;color:#4b5563}.scopes div{margin-top:.25rem}.muted{font-size:.82rem;color:#6b7280;margin-top:1.1rem}`;

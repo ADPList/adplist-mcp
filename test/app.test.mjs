@@ -63,6 +63,45 @@ test("OTP send never reveals whether the account exists (enumeration defense)", 
 	}
 });
 
+test("an IP-throttled OTP send does not drain the victim's per-email budget", async () => {
+	const kv = createKV({
+		"oauth_login:login-ip": JSON.stringify({
+			oauthReqInfo: { clientId: "c", scope: [] },
+			createdAt: Date.now(),
+		}),
+	});
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () => Response.json({ session: "s", userId: "cog" });
+	const env = { ...AUTH_ENV, OAUTH_KV: kv };
+	const send = (email) =>
+		app.request(
+			"/oauth/login",
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/x-www-form-urlencoded",
+					"cf-connecting-ip": "1.2.3.4",
+				},
+				body: form({ loginId: "login-ip", email }),
+			},
+			env,
+		);
+	try {
+		// Exhaust the per-IP budget with attacker-controlled addresses.
+		for (let i = 0; i < 5; i += 1) {
+			const res = await send(`attacker${i}@example.com`);
+			assert.equal(res.status, 200, `warm-up send ${i + 1} should succeed`);
+		}
+		// A further send from the same IP targeting the victim is IP-blocked...
+		const blocked = await send("victim@example.com");
+		assert.equal(blocked.status, 429);
+		// ...and must NOT have touched the victim's per-email counter.
+		assert.equal(kv.store.has("otp_email_rate:victim@example.com"), false);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("OTP verify caps failed attempts then burns the login session", async () => {
 	const kv = createKV({
 		"oauth_login:login-2": JSON.stringify({
