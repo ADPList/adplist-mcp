@@ -1347,6 +1347,106 @@ test("search_mentors does not retry when the constrained search has mentors", as
 	}
 });
 
+test("search_mentors resolves a literal mentor name through the profile endpoint before Explore", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		if (String(url).includes("/users/profile/mentor/brennan-collins")) {
+			return jsonResponse(BRENNAN_PROFILE_RESPONSE);
+		}
+		return jsonResponse({ results: [{ name: "Wrong Mentor", slug: "wrong-mentor" }] });
+	};
+
+	try {
+		const result = await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+			},
+			undefined,
+			{ intent: "Find Brennan Collins mentor" },
+		);
+
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0], "https://auth.example/users/profile/mentor/brennan-collins");
+		assert.equal(result.indexUsed, "profile_lookup");
+		assert.equal(result.mentors[0].slug, "brennan-collins");
+		assert.equal(result.mentors[0].name, "Brennan Collins");
+		assert.equal(result.mentors[0].title, "Chief Product Officer");
+		assert.equal(result.mentors[0].country_iso, "US");
+		assert.equal(result.mentors[0].why_match, "Exact ADPList mentor profile name match.");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors uses only the current request for literal name lookup", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		if (String(url).includes("/users/profile/mentor/brennan-collins")) {
+			return jsonResponse(BRENNAN_PROFILE_RESPONSE);
+		}
+		return jsonResponse({ results: [] });
+	};
+
+	try {
+		const result = await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+			},
+			undefined,
+			{
+				intent: "Stored ADPList career context: Role: Founder. Based in United States\nCurrent request: Brennan Collins",
+			},
+		);
+
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0], "https://auth.example/users/profile/mentor/brennan-collins");
+		assert.equal(result.mentors[0].slug, "brennan-collins");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors falls back to Explore when a literal profile candidate does not match", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		if (String(url).includes("/users/profile/mentor/brennan-collins")) {
+			return jsonResponse({ data: { fullName: "Brenna Collins" } });
+		}
+		return jsonResponse({
+			results: [{ name: "Explore Brennan", slug: "explore-brennan" }],
+			queryID: "explore-query",
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+			},
+			undefined,
+			{ intent: "Brennan Collins" },
+		);
+
+		assert.equal(calls.length, 2);
+		assert.equal(calls[0], "https://auth.example/users/profile/mentor/brennan-collins");
+		assert.equal(new URL(calls[1]).pathname, "/search");
+		assert.equal(result.mentors[0].slug, "explore-brennan");
+		assert.equal(result.queryID, "explore-query");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 function jsonResponse(body) {
 	return new Response(JSON.stringify(body), {
 		status: 200,
@@ -1363,6 +1463,21 @@ const AUTHED_PROPS = {
 	email: null,
 	scopes: [],
 	cognitoAccessToken: "cognito-token",
+};
+
+const BRENNAN_PROFILE_RESPONSE = {
+	data: {
+		fullName: "Brennan Collins",
+		profile: {
+			title: "Chief Product Officer",
+			organization: "Unabated Products",
+			image: "https://adplist-bucket.s3.us-east-2.amazonaws.com/media/profile_photos/brennan.webp",
+		},
+		experiences: {
+			expertise: [{ expertise: "Product Strategy" }, { expertise: "Leadership" }],
+		},
+		country: { iso: "US" },
+	},
 };
 
 const PROFILE_ME_RESPONSE = {
@@ -1468,7 +1583,10 @@ test("search_mentors retries the bare intent when profile enrichment returns no 
 		const bareQuery = new URL(searchCalls[1]).searchParams.get("q");
 		assert.match(bareQuery, /^US growth marketing mentor for retention and lifecycle/);
 		assert.doesNotMatch(bareQuery, /Current request:/);
-		assert.match(new URL(searchCalls[2]).searchParams.get("q"), /^growth marketing acquisition/);
+		assert.match(
+			new URL(searchCalls[2]).searchParams.get("q"),
+			/^growth marketing acquisition/,
+		);
 		assert.equal(result.mentors.length, 1);
 		assert.equal(result.mentors[0].slug, "growth-mentor");
 		assert.equal(result.queryID, "bare-query");

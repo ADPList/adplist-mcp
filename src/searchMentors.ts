@@ -1,4 +1,10 @@
-import { combineIntentWithProfile, getProfileTextForSearch } from "./profile.ts";
+import {
+	asRecord,
+	combineIntentWithProfile,
+	getProfileTextForSearch,
+	labelsOf,
+	textOf,
+} from "./profile.ts";
 import type { McpUserProps } from "./types";
 
 export type SearchMentorsFilters = {
@@ -99,6 +105,33 @@ const ROW_SIZE = 3;
 const FILTERED_CANDIDATE_PAGE_SIZE = 72;
 const ALGOLIA_QUERY_MAX_BYTES = 500;
 const MIN_MARKETING_DOMAIN_SCORE = 8;
+const LITERAL_NAME_STOP_WORDS = new Set([
+	"find",
+	"show",
+	"get",
+	"book",
+	"with",
+	"mentor",
+	"mentors",
+	"profile",
+	"adplist",
+]);
+const LITERAL_NAME_BLOCKLIST = new Set([
+	"product",
+	"designer",
+	"design",
+	"engineering",
+	"engineer",
+	"marketing",
+	"growth",
+	"manager",
+	"director",
+	"executive",
+	"senior",
+	"lead",
+	"coach",
+	"career",
+]);
 const GROWTH_MARKETING_EXPANSION =
 	"growth marketing acquisition lifecycle marketing retention activation experimentation conversion optimization demand generation go-to-market marketing analytics";
 const SPECIALIST_MARKETING_INTENT =
@@ -846,6 +879,9 @@ export async function searchMentors(
 	if (!baseUrl) throw new Error("SEARCH_SERVICE_URL is not configured");
 	validateDisciplineFilter(input);
 
+	const literalNameResult = await searchMentorByLiteralName(env, input);
+	if (literalNameResult) return literalNameResult;
+
 	const profileText = await getProfileTextForSearch(env, props).catch(() => "");
 	const searchInput = {
 		...input,
@@ -935,6 +971,109 @@ export async function searchMentors(
 		bestResult,
 		{ ...bareRelaxedResult, relaxed_filters: ["profile_context", "discipline"] },
 	]);
+}
+
+async function searchMentorByLiteralName(
+	env: Env,
+	input: SearchMentorsInput,
+): Promise<SearchMentorsOutput | null> {
+	if (!env.AUTH_SERVICE_URL) return null;
+	const candidateName = literalNameCandidate(input.intent);
+	if (!candidateName) return null;
+
+	const slug = slugifyLiteralName(candidateName);
+	if (!slug) return null;
+
+	try {
+		const response = await fetch(
+			new URL(
+				`/users/profile/mentor/${encodeURIComponent(slug)}`,
+				env.AUTH_SERVICE_URL,
+			).toString(),
+			{ headers: { Accept: "application/json" } },
+		);
+		if (response.status === 404) return null;
+		if (!response.ok) return null;
+
+		const profile = asRecord(asRecord(await response.json()).data);
+		if (Object.keys(profile).length === 0) return null;
+		const returnedName = textOf(profile.fullName);
+		if (!isSameLiteralName(candidateName, returnedName)) return null;
+
+		return {
+			mentors: [mapLiteralProfileToSearchResult(profile, slug)],
+			indexUsed: "profile_lookup",
+		};
+	} catch {
+		return null;
+	}
+}
+
+function literalNameCandidate(intent: string): string {
+	const requestIntent = currentRequestIntent(intent)
+		.replace(/[“”]/g, '"')
+		.replace(/[’]/g, "'")
+		.trim();
+	if (!requestIntent) return "";
+
+	const quoted = requestIntent.match(/"([A-Za-z][A-Za-z' -]+ [A-Za-z][A-Za-z' -]+)"/);
+	const candidate = quoted?.[1] ?? stripLiteralNameFiller(requestIntent);
+	const words = candidate.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
+	if (words.length < 2 || words.length > 4) return "";
+	if (words.some((word) => LITERAL_NAME_BLOCKLIST.has(word.toLowerCase()))) return "";
+	return words.join(" ");
+}
+
+function currentRequestIntent(intent: string): string {
+	return intent.includes("Current request:")
+		? (intent.split("Current request:").pop() ?? intent)
+		: intent;
+}
+
+function stripLiteralNameFiller(value: string): string {
+	const words = value.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
+	return words.filter((word) => !LITERAL_NAME_STOP_WORDS.has(word.toLowerCase())).join(" ");
+}
+
+function slugifyLiteralName(value: string): string {
+	return value
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+}
+
+function isSameLiteralName(requested: string, returned: string): boolean {
+	return slugifyLiteralName(requested) === slugifyLiteralName(returned);
+}
+
+function mapLiteralProfileToSearchResult(
+	profile: Record<string, unknown>,
+	slug: string,
+): SearchMentorResult {
+	const profileDetails = asRecord(profile.profile);
+	const experiences = asRecord(profile.experiences);
+	const country = asRecord(profile.country);
+	const expertise = splitLabels(labelsOf(experiences.expertise)).slice(0, 3);
+	return {
+		name: textOf(profile.fullName),
+		slug,
+		title: textOf(profileDetails.title),
+		company: textOf(profileDetails.organization),
+		expertise,
+		rating: null,
+		sessions_count: 0,
+		next_7_day_slots_count: 0,
+		country_iso: textOf(country.iso).toUpperCase(),
+		profile_url: `https://adplist.org/mentors/${encodeURIComponent(slug)}`,
+		profile_photo_url: normalizeImageUrl(profileDetails.image),
+		why_match: "Exact ADPList mentor profile name match.",
+	};
+}
+
+function splitLabels(labels: string): string[] {
+	return labels ? labels.split(", ").filter(Boolean) : [];
 }
 
 async function topUpWithCanonicalMarketing(
