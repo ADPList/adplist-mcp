@@ -569,8 +569,13 @@ function createOAuthProvider(env: Env) {
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		try {
-			if (new URL(request.url).pathname === "/assets/claude-mcp.gif" && env.ASSETS) {
-				return env.ASSETS.fetch(request);
+			const url = new URL(request.url);
+			if (url.pathname === "/assets/claude-mcp.gif" && env.ASSETS) {
+				const response = await env.ASSETS.fetch(request);
+				if (response.status !== 404) return response;
+				const fallbackUrl = new URL(request.url);
+				fallbackUrl.pathname = "/claude-mcp.gif";
+				return env.ASSETS.fetch(new Request(fallbackUrl, request));
 			}
 			return await createOAuthProvider(env).fetch(request, env, ctx);
 		} catch (error) {
