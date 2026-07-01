@@ -213,6 +213,33 @@ test("search_mentors preserves broad non-taxonomy discipline prompts as keyword 
 	assert.match(url.searchParams.get("q"), /growth marketing acquisition/i);
 });
 
+test("search_mentors dedupes and diversifies unknown discipline suggestions", async () => {
+	await assert.rejects(
+		() =>
+			searchMentors({ SEARCH_SERVICE_URL: "https://search.example" }, undefined, {
+				intent: "need data mentor",
+				filters: { discipline: "Data Strategy", max_results: 6 },
+			}),
+		(error) => {
+			assert.equal(
+				(error.message.match(/Data Engineering/g) ?? []).length,
+				1,
+				"Data Engineering should not be suggested twice",
+			);
+			return true;
+		},
+	);
+
+	await assert.rejects(
+		() =>
+			searchMentors({ SEARCH_SERVICE_URL: "https://search.example" }, undefined, {
+				intent: "need revenue mentor",
+				filters: { discipline: "Chief Revenue Officer", max_results: 6 },
+			}),
+		/Product Design, Generalist Product Management, Front-end, Data Analysis, Product Marketing, Customer Success Management/,
+	);
+});
+
 test("search_mentors relaxes valid discipline filters after a zero-result over-strict search", () => {
 	assert.match(source, /const relaxedInput = inputWithoutDiscipline\(input\)/);
 	assert.match(

@@ -175,7 +175,6 @@ const VALID_DISCIPLINES = [
 	"Front-end",
 	"Back-end",
 	"Full stack",
-	"Data engineering",
 	"UX Engineering",
 	"AI/ML Engineering",
 	"iOS Engineering",
@@ -367,7 +366,15 @@ function suggestedDisciplines(discipline: string): string[] {
 		.filter(({ score }) => score > 0)
 		.sort((a, b) => b.score - a.score || a.value.localeCompare(b.value))
 		.map(({ value }) => value);
-	return (scored.length > 0 ? scored : VALID_DISCIPLINES).slice(0, 6);
+	if (scored.length > 0) return scored.slice(0, 6);
+	return [
+		"Product Design",
+		"Generalist Product Management",
+		"Front-end",
+		"Data Analysis",
+		"Product Marketing",
+		"Customer Success Management",
+	];
 }
 
 function normalizeDiscipline(value: string): string {
