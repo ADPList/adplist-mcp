@@ -23,7 +23,11 @@ test("search_mentors instructs at most one search per user request (widget-stack
 	assert.match(indexSource, /at most\s+once\s+per user request/i);
 	assert.match(indexSource, /every call renders another.{0,20}card grid/i);
 	assert.match(indexSource, /do not run broad\/narrow\/fallback search variations/i);
-	assert.match(indexSource, /overfetches, reranks, and retries over-strict discipline filters/i);
+	assert.match(
+		indexSource,
+		/overfetches, reranks, retries over-strict discipline filters, and tops up sparse domain results/i,
+	);
+	assert.match(indexSource, /one full 9-card grid at once/i);
 });
 
 test("search_mentors calls search-service Explore with compact filters", () => {
@@ -489,6 +493,62 @@ test("search_mentors ranks specialist growth marketing evidence over general mar
 	);
 });
 
+test("search_mentors keeps genuine growth-role mentors for specialist marketing asks", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: [
+				{
+					name: "Growth Advisor",
+					slug: "growth-advisor",
+					title: "Growth Advisor",
+					countryISO: "US",
+					expertise: ["marketplaces"],
+					disciplines: ["growth"],
+				},
+				{
+					name: "CRM Consultant",
+					slug: "crm-consultant",
+					title: "Microsoft Dynamics 365/CRM/Power Apps Consultant",
+					countryISO: "US",
+					expertise: ["no/low code", "engineering", "product"],
+					disciplines: ["growth"],
+				},
+				{
+					name: "Product Designer",
+					slug: "product-designer",
+					title: "Sr Director Product Design",
+					countryISO: "US",
+					expertise: ["design", "product"],
+					disciplines: ["growth"],
+				},
+				{
+					name: "Bio Growth Only",
+					slug: "bio-growth-only",
+					title: "Product Advisor",
+					bio: "I help companies achieve sustained growth.",
+					countryISO: "US",
+					expertise: ["marketing"],
+					disciplines: ["marketing"],
+				},
+				{
+					name: "Generic Growth Expertise",
+					slug: "generic-growth-expertise",
+					title: "Leadership Coach",
+					countryISO: "US",
+					expertise: ["growth"],
+					disciplines: ["coaching"],
+				},
+			],
+		},
+		{
+			intent: "US growth marketing mentors for acquisition retention lifecycle",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.deepEqual(result.mentors.map((mentor) => mentor.slug), ["growth-advisor"]);
+});
+
 test("search_mentors keeps explicit product marketing candidates for hybrid GTM asks", () => {
 	const result = mapSearchMentorsResponse(
 		{
@@ -595,6 +655,197 @@ test("search_mentors does not fill growth marketing results with weak broad-tag 
 		result.mentors.map((mentor) => mentor.slug),
 		["growth-lead"],
 	);
+});
+
+test("search_mentors returns a full marketing grid even when Claude asks for fewer", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: Array.from({ length: 9 }, (_, index) => ({
+				name: `Growth ${index}`,
+				slug: `growth-${index}`,
+				title: "Growth Marketing Lead",
+				countryISO: "US",
+				expertise: ["marketing"],
+				disciplines: ["growth marketing"],
+			})),
+		},
+		{
+			intent: "US growth marketing mentors",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.equal(result.mentors.length, 9);
+});
+
+test("search_mentors respects explicit smaller user counts for marketing searches", () => {
+	const result = mapSearchMentorsResponse(
+		{
+			results: Array.from({ length: 9 }, (_, index) => ({
+				name: `Growth ${index}`,
+				slug: `growth-${index}`,
+				title: "Growth Marketing Lead",
+				countryISO: "US",
+				expertise: ["marketing"],
+				disciplines: ["growth marketing"],
+			})),
+		},
+		{
+			intent: "show me 3 US growth marketing mentors",
+			filters: { max_results: 3 },
+		},
+	);
+
+	assert.equal(result.mentors.length, 3);
+});
+
+test("search_mentors tops up sparse domain results inside one tool call", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		const parsed = new URL(String(url));
+		if (parsed.searchParams.has("disciplines")) {
+			return jsonResponse({
+				results: [
+					{
+						name: "Lifecycle Specialist",
+						slug: "lifecycle-specialist",
+						title: "Lifecycle Marketing Lead",
+						countryISO: "US",
+						expertise: ["retention"],
+						disciplines: ["marketing"],
+					},
+				],
+				queryID: "strict-query",
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({
+			results: [
+				{
+					name: "Lifecycle Specialist",
+					slug: "lifecycle-specialist",
+					title: "Lifecycle Marketing Lead",
+					countryISO: "US",
+					expertise: ["retention"],
+					disciplines: ["marketing"],
+				},
+				{
+					name: "Product Growth",
+					slug: "product-growth",
+					title: "Head of Product Growth",
+					countryISO: "US",
+					expertise: ["experimentation"],
+					disciplines: ["growth product management"],
+				},
+				{
+					name: "Demand Gen",
+					slug: "demand-gen",
+					title: "Demand Generation Lead",
+					countryISO: "US",
+					expertise: ["paid media"],
+					disciplines: ["growth marketing"],
+				},
+			],
+			queryID: "relaxed-query",
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example" },
+			undefined,
+			{
+				intent: "US growth marketing mentors for acquisition retention lifecycle",
+				filters: { discipline: "Marketing", max_results: 3 },
+			},
+		);
+
+		assert.equal(calls.length, 2);
+		assert.equal(new URL(calls[0]).searchParams.has("disciplines"), true);
+		assert.equal(new URL(calls[1]).searchParams.has("disciplines"), false);
+		assert.deepEqual(
+			result.mentors.map((mentor) => mentor.slug),
+			["lifecycle-specialist", "demand-gen", "product-growth"],
+		);
+		assert.equal(result.queryID, undefined);
+		assert.deepEqual(
+			result.mentors.map((mentor) => mentor.queryID),
+			["strict-query", "relaxed-query", "relaxed-query"],
+		);
+		assert.deepEqual(result.relaxed_filters, ["discipline"]);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors does not collapse slug-less mentors while merging top-up results", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (url) => {
+		const parsed = new URL(String(url));
+		if (parsed.searchParams.has("disciplines")) {
+			return jsonResponse({
+				results: [
+					{
+						name: "Lifecycle Specialist",
+						title: "Lifecycle Marketing Lead",
+						countryISO: "US",
+						expertise: ["retention"],
+						disciplines: ["marketing"],
+					},
+				],
+				queryID: "strict-query",
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({
+			results: [
+				{
+					name: "Lifecycle Specialist",
+					title: "Lifecycle Marketing Lead",
+					countryISO: "US",
+					expertise: ["retention"],
+					disciplines: ["marketing"],
+				},
+				{
+					name: "Demand Gen",
+					title: "Demand Generation Lead",
+					countryISO: "US",
+					expertise: ["paid media"],
+					disciplines: ["growth marketing"],
+				},
+				{
+					name: "Product Growth",
+					title: "Head of Product Growth",
+					countryISO: "US",
+					expertise: ["experimentation"],
+					disciplines: ["growth product management"],
+				},
+			],
+			queryID: "relaxed-query",
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example" },
+			undefined,
+			{
+				intent: "US growth marketing mentors for acquisition retention lifecycle",
+				filters: { discipline: "Marketing", max_results: 3 },
+			},
+		);
+
+		assert.deepEqual(
+			result.mentors.map((mentor) => mentor.name),
+			["Lifecycle Specialist", "Demand Gen", "Product Growth"],
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });
 
 test("search_mentors gates broader growth retries with marketing fit", () => {
@@ -1076,7 +1327,7 @@ test("search_mentors never fetches the ADPList profile for unauthenticated calle
 });
 
 test("max_results snaps to full rows of three for the card grid", () => {
-	assert.equal(normalizeMaxResults(undefined), 6);
+	assert.equal(normalizeMaxResults(undefined), 9);
 	assert.equal(normalizeMaxResults(3), 3);
 	// floors to a full row, never exceeding what the caller asked for
 	assert.equal(normalizeMaxResults(4), 3);

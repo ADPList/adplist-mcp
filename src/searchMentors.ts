@@ -90,7 +90,7 @@ export type SearchMentorsOutput = {
 	relaxed_filters?: string[];
 };
 
-const DEFAULT_MAX_RESULTS = 6;
+const DEFAULT_MAX_RESULTS = 9;
 const MAX_RESULTS = 9;
 const MIN_RESULTS = 3;
 const ROW_SIZE = 3;
@@ -269,13 +269,13 @@ export function mapSearchMentorsResponse(
 	input: SearchMentorsInput,
 ): SearchMentorsOutput {
 	input = withInferredFilters(input);
-	const maxResults = normalizeMaxResults(input.filters?.max_results);
 	const domainRule = domainFitRuleFor(input);
+	const resultCount = resultMaxResults(input, domainRule);
 	const candidates = (response.results ?? [])
 		.filter((mentor) => matchesRequestedCountry(mentor, input.filters?.country))
 		.filter((mentor) => matchesDomainFit(mentor, domainRule, input));
 	const mentors = rankMentorCandidates(candidates, domainRule, input)
-		.slice(0, maxResults)
+		.slice(0, resultCount)
 		.map((mentor) => {
 			const expertise = Array.isArray(mentor.expertise)
 				? mentor.expertise.filter(Boolean).slice(0, 3)
@@ -360,6 +360,29 @@ function rankMentorCandidates(
 		.map(({ mentor }) => mentor);
 }
 
+function resultMaxResults(
+	input: SearchMentorsInput,
+	rule: (typeof DOMAIN_FIT_RULES)[number] | undefined = domainFitRuleFor(input),
+): number {
+	if (rule?.name === "marketing" && !mentionsExplicitResultLimit(input.intent)) {
+		return MAX_RESULTS;
+	}
+	return normalizeMaxResults(input.filters?.max_results);
+}
+
+function mentionsExplicitResultLimit(intent: string): boolean {
+	const currentRequest = intent.match(/(?:^|\n)Current request:\s*(.+)$/i)?.[1] ?? intent;
+	return (
+		/\b(?:show|give|find|return|list|only|top)\s+(?:me\s+)?(?:exactly\s+)?(?:3|three|6|six|9|nine|a few|few)\b/i.test(
+			currentRequest,
+		) ||
+		/\b(?:3|three|6|six|9|nine)\s+(?:growth|marketing|mentors?|results?|candidates?)\b/i.test(
+			currentRequest,
+		) ||
+		/\b(?:only|just)\s+(?:3|three|6|six|9|nine|a few|few)\b/i.test(currentRequest)
+	);
+}
+
 function domainFitScore(
 	mentor: SearchServiceMentor,
 	rule: (typeof DOMAIN_FIT_RULES)[number],
@@ -397,6 +420,7 @@ function marketingDomainFitScore(
 	if (includesTerm(text.title, "marketing")) score += 2;
 	if (includesTerm(text.expertise, "marketing")) score += 1;
 	if (includesTerm(text.disciplines, "marketing")) score += 1;
+	if (hasGrowthRoleSignal(text)) score += 6;
 	if (hasSpecialistMarketingIntent(input)) {
 		score += specialistMarketingScore(text);
 	}
@@ -469,7 +493,8 @@ function matchesMarketingDomainFit(
 	if (
 		hasSpecialistMarketingIntent(input) &&
 		!hasSpecialistMarketingSignal(text.role) &&
-		!(hasProductMarketingIntent(input) && includesTerm(text.role, "product marketing"))
+		!(hasProductMarketingIntent(input) && includesTerm(text.role, "product marketing")) &&
+		!hasGrowthRoleSignal(text)
 	) {
 		return false;
 	}
@@ -492,6 +517,10 @@ function matchesMarketingDomainFit(
 		includesTerm(text.disciplines, term),
 	);
 	if (disciplineStrongMatches.length > 0) {
+		return marketingDomainFitScore(text, rule, { intent: "" }) >= MIN_MARKETING_DOMAIN_SCORE;
+	}
+
+	if (hasGrowthRoleSignal(text)) {
 		return marketingDomainFitScore(text, rule, { intent: "" }) >= MIN_MARKETING_DOMAIN_SCORE;
 	}
 
@@ -546,6 +575,18 @@ function hasMarketingCraftSignal(value: string): boolean {
 	);
 }
 
+function hasGrowthRoleSignal(text: ReturnType<typeof mentorDomainText>): boolean {
+	return (
+		/\bgrowth\b/i.test(text.title) ||
+		/\b(product growth|growth product management|growth marketing|growth strategy|growth hacking|platform growth|user growth|growth loops|growth analytics)\b/i.test(
+			text.expertise,
+		) ||
+		/\b(product growth|growth product management|growth marketing|growth hacking|platform growth)\b/i.test(
+			text.disciplines,
+		)
+	);
+}
+
 function hasSpecialistMarketingIntent(input: SearchMentorsInput): boolean {
 	const haystack = [input.intent, input.filters?.discipline].filter(Boolean).join(" ");
 	return SPECIALIST_MARKETING_INTENT.test(haystack);
@@ -584,7 +625,15 @@ export async function searchMentors(
 	};
 
 	const firstResult = await fetchAndMapSearchMentors(baseUrl, props, searchInput, input);
-	if (firstResult.mentors.length > 0) return firstResult;
+	let bestResult = firstResult;
+	const targetResultCount = resultMaxResults(input);
+	const shouldTopUpSparseResults = Boolean(domainFitRuleFor(input));
+	if (
+		firstResult.mentors.length > 0 &&
+		(firstResult.mentors.length >= targetResultCount || !shouldTopUpSparseResults)
+	) {
+		return firstResult;
+	}
 
 	const relaxedInput = inputWithoutDiscipline(input);
 	let emptyRelaxedResult: SearchMentorsOutput | null = null;
@@ -600,12 +649,18 @@ export async function searchMentors(
 			relaxedInput,
 		);
 		if (relaxedResult.mentors.length > 0) {
-			return { ...relaxedResult, relaxed_filters: ["discipline"] };
+			bestResult = mergeSearchMentorOutputs(input, [
+				bestResult,
+				{ ...relaxedResult, relaxed_filters: ["discipline"] },
+			]);
+			if (bestResult.mentors.length >= targetResultCount) return bestResult;
+		} else {
+			emptyRelaxedResult = relaxedResult;
 		}
-		emptyRelaxedResult = relaxedResult;
 	}
 
 	if (!profileText.trim()) {
+		if (bestResult.mentors.length > 0) return bestResult;
 		return emptyRelaxedResult
 			? { ...emptyRelaxedResult, relaxed_filters: ["discipline"] }
 			: firstResult;
@@ -613,10 +668,18 @@ export async function searchMentors(
 
 	const bareResult = await fetchAndMapSearchMentors(baseUrl, props, input, input);
 	if (bareResult.mentors.length > 0) {
-		return { ...bareResult, relaxed_filters: ["profile_context"] };
+		bestResult = mergeSearchMentorOutputs(input, [
+			bestResult,
+			{ ...bareResult, relaxed_filters: ["profile_context"] },
+		]);
+		if (bestResult.mentors.length >= targetResultCount) return bestResult;
 	}
 
-	if (!relaxedInput) return { ...bareResult, relaxed_filters: ["profile_context"] };
+	if (!relaxedInput) {
+		return bestResult.mentors.length > 0
+			? bestResult
+			: { ...bareResult, relaxed_filters: ["profile_context"] };
+	}
 
 	const bareRelaxedResult = await fetchAndMapSearchMentors(
 		baseUrl,
@@ -624,9 +687,51 @@ export async function searchMentors(
 		relaxedInput,
 		relaxedInput,
 	);
+	return mergeSearchMentorOutputs(input, [
+		bestResult,
+		{ ...bareRelaxedResult, relaxed_filters: ["profile_context", "discipline"] },
+	]);
+}
+
+function mergeSearchMentorOutputs(
+	input: SearchMentorsInput,
+	outputs: SearchMentorsOutput[],
+): SearchMentorsOutput {
+	const mentors: SearchMentorResult[] = [];
+	const seen = new Set<string>();
+	const relaxedFilters = new Set<string>();
+
+	for (const output of outputs) {
+		for (const filter of output.relaxed_filters ?? []) relaxedFilters.add(filter);
+		for (const mentor of output.mentors) {
+			const key =
+				mentor.slug ||
+				(mentor.name || mentor.title ? `${mentor.name}:${mentor.title}` : mentor.profile_url);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			mentors.push(mentor);
+		}
+	}
+
+	const maxResults = resultMaxResults(input);
+	const limitedMentors = mentors.slice(0, maxResults);
+	const fullRowCount =
+		limitedMentors.length > ROW_SIZE
+			? Math.floor(limitedMentors.length / ROW_SIZE) * ROW_SIZE
+			: limitedMentors.length;
+	const returnedMentors = limitedMentors.slice(0, fullRowCount);
+	const queryIDs = new Set(returnedMentors.map((mentor) => mentor.queryID).filter(Boolean));
+	const indexUsedValues = new Set(outputs.map((output) => output.indexUsed).filter(Boolean));
+	const firstOutput = outputs.find((output) => output.mentors.length > 0) ?? outputs[0] ?? {};
 	return {
-		...bareRelaxedResult,
-		relaxed_filters: ["profile_context", "discipline"],
+		mentors: returnedMentors,
+		...(queryIDs.size === 1 ? { queryID: Array.from(queryIDs)[0] } : {}),
+		...(indexUsedValues.size === 1
+			? { indexUsed: Array.from(indexUsedValues)[0] }
+			: firstOutput.indexUsed
+				? { indexUsed: firstOutput.indexUsed }
+				: {}),
+		...(relaxedFilters.size > 0 ? { relaxed_filters: Array.from(relaxedFilters) } : {}),
 	};
 }
 
