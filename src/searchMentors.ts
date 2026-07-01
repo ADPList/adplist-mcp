@@ -309,8 +309,10 @@ export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput
 		url.searchParams.set("disciplines", filters.discipline.trim().toLowerCase());
 	if (filters.country) url.searchParams.set("countries", filters.country.trim().toUpperCase());
 	if (filters.language) url.searchParams.set("languages", filters.language.trim().toLowerCase());
-	if (filters.experience_level)
-		url.searchParams.set("level", filters.experience_level.trim().toLowerCase());
+	if (filters.experience_level) {
+		const normalizedLevel = normalizeExperienceLevel(filters.experience_level);
+		if (normalizedLevel) url.searchParams.set("level", normalizedLevel.toLowerCase());
+	}
 	return url.toString();
 }
 
@@ -967,7 +969,12 @@ function inferExperienceLevelFromIntent(intent: string): ExperienceLevel | undef
 	)
 		return "Executive";
 	if (/\b(director|head of product|head of .+)\b/i.test(requestIntent)) return "Director";
-	if (/\b(lead|group product manager|gpm)\b/i.test(requestIntent)) return "Lead";
+	if (
+		/\b(lead (?:product|designer|design|engineer|engineering|marketing|growth)|(?:tech|team|product|design|engineering|marketing|growth) lead|group product manager|gpm)\b/i.test(
+			requestIntent,
+		)
+	)
+		return "Lead";
 	if (/\b(senior|sr\.?|staff|principal)\b/i.test(requestIntent)) return "Senior";
 	return undefined;
 }

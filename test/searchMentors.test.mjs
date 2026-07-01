@@ -92,11 +92,20 @@ test("search_mentors exposes and infers seniority filters for executive product 
 	const explicitUrl = new URL(
 		buildUrl({
 			intent: "Find product leaders in the US",
-			filters: { experience_level: "Executive", max_results: 6 },
+			filters: { experience_level: "VP Product", max_results: 6 },
 		}),
 	);
 	assert.equal(explicitUrl.searchParams.get("level"), "executive");
 	assert.equal(explicitUrl.searchParams.get("pageSize"), "72");
+
+	const leadVerbUrl = new URL(
+		buildUrl({
+			intent: "Find a mentor who can lead me through a portfolio review",
+			filters: { max_results: 6 },
+		}),
+	);
+	assert.equal(leadVerbUrl.searchParams.has("level"), false);
+	assert.equal(leadVerbUrl.searchParams.get("pageSize"), "6");
 
 	const inferredUrl = new URL(
 		buildUrl({
