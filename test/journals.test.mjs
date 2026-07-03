@@ -141,6 +141,28 @@ test("extractLearningsFromJournal returns journal-sourced learnings and behavior
 	assert.equal("session_url" in learning, false);
 });
 
+test("extractLearningsFromJournal does not reuse one action item across unrelated learnings", () => {
+	const learnings = extractLearningsFromJournal(
+		mapJournal(
+			journal({
+				summary: {
+					insights: {
+						list: [
+							"PM discovery needs tighter scoping",
+							"UX interviews need sharper tasks",
+						],
+					},
+					highlights: { list: ["PM scope was too broad", "UX tasks were vague"] },
+					actionItems: { list: ["Rewrite PM discovery script"] },
+				},
+			}),
+			true,
+		),
+	);
+	assert.equal(learnings[0].behavior_change, "Rewrite PM discovery script");
+	assert.equal(learnings[1].behavior_change, undefined);
+});
+
 test("listJournals passes bearer token and returns graceful empty array", async () => {
 	const calls = [];
 	const originalFetch = globalThis.fetch;
@@ -271,6 +293,43 @@ test("searchJournalLearnings filters by tags and returns explicit no-curated-lea
 		assert.match(result.message, /don't have curated journal learnings/i);
 		assert.match(result.message, /silently substituting session history/i);
 		assert.equal(result.limit, 5);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("searchJournalLearnings keeps two-letter domain acronyms as search terms", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () =>
+		Response.json({
+			journals: [
+				journal({
+					journalId: "journal-ux",
+					title: "UX research review",
+					summary: { insights: { list: ["UX interviews need sharper tasks"] } },
+				}),
+				journal({
+					journalId: "journal-gtm",
+					title: "GTM pricing review",
+					summary: {
+						insights: { list: ["Pricing packaging should anchor on outcomes"] },
+					},
+				}),
+			],
+			totalPages: 1,
+			totalItems: 2,
+			currentPage: 1,
+		});
+	try {
+		const result = await searchJournalLearnings(
+			{ MEETINGS_SERVICE_URL: "https://meetings.example" },
+			props,
+			{ query: "UX" },
+		);
+		assert.deepEqual(
+			result.learnings.map((learning) => learning.source_journal.journal_id),
+			["journal-ux"],
+		);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

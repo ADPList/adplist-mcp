@@ -134,6 +134,7 @@ export type ReadJournalOutput = JournalItem;
 const DEFAULT_JOURNAL_LIMIT = 30;
 const MAX_JOURNAL_LIMIT = 100;
 const DEFAULT_LEARNING_LIMIT = 20;
+const MAX_LEARNING_LIMIT = 100;
 const LEARNING_FETCH_LIMIT = 100;
 const LEARNING_INTENT_STOPWORDS = new Set([
 	"adplist",
@@ -172,7 +173,7 @@ export function normalizeJournalLimit(limit: number | undefined): number {
 
 export function normalizeLearningLimit(limit: number | undefined): number {
 	if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_LEARNING_LIMIT;
-	return Math.min(MAX_JOURNAL_LIMIT, Math.max(1, Math.trunc(limit)));
+	return Math.min(MAX_LEARNING_LIMIT, Math.max(1, Math.trunc(limit)));
 }
 
 export function normalizeSinceIso(sinceIso: string | undefined): string | undefined {
@@ -342,9 +343,7 @@ export function extractLearningsFromJournal(journal: JournalItem): JournalLearni
 		learning_id: `${journal.journal_id || "journal"}:learning:${index + 1}`,
 		learning,
 		why_it_matters: highlights[index] ?? tldrs[0] ?? journal.title,
-		...((actions[index] ?? actions[0])
-			? { behavior_change: actions[index] ?? actions[0] }
-			: {}),
+		...(actions[index] ? { behavior_change: actions[index] } : {}),
 		source_type: "journal" as const,
 		source_journal: {
 			journal_id: journal.journal_id,
@@ -421,7 +420,7 @@ function journalMatchesLearningFilters(
 function searchableTerms(values: Array<string | undefined>): string[] {
 	return values
 		.flatMap((value) => (value ?? "").toLowerCase().match(/[a-z0-9]+/g) ?? [])
-		.filter((term) => term.length > 2 && !LEARNING_INTENT_STOPWORDS.has(term));
+		.filter((term) => term.length >= 2 && !LEARNING_INTENT_STOPWORDS.has(term));
 }
 
 function normalizeTags(tags: string[] | undefined): string[] {
