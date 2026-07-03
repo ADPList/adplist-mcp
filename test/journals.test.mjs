@@ -335,6 +335,28 @@ test("searchJournalLearnings keeps two-letter domain acronyms as search terms", 
 	}
 });
 
+test("searchJournalLearnings treats auxiliary-only learning prompts as generic learning intent", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () =>
+		Response.json({
+			journals: [journal()],
+			totalPages: 1,
+			totalItems: 1,
+			currentPage: 1,
+		});
+	try {
+		const result = await searchJournalLearnings(
+			{ MEETINGS_SERVICE_URL: "https://meetings.example" },
+			props,
+			{ query: "what did I learn from ADPList" },
+		);
+		assert.equal(result.learnings.length, 1);
+		assert.equal(result.learnings[0].source_journal.journal_id, "journal-1");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("readJournal fetches a single journal with full structured summary", async () => {
 	const calls = [];
 	const originalFetch = globalThis.fetch;
@@ -398,6 +420,10 @@ test("journal tools require authenticated ADPList user", async () => {
 		readJournal({ MEETINGS_SERVICE_URL: "https://meetings.example" }, undefined, {
 			journal_id: "j1",
 		}),
+		/authenticated ADPList user/,
+	);
+	await assert.rejects(
+		searchJournalLearnings({ MEETINGS_SERVICE_URL: "https://meetings.example" }, undefined, {}),
 		/authenticated ADPList user/,
 	);
 });
