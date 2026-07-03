@@ -7,8 +7,11 @@ import {
 	listJournals,
 	mapJournal,
 	normalizeJournalLimit,
+	normalizeLearningLimit,
 	normalizeSinceIso,
 	readJournal,
+	searchJournalLearnings,
+	extractLearningsFromJournal,
 } from "../src/journals.ts";
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
@@ -55,12 +58,19 @@ function journal(overrides = {}) {
 	};
 }
 
-test("M5 registers list_journals and read_journal with AI session-summary framing", () => {
+test("M5 registers list_journals, search_journal_learnings, and read_journal with learning intent routing", () => {
 	assert.match(indexSource, /registerTool\(\s*"list_journals"/);
+	assert.match(indexSource, /registerTool\(\s*"search_journal_learnings"/);
 	assert.match(indexSource, /registerTool\(\s*"read_journal"/);
 	assert.match(indexSource, /AI-generated post-session summaries/i);
 	assert.match(indexSource, /not user-authored free-form journals/i);
 	assert.match(indexSource, /never frame results as 'what you wrote in your journal'/i);
+	assert.match(
+		indexSource,
+		/Use this FIRST for questions that say learnings, lessons, journal, takeaways, patterns/i,
+	);
+	assert.match(indexSource, /Do not use raw session history as the primary source/i);
+	assert.match(indexSource, /For 'find the session where.*use list_my_sessions instead/i);
 });
 
 test("journal limit defaults to 30 and clamps to 100", () => {
@@ -68,6 +78,12 @@ test("journal limit defaults to 30 and clamps to 100", () => {
 	assert.equal(normalizeJournalLimit(0), 1);
 	assert.equal(normalizeJournalLimit(101), 100);
 	assert.equal(normalizeJournalLimit(7.9), 7);
+});
+
+test("learning limit defaults to 20 and clamps to 100", () => {
+	assert.equal(normalizeLearningLimit(undefined), 20);
+	assert.equal(normalizeLearningLimit(0), 1);
+	assert.equal(normalizeLearningLimit(101), 100);
 });
 
 test("since_iso normalizes valid ISO input and rejects invalid input", () => {
@@ -113,6 +129,16 @@ test("mapJournal includes full structured summary when requested", () => {
 		highlights: { string: "Sarah recommended packaging around outcomes." },
 		action_items: { list: ["Draft three pricing options"] },
 	});
+});
+
+test("extractLearningsFromJournal returns journal-sourced learnings and behavior changes", () => {
+	const [learning] = extractLearningsFromJournal(mapJournal(journal(), true));
+	assert.equal(learning.learning, "Start with willingness-to-pay interviews");
+	assert.equal(learning.why_it_matters, "Sarah recommended packaging around outcomes.");
+	assert.equal(learning.behavior_change, "Draft three pricing options");
+	assert.equal(learning.source_type, "journal");
+	assert.equal(learning.source_journal.journal_id, "journal-1");
+	assert.equal("session_url" in learning, false);
 });
 
 test("listJournals passes bearer token and returns graceful empty array", async () => {
@@ -185,6 +211,66 @@ test("listJournals with_content includes structured summaries without truncation
 		assert.deepEqual(result.journals[0].summary.action_items.list, [
 			"Draft three pricing options",
 		]);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("searchJournalLearnings prioritizes curated journal insights for generic ADPList learning prompts", async () => {
+	const calls = [];
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (url, init) => {
+		calls.push({ url: String(url), init });
+		return Response.json({
+			journals: [journal()],
+			totalPages: 1,
+			totalItems: 1,
+			currentPage: 1,
+		});
+	};
+	try {
+		const result = await searchJournalLearnings(
+			{ MEETINGS_SERVICE_URL: "https://meetings.example" },
+			props,
+			{ query: "what are my learnings from ADPList so far", project: "ADPList" },
+		);
+		assert.equal(calls.length, 1);
+		assert.match(calls[0].url, /hasMeaningfulContent=true/);
+		assert.equal(calls[0].init.headers.Authorization, "Bearer token");
+		assert.equal(result.learnings.length, 1);
+		assert.equal(result.learnings[0].source_type, "journal");
+		assert.equal(result.learnings[0].learning, "Start with willingness-to-pay interviews");
+		assert.deepEqual(result.source_priority, [
+			"journal",
+			"profile_context",
+			"daily_notes",
+			"sessions_supporting_evidence",
+		]);
+		assert.equal(result.fallback_allowed, false);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("searchJournalLearnings filters by tags and returns explicit no-curated-learning fallback", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () =>
+		Response.json({
+			journals: [journal({ tags: ["pricing"] })],
+			totalPages: 1,
+			totalItems: 1,
+			currentPage: 1,
+		});
+	try {
+		const result = await searchJournalLearnings(
+			{ MEETINGS_SERVICE_URL: "https://meetings.example" },
+			props,
+			{ tags: ["growth"], limit: 5 },
+		);
+		assert.deepEqual(result.learnings, []);
+		assert.match(result.message, /don't have curated journal learnings/i);
+		assert.match(result.message, /silently substituting session history/i);
+		assert.equal(result.limit, 5);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

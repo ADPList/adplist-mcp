@@ -19,7 +19,7 @@ import {
 	tokenRefreshErrorResponse,
 } from "./adplistTokenRefresh";
 import { bookSession, listAvailability } from "./booking";
-import { listJournals, readJournal } from "./journals";
+import { listJournals, readJournal, searchJournalLearnings } from "./journals";
 import { getMentorProfile } from "./mentorProfile";
 import { manageMyContext } from "./profile";
 import { searchMentors, type SearchMentorsOutput } from "./searchMentors";
@@ -366,6 +366,56 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 				},
 			},
 			async (input) => this.toolResponse(() => listJournals(this.env, this.props, input)),
+		);
+
+		this.server.registerTool(
+			"search_journal_learnings",
+			{
+				description:
+					"Search the authenticated user's curated ADPList learning/journal artifacts and return distilled learnings from AI-generated post-session summaries. Use this FIRST for questions that say learnings, lessons, journal, takeaways, patterns, insights, what should I remember, or what did I learn from ADPList. Do not use raw session history as the primary source for those prompts. If this returns no learnings, explicitly say there are no curated journal learnings yet and ask whether to extract candidate learnings from historical sessions; never silently substitute sessions. For 'find the session where...' or other raw-history requests, use list_my_sessions instead.",
+				annotations: {
+					title: "Search ADPList journal learnings",
+					readOnlyHint: true,
+					destructiveHint: false,
+					idempotentHint: true,
+					openWorldHint: true,
+				},
+				inputSchema: {
+					query: z
+						.string()
+						.trim()
+						.min(1)
+						.max(1000)
+						.optional()
+						.describe(
+							"Optional natural-language learning/journal query. Generic words like 'ADPList learnings so far' will search all curated ADPList journal learnings.",
+						),
+					project: z
+						.string()
+						.trim()
+						.min(1)
+						.max(100)
+						.optional()
+						.describe("Optional project/topic hint, e.g. ADPList, growth, product."),
+					area: z.string().trim().min(1).max(100).optional(),
+					tags: z.array(z.string().trim().min(1).max(50)).max(10).optional(),
+					since_iso: z
+						.string()
+						.trim()
+						.min(1)
+						.optional()
+						.describe("Optional ISO 8601 lower bound for journal created time."),
+					limit: z
+						.number()
+						.int()
+						.min(1)
+						.max(100)
+						.optional()
+						.describe("Defaults to 20; max 100."),
+				},
+			},
+			async (input) =>
+				this.toolResponse(() => searchJournalLearnings(this.env, this.props, input)),
 		);
 
 		this.server.registerTool(

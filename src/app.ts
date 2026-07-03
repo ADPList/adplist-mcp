@@ -37,6 +37,7 @@ const DEPLOYED_TOOL_NAMES = [
 	"book_session",
 	"list_my_sessions",
 	"list_journals",
+	"search_journal_learnings",
 	"read_journal",
 	"list_mentor_requests",
 	"respond_to_mentor_request",

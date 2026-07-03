@@ -7,7 +7,7 @@ const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "u
 
 test("M7 wraps MCP tool handlers with per-user rate limiting and structured errors", () => {
 	const wrappers = indexSource.match(/this\.toolResponse\(\(\) =>/g) ?? [];
-	assert.equal(wrappers.length, 13);
+	assert.equal(wrappers.length, 14);
 	assert.match(indexSource, /runWithToolRateLimit/);
 });
 
@@ -85,11 +85,14 @@ test("toolResponse can suppress app resource links for empty successful results"
 	};
 	const empty = await toolResponse(async () => ({ mentors: [] }), app);
 	assert.deepEqual(empty.structuredContent, { mentors: [] });
-	assert.deepEqual(empty.content.map((item) => item.type), ["text"]);
-
-	const populated = await toolResponse(
-		async () => ({ mentors: [{ slug: "mentor-one" }] }),
-		app,
+	assert.deepEqual(
+		empty.content.map((item) => item.type),
+		["text"],
 	);
-	assert.deepEqual(populated.content.map((item) => item.type), ["text", "resource_link"]);
+
+	const populated = await toolResponse(async () => ({ mentors: [{ slug: "mentor-one" }] }), app);
+	assert.deepEqual(
+		populated.content.map((item) => item.type),
+		["text", "resource_link"],
+	);
 });

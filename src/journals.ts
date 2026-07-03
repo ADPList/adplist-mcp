@@ -10,6 +10,15 @@ export type ReadJournalInput = {
 	journal_id: string;
 };
 
+export type SearchJournalLearningsInput = {
+	query?: string;
+	project?: string;
+	area?: string;
+	tags?: string[];
+	since_iso?: string;
+	limit?: number;
+};
+
 type JournalContent = {
 	markdown?: string;
 	html?: string;
@@ -93,13 +102,76 @@ export type ListJournalsOutput = {
 	pages_read: number;
 };
 
+export type JournalLearning = {
+	learning_id: string;
+	learning: string;
+	why_it_matters: string;
+	behavior_change?: string;
+	source_type: "journal";
+	source_journal: {
+		journal_id: string;
+		title: string;
+		created_at_iso: string;
+		tags: string[];
+	};
+};
+
+export type SearchJournalLearningsOutput = {
+	learnings: JournalLearning[];
+	message: string;
+	query?: string;
+	project?: string;
+	area?: string;
+	tags: string[];
+	since_iso?: string;
+	limit: number;
+	source_priority: ["journal", "profile_context", "daily_notes", "sessions_supporting_evidence"];
+	fallback_allowed: boolean;
+};
+
 export type ReadJournalOutput = JournalItem;
 
 const DEFAULT_JOURNAL_LIMIT = 30;
 const MAX_JOURNAL_LIMIT = 100;
+const DEFAULT_LEARNING_LIMIT = 20;
+const LEARNING_FETCH_LIMIT = 100;
+const LEARNING_INTENT_STOPWORDS = new Set([
+	"adplist",
+	"learn",
+	"learning",
+	"learnings",
+	"lesson",
+	"lessons",
+	"journal",
+	"journals",
+	"takeaway",
+	"takeaways",
+	"pattern",
+	"patterns",
+	"remember",
+	"memory",
+	"memories",
+	"what",
+	"are",
+	"is",
+	"my",
+	"me",
+	"from",
+	"so",
+	"far",
+	"summarize",
+	"summary",
+	"should",
+	"i",
+]);
 
 export function normalizeJournalLimit(limit: number | undefined): number {
 	if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_JOURNAL_LIMIT;
+	return Math.min(MAX_JOURNAL_LIMIT, Math.max(1, Math.trunc(limit)));
+}
+
+export function normalizeLearningLimit(limit: number | undefined): number {
+	if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_LEARNING_LIMIT;
 	return Math.min(MAX_JOURNAL_LIMIT, Math.max(1, Math.trunc(limit)));
 }
 
@@ -175,6 +247,46 @@ export async function listJournals(
 	};
 }
 
+export async function searchJournalLearnings(
+	env: Env,
+	props: McpUserProps | undefined,
+	input: SearchJournalLearningsInput = {},
+): Promise<SearchJournalLearningsOutput> {
+	requireAuthenticatedUser(props, "search_journal_learnings");
+	const limit = normalizeLearningLimit(input.limit);
+	const normalizedTags = normalizeTags(input.tags);
+	const journals = await listJournals(env, props, {
+		limit: LEARNING_FETCH_LIMIT,
+		since_iso: input.since_iso,
+		with_content: true,
+	});
+	const terms = searchableTerms([input.query, input.project, input.area]);
+	const filteredJournals = journals.journals.filter((journal) =>
+		journalMatchesLearningFilters(journal, terms, normalizedTags),
+	);
+	const learnings = filteredJournals.flatMap(extractLearningsFromJournal).slice(0, limit);
+	return {
+		learnings,
+		message:
+			learnings.length > 0
+				? "Curated ADPList learnings from journal/session-summary artifacts. Use these as the primary answer; sessions should only be cited as supporting evidence if separately requested."
+				: "I don't have curated journal learnings for this ADPList query yet. I found no matching journal learning entries; ask before extracting candidate learnings from raw sessions instead of silently substituting session history.",
+		...(input.query ? { query: input.query } : {}),
+		...(input.project ? { project: input.project } : {}),
+		...(input.area ? { area: input.area } : {}),
+		tags: normalizedTags,
+		...(journals.since_iso ? { since_iso: journals.since_iso } : {}),
+		limit,
+		source_priority: [
+			"journal",
+			"profile_context",
+			"daily_notes",
+			"sessions_supporting_evidence",
+		],
+		fallback_allowed: false,
+	};
+}
+
 export async function readJournal(
 	env: Env,
 	props: McpUserProps | undefined,
@@ -220,6 +332,29 @@ export function mapJournal(journal: JournalRecord, withContent: boolean): Journa
 	};
 }
 
+export function extractLearningsFromJournal(journal: JournalItem): JournalLearning[] {
+	const insights = contentToStrings(journal.summary?.insights);
+	const highlights = contentToStrings(journal.summary?.highlights);
+	const actions = contentToStrings(journal.summary?.action_items);
+	const tldrs = contentToStrings(journal.summary?.tldr);
+	const candidates = insights.length > 0 ? insights : [...highlights, ...tldrs];
+	return candidates.map((learning, index) => ({
+		learning_id: `${journal.journal_id || "journal"}:learning:${index + 1}`,
+		learning,
+		why_it_matters: highlights[index] ?? tldrs[0] ?? journal.title,
+		...((actions[index] ?? actions[0])
+			? { behavior_change: actions[index] ?? actions[0] }
+			: {}),
+		source_type: "journal" as const,
+		source_journal: {
+			journal_id: journal.journal_id,
+			title: journal.title,
+			created_at_iso: journal.created_at_iso,
+			tags: journal.tags,
+		},
+	}));
+}
+
 function mapSummary(summary: JournalSummary | undefined): JournalSummaryOutput {
 	return {
 		...(summary?.tldr ? { tldr: summary.tldr } : {}),
@@ -252,6 +387,67 @@ function assertJournalBelongsToUser(journal: JournalRecord, props: McpUserProps)
 			"read_journal refused a journal that is not associated with the authenticated user",
 		);
 	}
+}
+
+function journalMatchesLearningFilters(
+	journal: JournalItem,
+	terms: string[],
+	tags: string[],
+): boolean {
+	if (tags.length > 0) {
+		const journalTags = new Set(journal.tags.map((tag) => tag.toLowerCase()));
+		if (!tags.every((tag) => journalTags.has(tag))) return false;
+	}
+	if (terms.length === 0) return true;
+	const haystack = [
+		journal.title,
+		journal.tags.join(" "),
+		...journal.participants.flatMap((party) => [
+			party.name,
+			party.title,
+			party.type,
+			party.role,
+		]),
+		...contentToStrings(journal.summary?.tldr),
+		...contentToStrings(journal.summary?.insights),
+		...contentToStrings(journal.summary?.highlights),
+		...contentToStrings(journal.summary?.action_items),
+	]
+		.join(" ")
+		.toLowerCase();
+	return terms.every((term) => haystack.includes(term));
+}
+
+function searchableTerms(values: Array<string | undefined>): string[] {
+	return values
+		.flatMap((value) => (value ?? "").toLowerCase().match(/[a-z0-9]+/g) ?? [])
+		.filter((term) => term.length > 2 && !LEARNING_INTENT_STOPWORDS.has(term));
+}
+
+function normalizeTags(tags: string[] | undefined): string[] {
+	return (tags ?? [])
+		.map((tag) => tag.trim().toLowerCase())
+		.filter((tag, index, all) => tag.length > 0 && all.indexOf(tag) === index);
+}
+
+function contentToStrings(content: JournalContent | undefined): string[] {
+	if (!content) return [];
+	return [
+		...(Array.isArray(content.list) ? content.list : []),
+		content.markdown,
+		content.string,
+		content.html ? stripHtml(content.html) : undefined,
+	]
+		.filter((value): value is string => typeof value === "string")
+		.map((value) => value.trim())
+		.filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+}
+
+function stripHtml(value: string): string {
+	return value
+		.replace(/<[^>]+>/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
 function isOnOrAfter(epochMillis: number | undefined, sinceMs: number | undefined): boolean {
