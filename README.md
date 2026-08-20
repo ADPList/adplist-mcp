@@ -56,7 +56,19 @@ The easiest way in. Works on Pro, Max, Team, and Enterprise plans.
 3. Name it `ADPList` and paste the URL `https://mcp.adplist.org/sse`.
 4. Click **Connect** and sign in with your ADPList email (see [Signing in](#signing-in) below).
 
-### Claude Code
+### Claude Code (plugin)
+
+The plugin adds the connector plus two skills that teach Claude how to run the
+mentor-matching and session-prep conversations.
+
+```bash
+/plugin marketplace add ADPList/adplist-mcp
+/plugin install adplist@adplist
+```
+
+See [`plugins/adplist`](plugins/adplist) for what's inside.
+
+### Claude Code (connector only)
 
 ```bash
 claude mcp add --transport http adplist https://mcp.adplist.org/sse
@@ -114,6 +126,7 @@ ADPList MCP exposes these tools. You never call them by name — this is just wh
 | --- | --- |
 | `list_journals` | List your post-session summaries |
 | `read_journal` | Read a specific session summary |
+| `search_journal_learnings` | Search across your session summaries for advice on a theme |
 
 **For mentors**
 

@@ -1,0 +1,23 @@
+{
+	"name": "adplist",
+	"owner": {
+		"name": "ADPList",
+		"email": "support@adplist.org",
+		"url": "https://adplist.org"
+	},
+	"description": "Free 1:1 mentorship and career coaching from ADPList's community of 1M+ mentors, inside Claude.",
+	"plugins": [
+		{
+			"name": "adplist",
+			"source": "./plugins/adplist",
+			"description": "Find a mentor or career coach from ADPList's 1M+ community, see when they're free, and book a free 1:1 — without leaving Claude.",
+			"category": "productivity",
+			"tags": [
+				"mentorship",
+				"career",
+				"coaching",
+				"interview-prep"
+			]
+		}
+	]
+}

@@ -1,0 +1,29 @@
+{
+	"name": "adplist",
+	"displayName": "ADPList",
+	"description": "Find a mentor or career coach from ADPList's 1M+ community, see when they're free, and book a free 1:1 — without leaving Claude.",
+	"version": "1.0.0",
+	"author": {
+		"name": "ADPList",
+		"email": "support@adplist.org",
+		"url": "https://adplist.org"
+	},
+	"homepage": "https://adplist.org",
+	"repository": "https://github.com/ADPList/adplist-mcp",
+	"keywords": [
+		"mentorship",
+		"career",
+		"coaching",
+		"career-advice",
+		"interview-prep",
+		"job-search",
+		"design",
+		"product"
+	],
+	"mcpServers": {
+		"adplist": {
+			"type": "http",
+			"url": "https://mcp.adplist.org/sse"
+		}
+	}
+}
