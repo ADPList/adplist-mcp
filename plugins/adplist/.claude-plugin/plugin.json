@@ -10,6 +10,7 @@
 	},
 	"homepage": "https://adplist.org",
 	"repository": "https://github.com/ADPList/adplist-mcp",
+	"license": "MIT",
 	"keywords": [
 		"mentorship",
 		"career",
