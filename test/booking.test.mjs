@@ -17,7 +17,19 @@ test("M3 registers list_availability and book_session MCP tools with a confirmat
 	// Confirmation is enforced by the schema, not by prose in the description.
 	assert.match(indexSource, /Set to true only after the user has confirmed the exact mentor, date, time, and note/i);
 	assert.match(indexSource, /Booking notifies the mentor and holds time in their calendar/i);
-	assert.match(indexSource, /queryID from a prior search for booking attribution/i);
+	assert.match(indexSource, /queryID from a prior search is optional/i);
+});
+
+test("book_session description matches the schema on which fields are required", () => {
+	// Regression guard: the description once advertised the note as optional while the
+	// schema required a non-empty string, so a model that omitted it had the booking
+	// rejected at validation. Description and schema must agree.
+	assert.match(indexSource, /A note for the mentor is required/i);
+	assert.doesNotMatch(indexSource, /optional note for the mentor/i);
+	const book = indexSource.slice(indexSource.indexOf('"book_session"'));
+	const schema = book.slice(book.indexOf("inputSchema"), book.indexOf("async (input)"));
+	assert.match(schema, /note: z\s*\n?\s*\.string\(\)/);
+	assert.doesNotMatch(schema.slice(schema.indexOf("note: z"), schema.indexOf("queryID")), /\.optional\(\)/);
 });
 
 test("availability days default to 30 and clamp to max 30", () => {

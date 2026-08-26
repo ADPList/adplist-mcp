@@ -252,7 +252,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"book_session",
 			{
 				description:
-					"Request an ADPList mentorship session with a mentor at a chosen slot. Booking notifies the mentor and holds time in their calendar; mentors are volunteers. Most ADPList sessions are requests awaiting the mentor's confirmation rather than instantly confirmed meetings, and the response reports which. Covers free mentorship sessions only. Accepts an optional note for the mentor, and the queryID from a prior search for booking attribution.",
+					"Request an ADPList mentorship session with a mentor at a chosen slot. Booking notifies the mentor and holds time in their calendar; mentors are volunteers. Most ADPList sessions are requests awaiting the mentor's confirmation rather than instantly confirmed meetings, and the response reports which. Covers free mentorship sessions only. A note for the mentor is required and must be text the user has approved; the queryID from a prior search is optional and used for booking attribution.",
 				_meta: appToolMeta(UI_RESOURCES.sessionCards),
 				annotations: {
 					title: "Book ADPList session",
