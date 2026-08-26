@@ -8,6 +8,7 @@ export type ListAvailabilityInput = {
 export type BookSessionInput = {
 	mentor_slug: string;
 	slot_iso: string;
+	user_confirmed: true;
 	note: string;
 	queryID?: string;
 };

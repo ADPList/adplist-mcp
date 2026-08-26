@@ -18,9 +18,9 @@ test("M4 registers list_my_sessions and cancel_session MCP tools with cancellati
 	assert.match(indexSource, /registerTool\(\s*"cancel_session"/);
 	assert.match(
 		indexSource,
-		/Before calling this tool, always confirm the exact session, mentor, and scheduled time/i,
+		/confirming the exact session, mentor, and scheduled time/i,
 	);
-	assert.match(indexSource, /there is no native reschedule_session tool in v1/i);
+	assert.match(indexSource, /no in-place reschedule for mentees/i);
 });
 
 test("cancel_session requires schema-level user_confirmed literal true", () => {
@@ -254,5 +254,5 @@ test("10 cancellation prompts are covered by confirmation guidance before tool u
 	];
 	assert.equal(prompts.length, 10);
 	for (const prompt of prompts) assert.match(prompt, /cancel|reschedule|move|can't make|Delete/i);
-	assert.match(indexSource, /always confirm the exact session, mentor, and scheduled time/i);
+	assert.match(indexSource, /confirming the exact session, mentor, and scheduled time/i);
 });

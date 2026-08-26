@@ -15,8 +15,7 @@ test("registers get_mentor_profile as a read-only tool with deep-dive guidance (
 	assert.match(indexSource, /registerTool\(\s*"get_mentor_profile"/);
 	assert.match(indexSource, /full public ADPList profile by slug/);
 	// search_mentors points the host at the deep-dive flow
-	assert.match(indexSource, /deep-diving the top 2-3 candidates with get_mentor_profile/);
-	assert.match(indexSource, /do not just restate the cards/);
+	assert.match(indexSource, /safe to fetch for several candidates at once/);
 });
 
 test("URL builders target the public api.adplist.org endpoints", () => {

@@ -18,9 +18,8 @@ const welcomeEmailMigrationSource = readFileSync(
 
 test("M2 registers manage_my_context with explicit-only memory instructions", () => {
 	assert.match(indexSource, /registerTool\(\s*"manage_my_context"/);
-	assert.match(indexSource, /explicitly asks you to remember/);
-	assert.match(indexSource, /Do not proactively store/);
-	assert.match(indexSource, /explicit-only memory in v1/);
+	assert.match(indexSource, /explicit-only store/);
+	assert.match(indexSource, /asked ADPList to remember/);
 	assert.match(indexSource, /\.enum\(\["read", "merge", "clear"\]\)/);
 });
 
@@ -53,8 +52,11 @@ test("search_mentors prepends stored profile context without new embeddings", ()
 });
 
 test("search_mentors description nudges rich who-the-user-is intents (ADPLIST-3202)", () => {
-	assert.match(indexSource, /describe who the user is from the conversation/);
-	assert.match(indexSource, /not just topic keywords/);
+	assert.match(
+		indexSource,
+		/current role, seniority, company or industry, and what they want to achieve/,
+	);
+	assert.match(indexSource, /than on topic keywords/);
 	assert.match(indexSource, /Include who the user is \(role, seniority, situation\)/);
 });
 

@@ -13,21 +13,21 @@ const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "u
 
 test("M2 registers the search_mentors MCP tool", () => {
 	assert.match(indexSource, /registerTool\(\s*"search_mentors"/);
-	assert.match(indexSource, /existing Explore personalization ranker/);
+	assert.match(indexSource, /Explore personalization ranker/);
 	assert.match(indexSource, /min\(3\)/);
 	assert.match(indexSource, /max\(9\)/);
 });
 
-test("search_mentors instructs at most one search per user request (widget-stacking fix)", () => {
+test("search_mentors states one call is sufficient per request (widget-stacking fix)", () => {
 	// Loose patterns on purpose: pin the constraint, not the exact wording.
-	assert.match(indexSource, /at most\s+once\s+per user request/i);
-	assert.match(indexSource, /every call renders another.{0,20}card grid/i);
-	assert.match(indexSource, /do not run broad\/narrow\/fallback search variations/i);
+	// Stated as a property of the server rather than as an instruction to the model,
+	// so the description carries no model-behaviour directives (directory policy).
+	assert.match(indexSource, /one call is sufficient for a request/i);
 	assert.match(
 		indexSource,
-		/overfetches, reranks, retries over-strict discipline filters, and tops up sparse domain results/i,
+		/overfetches, reranks, relaxes over-strict discipline filters, and tops up sparse domain results/i,
 	);
-	assert.match(indexSource, /one full 9-card grid at once/i);
+	assert.match(indexSource, /up to nine ranked mentor cards/i);
 });
 
 test("search_mentors calls search-service Explore with compact filters", () => {
