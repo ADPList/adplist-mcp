@@ -11,11 +11,13 @@ import {
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 
-test("M3 registers list_availability and book_session MCP tools with confirmation guidance", () => {
+test("M3 registers list_availability and book_session MCP tools with a confirmation gate", () => {
 	assert.match(indexSource, /registerTool\(\s*"list_availability"/);
 	assert.match(indexSource, /registerTool\(\s*"book_session"/);
-	assert.match(indexSource, /always confirm the exact mentor, time, and note/i);
-	assert.match(indexSource, /queryID from the earlier search_mentors result/i);
+	// Confirmation is enforced by the schema, not by prose in the description.
+	assert.match(indexSource, /Set to true only after the user has confirmed the exact mentor, date, time, and note/i);
+	assert.match(indexSource, /Booking notifies the mentor and holds time in their calendar/i);
+	assert.match(indexSource, /queryID from a prior search for booking attribution/i);
 });
 
 test("availability days default to 30 and clamp to max 30", () => {

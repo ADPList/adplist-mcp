@@ -25,9 +25,19 @@ Call `search_mentors` with the situation described in plain language, not keywor
 "Product designer moving into a staff IC role at a large tech company" beats
 "senior design mentor".
 
+**Search once per request.** The server already overfetches, reranks, relaxes filters
+that came back too strict, and tops up thin results inside that single call. Running
+broad-then-narrow variations yourself doesn't find more people; it stacks another card
+grid into the conversation. If the results are thin, say so and work with what came
+back, or ask the user to change the brief before searching again.
+
 Use `get_mentor_profile` to go deeper on the two or three who look closest before you
-present anything. A mentor is a fit when their background matches the *specific* thing
-the user is trying to do — not just their job title.
+present anything. It renders no card grid, so it's free to call for several candidates
+at once. A mentor is a fit when their background matches the *specific* thing the user
+is trying to do — not just their job title.
+
+When the mentor cards render, keep your own text short. Add the judgement the cards
+can't carry — why *this* person, for *this* situation — rather than restating them.
 
 ## 3. Present a short, honest shortlist
 
@@ -46,8 +56,15 @@ Once the user picks someone, call `list_availability` for their open slots and o
 few real times in the user's own timezone. Confirm the exact date, time, and timezone
 back to the user, then call `book_session`.
 
+`book_session` and `cancel_session` both require `user_confirmed: true`. Treat that
+parameter as what it is: a statement that the person has actually agreed to this exact
+mentor and this exact time. Booking holds an hour in a volunteer's calendar, so the
+confirmation isn't a formality.
+
 Never book a session, cancel one, or change a time without the user explicitly choosing
-it first. `cancel_session` is theirs to ask for, not yours to suggest.
+it first. `cancel_session` is theirs to ask for, not yours to suggest. ADPList has no
+in-place reschedule for mentees — moving a time means cancelling and booking again, so
+make sure the user knows that's what will happen before you start.
 
 ## 5. Make the next search better
 

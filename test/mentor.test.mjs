@@ -19,18 +19,14 @@ test("V2 registers all mentor-mode MCP tools", () => {
 	assert.match(indexSource, /registerTool\(\s*"list_my_mentees"/);
 });
 
-test("respond_to_mentor_request requires user confirmation in chat before acting", () => {
-	assert.match(
-		indexSource,
-		/Before calling this tool, always confirm the action with the user in chat/i,
-	);
+test("respond_to_mentor_request is gated on a user_confirmed literal", () => {
+	assert.match(indexSource, /Accept or decline a mentee's booking request as the mentor[\s\S]{0,400}?Gated on the user_confirmed parameter/i);
+	assert.match(indexSource, /user_confirmed:\s*z\s*\.literal\(true\)/);
 });
 
-test("reschedule_as_mentor requires user confirmation in chat before acting", () => {
-	assert.match(
-		indexSource,
-		/Before calling this tool, always confirm the new time with the user in chat/i,
-	);
+test("reschedule_as_mentor is gated on a user_confirmed literal", () => {
+	assert.match(indexSource, /Propose a new time for a session as the mentor[\s\S]{0,400}?Gated on the user_confirmed parameter/i);
+	assert.match(indexSource, /The mentee is notified and must confirm the new time/i);
 });
 
 // ── list_mentor_requests ──────────────────────────────────────────────

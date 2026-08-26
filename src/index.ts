@@ -102,7 +102,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"manage_my_context",
 			{
 				description:
-					"Read, update, or clear the user's stored career context on ADPList. This profile persists across sessions and improves mentor recommendations. Call with no arguments to show the user what's currently stored. Call with action: 'merge' and an updates object when the user explicitly asks you to remember something about their career (role, focus area, skills they want to develop, etc.). Call with action: 'clear' when they ask to forget everything. Do not proactively store things the user did not explicitly ask you to remember — this is an explicit-only memory in v1.",
+					"Read, update, or clear the user's stored career context on ADPList: role, focus area, goals, and the skills they want to develop. The context persists across sessions and improves mentor recommendations. With no arguments it returns what is currently stored. action 'merge' shallow-merges the updates object; action 'clear' removes everything. This is an explicit-only store, holding what the user has asked ADPList to remember.",
 				annotations: {
 					title: "Manage ADPList context",
 					readOnlyHint: false,
@@ -128,7 +128,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"search_mentors",
 			{
 				description:
-					"Find ADPList mentors for a user's career intent using the existing Explore personalization ranker. This can take a few seconds because it calls the live search-service. Use it when the user describes a mentorship, career transition, role, discipline, country, or language need. In intent, describe who the user is from the conversation — current role, seniority, company or industry, and what they want to achieve and why — not just topic keywords (e.g. 'senior PM at a fintech startup transitioning into UX research, wants help running first discovery interviews' rather than 'user research for startups'). HARD LIMIT: call this tool at most ONCE per user request. Every call renders another full card grid in chat; do not run broad/narrow/fallback search variations yourself and do not call it again just to get more cards. The server already overfetches, reranks, retries over-strict discipline filters, and tops up sparse domain results inside a single call. For growth/marketing searches, omit max_results unless the user explicitly asks for fewer; the server will return up to one full 9-card grid at once. If results are sparse or imperfect, present the one grid that came back, note the limitation, and deep-dive the best candidates with get_mentor_profile (renders no widget) before deciding whether to ask the user to adjust. Returns compact ranked mentor cards plus Algolia queryID for later booking attribution. After the cards render, consider deep-diving the top 2-3 candidates with get_mentor_profile and giving the user a short personal recommendation in chat that references their situation — do not just restate the cards. MCP Apps hosts should render the attached clean visual mentor cards; text/JSON fallback remains complete for unsupported hosts. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
+					"Search ADPList's mentor community for a career intent, ranked by the Explore personalization ranker. Takes a few seconds because it queries the live search service. The intent parameter accepts a full description of the person's situation, and ranks on that far better than on topic keywords: current role, seniority, company or industry, and what they want to achieve and why. For example, 'senior PM at a fintech startup moving into UX research, wants help running first discovery interviews' rather than 'user research for startups'. One call is sufficient for a request: the server overfetches, reranks, relaxes over-strict discipline filters, and tops up sparse domain results internally, returning up to nine ranked mentor cards. Each result carries the mentor's slug, headline, company, expertise, and an Algolia queryID used for booking attribution.",
 				_meta: appToolMeta(UI_RESOURCES.mentorCards),
 				annotations: {
 					title: "Search ADPList mentors",
@@ -192,7 +192,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"get_mentor_profile",
 			{
 				description:
-					"Fetch a mentor's full public ADPList profile by slug: bio, complete expertise and disciplines, languages, experience level, review stats, and recent review snippets — the same information shown on their public profile page. Use it after search_mentors to deep-dive the top candidates, compare them against the user's actual situation, and explain in your own words why a specific mentor fits. Read-only and fast; calling it for 2-3 candidates in parallel is fine.",
+					"Fetch a mentor's full public ADPList profile by slug: bio, complete expertise and disciplines, languages, experience level, review statistics, and recent review snippets. This is the same information shown on the mentor's public profile page. Read-only and fast, and safe to fetch for several candidates at once.",
 				annotations: {
 					title: "Get mentor public profile",
 					readOnlyHint: true,
@@ -215,7 +215,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"list_availability",
 			{
 				description:
-					"List available ADPList mentorship booking slots for a mentor over the next N days. Defaults to 30 days so mentors with sparse near-term availability are not incorrectly shown as unavailable. Use this after search_mentors when the user has picked a mentor. Returns at most 20 compact UTC slots plus a localized display string. MCP Apps hosts should render the attached clean Airbnb-like date/time picker; always ask the user to confirm the exact selected slot before booking. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
+					"List a mentor's open ADPList booking slots over the next N days, by mentor slug. The days parameter defaults to 30 so that mentors with sparse near-term availability are not reported as unavailable. Returns at most 20 slots, each as a UTC timestamp plus a localized display string.",
 				_meta: appToolMeta(UI_RESOURCES.slotPicker),
 				annotations: {
 					title: "List mentor availability",
@@ -252,7 +252,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"book_session",
 			{
 				description:
-					"Request an ADPList mentorship session for the authenticated user. IMPORTANT: Before calling this tool, always confirm the exact mentor, time, and note in chat with the user. Most ADPList sessions are requests awaiting mentor confirmation, not instantly confirmed meetings. Only use free mentorship sessions in v1. Pass queryID from the earlier search_mentors result when available for booking attribution. MCP Apps hosts can render the attached session confirmation card. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
+					"Request an ADPList mentorship session with a mentor at a chosen slot. Booking notifies the mentor and holds time in their calendar; mentors are volunteers. Most ADPList sessions are requests awaiting the mentor's confirmation rather than instantly confirmed meetings, and the response reports which. Covers free mentorship sessions only. Accepts an optional note for the mentor, and the queryID from a prior search for booking attribution.",
 				_meta: appToolMeta(UI_RESOURCES.sessionCards),
 				annotations: {
 					title: "Book ADPList session",
@@ -272,6 +272,11 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.trim()
 						.min(1)
 						.describe("UTC ISO 8601 slot returned by list_availability."),
+					user_confirmed: z
+						.literal(true)
+						.describe(
+							"Set to true only after the user has confirmed the exact mentor, date, time, and note. Booking holds time in a volunteer mentor's calendar.",
+						),
 					note: z
 						.string()
 						.trim()
@@ -299,7 +304,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"list_my_sessions",
 			{
 				description:
-					"List the authenticated user's ADPList mentorship sessions. Defaults to upcoming sessions to keep chat context compact. Use scope: 'past' only when the user asks for previous sessions, and scope: 'all' only when they explicitly ask for everything. Returns every session the user is part of, whether they booked it as the mentee or are the mentor. Each item includes both the mentor and the mentee (name, slug, title, organization, profile photo when available), the scheduled time, duration, status, source, the booking_notes and booking_questions exchanged when the session was booked, and the dashboard URL — frame each session relative to whichever of the two parties is the user you are helping. MCP Apps hosts should render the attached clean session cards. When the widget renders, keep your chat text to about one line and never echo the raw JSON result in prose.",
+					"List the authenticated user's ADPList mentorship sessions. The scope parameter defaults to 'upcoming'; 'past' and 'all' are also accepted. Returns every session the user is part of, whether they booked it as the mentee or are the mentor, so the user may be either party in a given session. Each item includes both people (name, slug, title, organization, and profile photo when available), the scheduled time, duration, status, source, the booking notes and questions exchanged at booking, and the dashboard URL.",
 				_meta: appToolMeta(UI_RESOURCES.sessionCards),
 				annotations: {
 					title: "List my ADPList sessions",
@@ -335,7 +340,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"list_journals",
 			{
 				description:
-					"List the authenticated user's ADPList AI-generated post-session summaries from past mentorship sessions. Use this when the user asks what they discussed, learned, committed to, or covered with mentors across past sessions. These are not user-authored free-form journals, so never frame results as 'what you wrote in your journal'; say 'your session summary covered' or 'you and your mentor discussed'. Returns compact metadata by default. Set with_content: true only when the user needs the actual structured summary fields in the list.",
+					"List the authenticated user's ADPList post-session summaries. These are generated by ADPList's AI note taker from the session transcript; they are not free-form journals written by the user. Covers what was discussed, learned, and committed to across past mentorship sessions. Returns compact metadata by default; with_content true includes the structured summary fields inline.",
 				annotations: {
 					title: "List ADPList session summaries",
 					readOnlyHint: true,
@@ -372,7 +377,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"search_journal_learnings",
 			{
 				description:
-					"Search the authenticated user's curated ADPList learning/journal artifacts and return distilled learnings from AI-generated post-session summaries. Use this FIRST for questions that say learnings, lessons, journal, takeaways, patterns, insights, what should I remember, or what did I learn from ADPList. Do not use raw session history as the primary source for those prompts. If this returns no learnings, explicitly say there are no curated journal learnings yet and ask whether to extract candidate learnings from historical sessions; never silently substitute sessions. For 'find the session where...' or other raw-history requests, use list_my_sessions instead.",
+					"Search distilled learnings across the authenticated user's ADPList post-session summaries. Suited to questions about learnings, lessons, takeaways, patterns, or insights from ADPList mentorship, as distinct from locating one specific session in raw history. Accepts an optional natural-language query plus project, area, tags, and since_iso filters. The limit parameter defaults to 20 and caps at 100. Returns an empty result set when the account has no curated learnings yet.",
 				annotations: {
 					title: "Search ADPList journal learnings",
 					readOnlyHint: true,
@@ -422,7 +427,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"read_journal",
 			{
 				description:
-					"Read one ADPList AI-generated post-session summary for the authenticated user. Use this after list_journals or when the user asks about a specific past mentorship session. The content is generated from the AI Note Taker transcript summary (tldr, insights, highlights, action items), not something the user wrote manually. Journal content is sensitive; fetch it only when needed for the user's request and do not imply it is stored in MCP infrastructure.",
+					"Read one ADPList post-session summary by journal ID. The content is generated by ADPList's AI note taker from the session transcript (tldr, insights, highlights, and action items) rather than written by the user. Journal content is personal to the account it belongs to.",
 				annotations: {
 					title: "Read ADPList session summary",
 					readOnlyHint: true,
@@ -445,7 +450,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"list_mentor_requests",
 			{
 				description:
-					"List booking requests awaiting your confirmation as a mentor. These are sessions where mentees have requested to book with you and you need to accept or decline. Use this when you want to see incoming requests that need your action. Each request includes the mentee's profile, scheduled time, and booking notes.",
+					"List booking requests awaiting the authenticated mentor's confirmation. Each request includes the mentee's profile, the scheduled time, and the booking notes. Returns an empty list for accounts that are not mentors on ADPList.",
 				annotations: {
 					title: "List mentor booking requests",
 					readOnlyHint: true,
@@ -471,7 +476,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"respond_to_mentor_request",
 			{
 				description:
-					"Accept or decline a mentee's booking request as a mentor. IMPORTANT: Before calling this tool, always confirm the action with the user in chat (for example: 'Accept the request from Sarah for Tuesday 3 PM?'). When declining, you can optionally include a message the mentee will see. The mentee is notified of your decision.",
+					"Accept or decline a mentee's booking request as the mentor. The mentee is notified of the decision. An optional message is shown to the mentee, which is most useful when declining. Gated on the user_confirmed parameter.",
 				annotations: {
 					title: "Accept or decline mentor booking request",
 					readOnlyHint: false,
@@ -512,7 +517,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"reschedule_as_mentor",
 			{
 				description:
-					"As a mentor, propose a reschedule for a session to a new time. IMPORTANT: Before calling this tool, always confirm the new time with the user in chat. The mentee will be notified and must confirm the new time. After rescheduling, use list_availability to find viable new slots.",
+					"Propose a new time for a session as the mentor. The mentee is notified and must confirm the new time before it takes effect. An optional message is shown to the mentee. Gated on the user_confirmed parameter.",
 				annotations: {
 					title: "Reschedule a session as mentor",
 					readOnlyHint: false,
@@ -553,7 +558,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"list_my_mentees",
 			{
 				description:
-					"List the mentees you have sessions with as a mentor. Use this to see who you mentor, their roles and organizations, and their profiles. This is a people directory — it returns unique mentees across all your sessions (past and upcoming), not individual session records.",
+					"List the unique mentees the authenticated mentor has sessions with, across both past and upcoming sessions, including their roles, organizations, and profiles. This is a people directory rather than a list of session records. Returns an empty list for accounts that are not mentors on ADPList.",
 				annotations: {
 					title: "List my mentees",
 					readOnlyHint: true,
@@ -569,7 +574,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"cancel_session",
 			{
 				description:
-					"Cancel an ADPList mentorship session for the authenticated user. IMPORTANT: This changes the user's booking and notifies the mentor. Before calling this tool, always confirm the exact session, mentor, and scheduled time with the user in chat (for example: 'Just to confirm, cancel your Tuesday 3 PM session with Sarah? Mentors get notified.'). Pass an optional reason string so the mentor knows why. If the user asks to reschedule, call cancel_session only after confirmation, then use list_availability and book_session for the new slot; there is no native reschedule_session tool in v1.",
+					"Cancel an ADPList mentorship session for the authenticated user. This releases the booking and notifies the mentor, and an optional reason is passed along to them. ADPList has no in-place reschedule for mentees, so moving to a different time means cancelling and then booking a new slot. Gated on the user_confirmed parameter.",
 				annotations: {
 					title: "Cancel ADPList session",
 					readOnlyHint: false,
