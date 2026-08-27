@@ -1106,14 +1106,18 @@ const REQUEST_VERB =
 	/\b(?:want|need|looking|find|show|recommend|suggest|search|book|connect|match|interested|help)\w*/i;
 
 function isSelfDescription(request: string, matchIndex: number): boolean {
-	// Only the immediate clause counts: "I need a design mentor because I work
-	// at Google" is judged on "I work", not on "need".
-	const clause =
-		request
-			.slice(0, matchIndex)
-			.split(/[.;!?,\n]|\b(?:because|since|but|and|so|while)\b/i)
-			.pop() ?? "";
-	return FIRST_PERSON.test(clause) && !REQUEST_VERB.test(clause);
+	// Judge on the nearest preceding clause that has a subject: "I need a design
+	// mentor because I work at Google" is judged on "I work"; "I'm a PM and
+	// currently work at Google" falls back to "I'm a PM".
+	const clauses = request
+		.slice(0, matchIndex)
+		.split(/[.;!?,\n]|\b(?:because|since|but|and|so|while)\b/i)
+		.reverse();
+	for (const clause of clauses) {
+		if (REQUEST_VERB.test(clause)) return false;
+		if (FIRST_PERSON.test(clause)) return true;
+	}
+	return false;
 }
 
 export function employerCandidate(intent: string): string {
@@ -1151,10 +1155,18 @@ function companyTokens(company: string): string[] {
 }
 
 function employerHasTokens(mentor: SearchServiceMentor, tokens: string[]): boolean {
-	const employer = new Set(
-		slugifyLiteralName(mentor.employer ?? mentor.company ?? "").split("-").filter(Boolean),
+	// Counted, not a set: "Johnson Johnson" needs two, so Johnson Controls fails.
+	const employer = slugifyLiteralName(mentor.employer ?? mentor.company ?? "")
+		.split("-")
+		.filter(Boolean);
+	return (
+		tokens.length > 0 &&
+		tokens.every(
+			(token) =>
+				employer.filter((word) => word === token).length >=
+				tokens.filter((word) => word === token).length,
+		)
 	);
-	return tokens.length > 0 && tokens.every((token) => employer.has(token));
 }
 
 // The captured phrase may carry trailing request words ("Google please"), so

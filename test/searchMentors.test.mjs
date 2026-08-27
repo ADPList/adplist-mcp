@@ -2263,6 +2263,10 @@ test("employerCandidate detects at / from / work at phrasing without a capitalis
 	assert.equal(employerCandidate("mentors who work at Bank of America"), "Bank of America");
 	assert.equal(employerCandidate("I need a design mentor because I work at Google"), "");
 	assert.equal(employerCandidate("I'm a designer and I need mentors who work at Google"), "Google");
+	assert.equal(
+		employerCandidate("I'm a PM and currently work at Google, looking for design mentorship"),
+		"",
+	);
 });
 
 test("search_mentors carries inferred filters into the employer query", async () => {
@@ -2510,6 +2514,7 @@ test("search_mentors tolerates trailing request words after the company", async 
 		return jsonResponse({
 			results: [
 				...Array.from({ length: 9 }, (_, i) => employerMentor(i, "Google")),
+				employerMentor(8, "Johnson Controls"),
 				employerMentor(9, "Johnson & Johnson"),
 			],
 			indexUsed: "explore",
@@ -2531,7 +2536,7 @@ test("search_mentors tolerates trailing request words after the company", async 
 			undefined,
 			{ intent: "mentors who work at Johnson and Johnson" },
 		);
-		assert.equal(jnj.mentors[0].company, "Johnson & Johnson");
+		assert.deepEqual(jnj.mentors.filter((m) => m.why_match.startsWith("Works at")).map((m) => m.company), ["Johnson & Johnson"]);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
