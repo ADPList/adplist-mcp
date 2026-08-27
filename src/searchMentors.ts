@@ -1090,20 +1090,30 @@ async function searchMentorsByIntent(
 // Explicit employment wording always counts; a bare "at"/"from" only counts
 // right after a people noun ("mentors at Google", never "good at strategy").
 // A company is one to four tokens; the capture stops before clause words such
-// as "who", so "mentors from Canada who work at Google" leaves the Google clause
-// for the next match.
-const EMPLOYER_INTENT_PATTERN =
-	/\b(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|(?:mentors?|people|someone|anyone|folks|designers?|engineers?|developers?|managers?|leaders?|founders?|researchers?|recruiters?|experts?|pms?)\s+(?:at|from))\s+(?:(?:a|an|the)\s+)?((?:(?!(?:who|that|which|with|in|for|and|or|to|on|about|as)\b)[A-Za-z0-9][A-Za-z0-9&.'-]*)(?:\s+(?!(?:who|that|which|with|in|for|and|or|to|on|about|as)\b)[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})/gi;
-// "I'm a PM at Google", "I was a designer at Meta", "I work at Google" describe
-// the member, not the mentor they want. Only the words leading into the match
-// count, so "I want mentors who work at Google" still resolves Google.
-const SELF_DESCRIPTION_LEAD =
-	/(?:\b(?:i'?m|i am|i was|i'?ve been|i have been|i used to be|as|currently|formerly|previously)\s+(?:an?\s+)?(?:[a-z-]+\s+){0,2}|\b(?:i|we)\s+)$/i;
+// as "who" or "for", so "mentors from Canada who work at Google" leaves the
+// Google clause for the next match. "and"/"of" stay inside names (Johnson and
+// Johnson, Bank of America).
+const CLAUSE_WORD = String.raw`(?!(?:who|that|which|with|in|for|or|to|on|about|as)\b)`;
+const EMPLOYER_INTENT_PATTERN = new RegExp(
+	String.raw`\b(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|(?:mentors?|people|someone|anyone|folks|designers?|engineers?|developers?|managers?|leaders?|founders?|researchers?|recruiters?|experts?|pms?)\s+(?:at|from))\s+(?:(?:a|an|the)\s+)?(${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})`,
+	"gi",
+);
+// "I'm a PM at Google", "As a designer at Meta", "I've been working at Google"
+// describe the member: a first-person clause with no request verb in it.
+// "I want mentors who work at Google" asks for mentors.
+const FIRST_PERSON = /\b(?:i|i'm|i am|i've|i'd|we|my|as an?)\b/i;
+const REQUEST_VERB =
+	/\b(?:want|need|looking|find|show|recommend|suggest|search|book|connect|match|interested|help)\w*/i;
+
+function isSelfDescription(request: string, matchIndex: number): boolean {
+	const clause = request.slice(0, matchIndex).split(/[.;!?\n]/).pop() ?? "";
+	return FIRST_PERSON.test(clause) && !REQUEST_VERB.test(clause);
+}
 
 export function employerCandidate(intent: string): string {
 	const request = currentRequestIntent(intent);
 	for (const match of request.matchAll(EMPLOYER_INTENT_PATTERN)) {
-		if (SELF_DESCRIPTION_LEAD.test(request.slice(0, match.index))) continue;
+		if (isSelfDescription(request, match.index)) continue;
 		const company = match[1].replace(/[.,]+$/, "");
 		if (!isRegionName(company)) return company;
 	}
@@ -1145,7 +1155,9 @@ async function searchMentorsByEmployer(
 	// role/domain filters and ranking apply to those rows ("product managers who
 	// work at Google" must not return nine designers). Row trimming happens once
 	// in mergeSearchMentorOutputs.
-	const url = new URL(buildSearchMentorsUrl(baseUrl, { intent: company, filters: input.filters }));
+	// Filters inferred from the request ("senior mentors at Google") come along.
+	const filters = withInferredFilters(input).filters;
+	const url = new URL(buildSearchMentorsUrl(baseUrl, { intent: company, filters }));
 	url.searchParams.set("pageSize", String(searchPageSize(input)));
 	let response: SearchServiceResponse;
 	try {

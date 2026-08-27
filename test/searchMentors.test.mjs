@@ -2253,6 +2253,39 @@ test("employerCandidate detects at / from / work at phrasing without a capitalis
 	assert.equal(employerCandidate("I've been a PM at Google and want design mentorship"), "");
 	assert.equal(employerCandidate("I was a PM at Google and want design mentorship"), "");
 	assert.equal(employerCandidate("mentors from Canada who work at Google"), "Google");
+	assert.equal(employerCandidate("I've been working at Google and want design mentorship"), "");
+	assert.equal(employerCandidate("I used to work at Google, need a design mentor"), "");
+	assert.equal(
+		employerCandidate("I'm a Senior Staff Product Manager at Google and want design mentorship"),
+		"",
+	);
+	assert.equal(employerCandidate("mentors who work at Johnson and Johnson"), "Johnson and Johnson");
+	assert.equal(employerCandidate("mentors who work at Bank of America"), "Bank of America");
+});
+
+test("search_mentors carries inferred filters into the employer query", async () => {
+	const originalFetch = globalThis.fetch;
+	const urls = [];
+	globalThis.fetch = async (url) => {
+		urls.push(new URL(url));
+		return jsonResponse({ results: [], indexUsed: "explore" });
+	};
+
+	try {
+		await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "senior mentors who work at Google" },
+		);
+		assert.equal(urls[0].searchParams.get("q"), "Google");
+		const intentUrl = urls.find((url) => url.searchParams.get("q") !== "Google");
+		for (const [key, value] of intentUrl.searchParams) {
+			if (key === "q" || key === "pageSize") continue;
+			assert.equal(urls[0].searchParams.get(key), value, `${key} differs`);
+		}
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });
 
 test("search_mentors filters employer rows before the result limit applies", async () => {
