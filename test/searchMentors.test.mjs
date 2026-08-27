@@ -1899,6 +1899,8 @@ test("search_mentors extracts a name the model wrapped in a sentence (ADPLIST-38
 			["Looking for a specific mentor named Charlie Lowe on ADPList", "Charlie Lowe"],
 			["Is Charlie Lowe available for a session?", "Charlie Lowe"],
 			["My colleague told me to talk to Charlie Lowe.", "Charlie Lowe"],
+			["Charlie Lowe is the mentor I want", "Charlie Lowe"],
+			["Charlie Lowe (Google) please", "Charlie Lowe"],
 		]) {
 			calls.length = 0;
 			const result = await searchMentors(
@@ -1934,6 +1936,7 @@ test("search_mentors does not mistake capitalised career intents for names", asy
 		for (const intent of [
 			"Senior product manager at a fintech startup transitioning into UX research, wants help running discovery interviews",
 			"Product Designer at Meta moving into Design Systems work",
+			"I need guidance in Data Science for healthcare",
 		]) {
 			calls.length = 0;
 			await searchMentors(

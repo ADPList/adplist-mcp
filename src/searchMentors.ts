@@ -117,6 +117,32 @@ const LITERAL_NAME_STOP_WORDS = new Set([
 	"profile",
 	"adplist",
 ]);
+// Capitalised sentence openers that sit directly before a name ("Is Sherman Poon
+// free?"). Only the capitalised-run extractor uses these.
+const LITERAL_NAME_SENTENCE_OPENERS = new Set([
+	"is",
+	"are",
+	"can",
+	"does",
+	"who",
+	"where",
+	"looking",
+	"need",
+	"want",
+	"please",
+	"help",
+	"talk",
+	"search",
+	"connect",
+	"meet",
+	"contact",
+	"recommend",
+	"using",
+	"about",
+	"hi",
+	"hello",
+	"hey",
+]);
 const LITERAL_NAME_BLOCKLIST = new Set([
 	"product",
 	"designer",
@@ -132,6 +158,23 @@ const LITERAL_NAME_BLOCKLIST = new Set([
 	"lead",
 	"coach",
 	"career",
+	// Title-cased disciplines that are not names ("Data Science", "Content Strategy").
+	"data",
+	"science",
+	"research",
+	"analytics",
+	"systems",
+	"strategy",
+	"operations",
+	"management",
+	"leadership",
+	"software",
+	"machine",
+	"learning",
+	"content",
+	"brand",
+	"sales",
+	"finance",
 ]);
 const GROWTH_MARKETING_EXPANSION =
 	"growth marketing acquisition lifecycle marketing retention activation experimentation conversion optimization demand generation go-to-market marketing analytics";
@@ -1167,29 +1210,23 @@ function literalNameCandidate(intent: string): string {
 
 // Models wrap names in sentences ("Looking for a specific mentor named Charlie
 // Lowe on ADPList"), and the filler alone drowns the name at the search service.
-// Pull out the longest run of 2-4 consecutive Capitalised words. The sentence's
-// first word only counts when the whole intent is one run (a bare name), so
-// "Is Sherman Poon available" yields "Sherman Poon", not "Is Sherman Poon".
+// Pull out the longest run of 2-4 consecutive Capitalised words. Lowercase words,
+// acronyms, stop/blocklist words, and any punctuation (parentheses, slashes)
+// end a run, so "Charlie Lowe (Google)" yields "Charlie Lowe".
 function capitalisedNameRun(intent: string): string | undefined {
-	const tokens = intent.match(/[A-Za-z][A-Za-z'-]*|[.,;:!?\n]/g) ?? [];
+	const tokens = intent.match(/[A-Za-z][A-Za-z'-]*|[^A-Za-z\s'-]/g) ?? [];
 	const isNameWord = (token: string) =>
 		/^[A-Z]/.test(token) &&
 		token !== token.toUpperCase() &&
 		!LITERAL_NAME_STOP_WORDS.has(token.toLowerCase()) &&
+		!LITERAL_NAME_SENTENCE_OPENERS.has(token.toLowerCase()) &&
 		!LITERAL_NAME_BLOCKLIST.has(token.toLowerCase());
-	if (tokens.length >= 2 && tokens.length <= 4 && tokens.every(isNameWord)) {
-		return tokens.join(" ");
-	}
 	let best: string[] = [];
 	let run: string[] = [];
-	tokens.forEach((token, index) => {
-		if (index > 0 && isNameWord(token)) {
-			run.push(token);
-		} else {
-			run = [];
-		}
-		if (run.length >= 2 && run.length <= 4 && run.length > best.length) best = [...run];
-	});
+	for (const token of tokens) {
+		run = isNameWord(token) ? [...run, token] : [];
+		if (run.length >= 2 && run.length <= 4 && run.length > best.length) best = run;
+	}
 	return best.length > 0 ? best.join(" ") : undefined;
 }
 
