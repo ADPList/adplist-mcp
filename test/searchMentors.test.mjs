@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
 	buildSearchMentorsUrl,
+	employerCandidate,
 	mapSearchMentorsResponse,
 	normalizeMaxResults,
 	searchMentors,
@@ -2125,7 +2126,11 @@ test("search_mentors clamps profile-enriched queries below Algolia's byte limit"
 			},
 		);
 
-		const q = new URL(searchCalls[0]).searchParams.get("q");
+		// "experience at top tech companies" also trips the employer detector,
+		// which costs one bare search that matches nobody; assert on the enriched call.
+		const q = searchCalls
+			.map((url) => new URL(url).searchParams.get("q"))
+			.find((value) => value.includes("Current request:"));
 		assert.ok(Buffer.byteLength(q, "utf8") <= 500);
 		assert.match(q, /Stored ADPList career context:/);
 		assert.match(q, /Current request:/);
@@ -2285,4 +2290,219 @@ test("region-style adplist-bucket S3 photo hosts are rewritten to the CSP-allowl
 		"https://adplist-bucket.s3.amazonaws.com/media/profile_photos/abc.webp",
 	);
 	assert.equal(out.mentors[2].profile_photo_url, "https://lh3.googleusercontent.com/photo.jpg");
+});
+
+function employerMentor(index, employer) {
+	return {
+		name: `Mentor ${index}`,
+		slug: `mentor-${index}`,
+		title: "Product Designer",
+		employer,
+		country: { iso: "US" },
+	};
+}
+
+test("employerCandidate anchors on a plural people noun or relative pronoun, no capitalisation gate", () => {
+	assert.equal(employerCandidate("find me mentors who work at Google"), "Google");
+	assert.equal(employerCandidate("mentors at google who can review my portfolio"), "google");
+	assert.equal(employerCandidate("designers from Google DeepMind, senior"), "Google DeepMind");
+	assert.equal(employerCandidate("someone working for the New York Times"), "New York Times");
+	assert.equal(employerCandidate("mentors who work at Johnson and Johnson"), "Johnson and Johnson");
+	assert.equal(employerCandidate("mentors who work at Bank of America"), "Bank of America");
+	assert.equal(employerCandidate("I want mentors who work at Google"), "Google");
+	assert.equal(employerCandidate("We are seeking people employed by Meta"), "Meta");
+	// The realistic shape: the intent describes the member too.
+	assert.equal(
+		employerCandidate(
+			"Senior product designer at Shopify with 3 years experience, wants to move into product management; looking for mentors who work at Google",
+		),
+		"Google",
+	);
+	assert.equal(
+		employerCandidate("Mid-level UX designer at Meta looking for design leaders from Google DeepMind"),
+		"Google DeepMind",
+	);
+	assert.equal(
+		employerCandidate("Stored ADPList career context: Role: PM at Google\nCurrent request: mentors who work at Stripe"),
+		"Stripe",
+	);
+	// The member's own employer follows a singular title and never matches.
+	assert.equal(employerCandidate("Senior PM at Google, wants design mentorship"), "");
+	assert.equal(employerCandidate("I'm a PM at Google who wants help transitioning to design"), "");
+	assert.equal(employerCandidate("I need a design mentor because I work at Google"), "");
+	assert.equal(employerCandidate("I've been working at Google and want design mentorship"), "");
+	assert.equal(employerCandidate("help transitioning from design to product management"), "");
+	assert.equal(employerCandidate("senior product designer for portfolio review"), "");
+});
+
+test("search_mentors keeps the role intent when filtering employer hits", async () => {
+	const originalFetch = globalThis.fetch;
+	const requests = [];
+	globalThis.fetch = async (url) => {
+		const parsed = new URL(url);
+		requests.push({ q: parsed.searchParams.get("q"), pageSize: parsed.searchParams.get("pageSize") });
+		if (parsed.searchParams.get("q") === "Google") {
+			return jsonResponse({
+				results: [
+					{ ...employerMentor(1, "Google"), title: "Senior Product Manager" },
+					{ ...employerMentor(2, "Google"), title: "Staff Software Engineer" },
+					{ ...employerMentor(3, "Google"), title: "Group Product Manager" },
+				],
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({
+			results: Array.from({ length: 9 }, (_, i) => ({ ...employerMentor(i + 10, "Other"), title: "Product Manager" })),
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "product managers who work at Google" },
+		);
+		assert.equal(requests[0].q, "Google");
+		assert.equal(requests[0].pageSize, "72");
+		assert.deepEqual(
+			result.mentors.slice(0, 2).map((mentor) => mentor.slug),
+			["mentor-1", "mentor-3"],
+		);
+		assert.ok(!result.mentors.some((mentor) => mentor.slug === "mentor-2"));
+		assert.equal(result.mentors.length, 9);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors puts employer matches first and tops up to nine from the intent path", async () => {
+	const originalFetch = globalThis.fetch;
+	const queries = [];
+	globalThis.fetch = async (url) => {
+		const q = new URL(url).searchParams.get("q");
+		queries.push(q);
+		if (q === "Google") {
+			return jsonResponse({
+				results: [
+					employerMentor(1, "Google"),
+					employerMentor(2, "Meta"),
+					employerMentor(3, "Google DeepMind"),
+					employerMentor(4, "Googleplex Consulting"),
+				],
+				queryID: "bare",
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({
+			results: [employerMentor(1, "Google"), ...[5, 6, 7, 8, 9, 10, 11, 12].map((i) => employerMentor(i, "Other"))],
+			queryID: "intent",
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "find me mentors who work at Google" },
+		);
+
+		assert.deepEqual(queries, ["Google", "find me mentors who work at Google"]);
+		assert.equal(result.mentors.length, 9);
+		assert.equal(result.mentors[0].slug, "mentor-1");
+		assert.equal(result.mentors[0].why_match, "Works at Google.");
+		assert.equal(result.mentors.filter((mentor) => mentor.why_match.startsWith("Works at")).length, 1);
+		assert.ok(!result.mentors.some((mentor) => mentor.slug === "mentor-4"));
+		assert.equal(new Set(result.mentors.map((mentor) => mentor.slug)).size, 9);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors treats a place as nobody's employer", async () => {
+	const originalFetch = globalThis.fetch;
+	const queries = [];
+	globalThis.fetch = async (url) => {
+		queries.push(new URL(url).searchParams.get("q"));
+		return jsonResponse({
+			results: [
+				...Array.from({ length: 9 }, (_, i) => employerMentor(i, "New York Times")),
+				employerMentor(9, "Google LLC"),
+			],
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "mentors from New York" },
+		);
+		// No employer hit → the name path (#86 capitalised run) and intent path run as on main.
+		assert.equal(queries[0], "New York");
+		assert.ok(queries.includes("mentors from New York"));
+		assert.ok(result.mentors.every((mentor) => !mentor.why_match.startsWith("Works at")));
+
+		const google = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "mentors from Google" },
+		);
+		assert.equal(google.mentors[0].why_match, "Works at Google LLC.");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors returns only employer matches when they fill the requested size", async () => {
+	const originalFetch = globalThis.fetch;
+	const queries = [];
+	globalThis.fetch = async (url) => {
+		queries.push(new URL(url).searchParams.get("q"));
+		return jsonResponse({
+			results: Array.from({ length: 12 }, (_, i) => employerMentor(i, "Google")),
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "mentors at google" },
+		);
+		assert.deepEqual(queries, ["google"]);
+		assert.equal(result.mentors.length, 9);
+		assert.ok(result.mentors.every((mentor) => mentor.why_match === "Works at Google."));
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors behaves as before when no mentor works at the requested company", async () => {
+	const originalFetch = globalThis.fetch;
+	const queries = [];
+	globalThis.fetch = async (url) => {
+		queries.push(new URL(url).searchParams.get("q"));
+		return jsonResponse({
+			results: Array.from({ length: 9 }, (_, i) => employerMentor(i, "Other Co")),
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "mentors who work at Acme Tiny Startup" },
+		);
+		assert.equal(queries[0], "Acme Tiny Startup");
+		assert.ok(queries.includes("mentors who work at Acme Tiny Startup"));
+		assert.equal(result.mentors.length, 9);
+		assert.ok(result.mentors.every((mentor) => !mentor.why_match.startsWith("Works at")));
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });

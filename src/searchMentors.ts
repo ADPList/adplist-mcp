@@ -158,6 +158,12 @@ const LITERAL_NAME_BLOCKLIST = new Set([
 	"lead",
 	"coach",
 	"career",
+	// employer phrasing belongs to the employer path, not a person's name
+	"at",
+	"from",
+	"work",
+	"works",
+	"working",
 	// Title-cased disciplines that are not names ("Data Science", "Content Strategy").
 	"data",
 	"science",
@@ -512,6 +518,7 @@ function clampUtf8Bytes(value: string, maxBytes: number): string {
 export function mapSearchMentorsResponse(
 	response: SearchServiceResponse,
 	input: SearchMentorsInput,
+	trimToRows = true,
 ): SearchMentorsOutput {
 	input = withInferredFilters(input);
 	const domainRule = domainFitRuleFor(input);
@@ -580,7 +587,7 @@ export function mapSearchMentorsResponse(
 	// Drop a partial trailing row so the 3-up grid never renders with gaps;
 	// below one full row there is nothing to trim against, so keep what exists.
 	const fullRowCount =
-		mentors.length > ROW_SIZE
+		trimToRows && mentors.length > ROW_SIZE
 			? Math.floor(mentors.length / ROW_SIZE) * ROW_SIZE
 			: mentors.length;
 	return {
@@ -984,9 +991,36 @@ export async function searchMentors(
 	if (!baseUrl) throw new Error("SEARCH_SERVICE_URL is not configured");
 	validateDisciplineFilter(input);
 
-	const literalNameResult = await searchMentorByLiteralName(env, props, input);
+	// Employer first: "mentors at Google DeepMind" would otherwise spend a
+	// profile lookup and a name search on "Google DeepMind" as a name.
+	const targetResultCount = resultMaxResults(input);
+	const employerHits = await searchMentorsByEmployer(baseUrl, props, input);
+	if (employerHits && employerHits.mentors.length >= targetResultCount) return employerHits;
+
+	const literalNameResult = employerHits ? null : await searchMentorByLiteralName(env, props, input);
 	if (literalNameResult) return literalNameResult;
 
+	const intentResult = await searchMentorsByIntent(env, props, input);
+	if (!employerHits) return intentResult;
+	const merged = mergeSearchMentorOutputs(input, [employerHits, intentResult]);
+	if (merged.mentors.length >= targetResultCount) return merged;
+	// A company with three mentors still owes a full set: fill from the filtered
+	// browse (personalized for signed-in users) rather than return a short list.
+	const browse = await fetchAndMapSearchMentors(
+		baseUrl,
+		props,
+		{ ...withInferredFilters(input), intent: "" },
+		input,
+	).catch(() => null);
+	return browse ? mergeSearchMentorOutputs(input, [employerHits, intentResult, browse]) : merged;
+}
+
+async function searchMentorsByIntent(
+	env: Env,
+	props: McpUserProps | undefined,
+	input: SearchMentorsInput,
+): Promise<SearchMentorsOutput> {
+	const baseUrl = env.SEARCH_SERVICE_URL as string;
 	const profileText = await getProfileTextForSearch(env, props).catch(() => "");
 	const searchInput = {
 		...input,
@@ -1092,6 +1126,78 @@ export async function searchMentors(
 		bestResult,
 		{ ...bareRelaxedResult, relaxed_filters: ["profile_context", "discipline"] },
 	]);
+}
+
+// "mentors who work at Google": Algolia scores by matched words, so filler and
+// the stored-profile prefix outweigh the one word that matters. Search the bare
+// company (no prefix, same filters) and keep hits whose employer carries every
+// company token; callers top up from the intent path. Zero hits → null, so the
+// request behaves exactly as before.
+// Explicit employment wording always counts; a bare "at"/"from" only counts
+// right after a people noun ("mentors at Google", never "good at strategy").
+// The intent describes the member too ("Senior designer at Shopify … looking
+// for mentors who work at Google"). A mentor-employer phrase is anchored by a
+// plural people noun or a relative pronoun; the member's own employer follows
+// a singular title and never matches. The capture stops before clause words
+// so "mentors from Canada who work at Google" leaves Google for the next match.
+const CLAUSE_WORD = String.raw`(?!(?:who|that|which|with|in|for|or|to|on|about|as|looking|seeking|wants?|needs?)\b)`;
+const EMPLOYER_INTENT_PATTERN = new RegExp(
+	String.raw`\b(?:who|that|which|mentors|people|someone|anyone|folks|designers|engineers|developers|managers|leaders|founders|researchers|recruiters|experts|professionals|pms)\s+(?:[a-z']+\s+){0,2}?(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|at|from)\s+(?:the\s+)?(${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})`,
+	"gi",
+);
+
+export function employerCandidate(intent: string): string {
+	const match = EMPLOYER_INTENT_PATTERN.exec(currentRequestIntent(intent));
+	EMPLOYER_INTENT_PATTERN.lastIndex = 0;
+	return match ? match[1].replace(/[.,]+$/, "") : "";
+}
+
+// Exact employer, not "contains": a place is nobody's employer, so "mentors
+// from New York" never promotes New York Times staff, and "ex-Databricks" is
+// not Databricks. "and" and legal suffixes are noise ("Johnson & Johnson",
+// "Google LLC"). Top-ups cover the near misses.
+const EMPLOYER_NOISE_TOKENS = new Set(["and", "inc", "llc", "ltd", "limited", "co", "corp", "corporation", "plc", "gmbh"]);
+function employerTokens(value: string): string {
+	return slugifyLiteralName(value)
+		.split("-")
+		.filter((word) => word && !EMPLOYER_NOISE_TOKENS.has(word))
+		.join(" ");
+}
+
+async function searchMentorsByEmployer(
+	baseUrl: string,
+	props: McpUserProps | undefined,
+	input: SearchMentorsInput,
+): Promise<SearchMentorsOutput | null> {
+	const company = employerCandidate(input.intent);
+	if (!company) return null;
+	// Query the bare company with the request's page size, keep only rows whose
+	// employer carries every company token, then map with the original input so
+	// role/domain filters and ranking apply to those rows ("product managers who
+	// work at Google" must not return nine designers). Row trimming happens once
+	// in mergeSearchMentorOutputs.
+	// Filters inferred from the request ("senior mentors at Google") come along.
+	const filters = withInferredFilters(input).filters;
+	const url = new URL(buildSearchMentorsUrl(baseUrl, { intent: company, filters }));
+	url.searchParams.set("pageSize", String(searchPageSize(input)));
+	let response: SearchServiceResponse;
+	try {
+		response = await fetchSearchMentors(url.toString(), props);
+	} catch {
+		return null;
+	}
+	const wanted = employerTokens(company);
+	const results = (response.results ?? []).filter(
+		(mentor) => employerTokens(mentor.employer ?? mentor.company ?? "") === wanted,
+	);
+	if (results.length === 0) return null;
+	const result = mapSearchMentorsResponse({ ...response, results }, input, false);
+	const mentors = result.mentors.map((mentor) => ({
+		...mentor,
+		why_match: `Works at ${mentor.company}.`,
+	}));
+	if (mentors.length === 0) return null;
+	return { ...result, mentors };
 }
 
 async function searchMentorByLiteralName(
@@ -1536,7 +1642,15 @@ async function fetchAndMapSearchMentors(
 	searchInput: SearchMentorsInput,
 	resultInput: SearchMentorsInput,
 ): Promise<SearchMentorsOutput> {
-	const response = await fetch(buildSearchMentorsUrl(baseUrl, searchInput), {
+	const response = await fetchSearchMentors(buildSearchMentorsUrl(baseUrl, searchInput), props);
+	return mapSearchMentorsResponse(response, resultInput);
+}
+
+async function fetchSearchMentors(
+	url: string,
+	props: McpUserProps | undefined,
+): Promise<SearchServiceResponse> {
+	const response = await fetch(url, {
 		headers: {
 			Accept: "application/json",
 			...(props?.cognitoAccessToken
@@ -1549,7 +1663,7 @@ async function fetchAndMapSearchMentors(
 		throw new Error(`search-service returned HTTP ${response.status}`);
 	}
 
-	return mapSearchMentorsResponse((await response.json()) as SearchServiceResponse, resultInput);
+	return (await response.json()) as SearchServiceResponse;
 }
 
 function buildWhyMatch(mentor: SearchServiceMentor, input: SearchMentorsInput): string {
