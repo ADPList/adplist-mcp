@@ -1089,93 +1089,33 @@ async function searchMentorsByIntent(
 // request behaves exactly as before.
 // Explicit employment wording always counts; a bare "at"/"from" only counts
 // right after a people noun ("mentors at Google", never "good at strategy").
-// A company is one to four tokens; the capture stops before clause words such
-// as "who" or "for", so "mentors from Canada who work at Google" leaves the
-// Google clause for the next match. "and"/"of" stay inside names (Johnson and
-// Johnson, Bank of America).
-const CLAUSE_WORD = String.raw`(?!(?:who|that|which|with|in|for|or|to|on|about|as)\b)`;
+// The intent describes the member too ("Senior designer at Shopify … looking
+// for mentors who work at Google"). A mentor-employer phrase is anchored by a
+// plural people noun or a relative pronoun; the member's own employer follows
+// a singular title and never matches. The capture stops before clause words
+// so "mentors from Canada who work at Google" leaves Google for the next match.
+const CLAUSE_WORD = String.raw`(?!(?:who|that|which|with|in|for|or|to|on|about|as|looking|seeking|wants?|needs?)\b)`;
 const EMPLOYER_INTENT_PATTERN = new RegExp(
-	String.raw`\b(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|(?:mentors?|people|someone|anyone|folks|designers?|engineers?|developers?|managers?|leaders?|founders?|researchers?|recruiters?|experts?|pms?)\s+(?:at|from))\s+(?:(?:a|an|the)\s+)?(${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})`,
+	String.raw`\b(?:who|that|which|mentors|people|someone|anyone|folks|designers|engineers|developers|managers|leaders|founders|researchers|recruiters|experts|professionals|pms)\s+(?:[a-z']+\s+){0,2}?(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|at|from)\s+(?:the\s+)?(${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})`,
 	"gi",
 );
-// "I'm a PM at Google", "As a designer at Meta", "I've been working at Google"
-// describe the member: a first-person clause with no request verb in it.
-// "I want mentors who work at Google" asks for mentors.
-const FIRST_PERSON = /\b(?:i|i'm|i am|i've|i'd|we|my|as an?)\b/i;
-// A first-person clause with a request verb asks for mentors; without one it
-// describes the member. An unlisted verb falls back to the intent path, i.e.
-// today's behaviour.
-const REQUEST_VERB =
-	/\b(?:want|need|look|find|show|recommend|suggest|search|book|connect|match|interest|help|like|love|seek|hope|wish|prefer|could|can|would|please|see|explore|meet|talk|speak|chat|introduc)\w*/i;
-
-function isSelfDescription(request: string, matchIndex: number): boolean {
-	// Judge on the nearest preceding clause that has a subject: "I need a design
-	// mentor because I work at Google" is judged on "I work"; "I'm a PM and
-	// currently work at Google" falls back to "I'm a PM".
-	const clauses = request
-		.slice(0, matchIndex)
-		.split(/[.;!?,\n]|\b(?:because|since|but|and|so|while)\b/i)
-		.reverse();
-	for (const clause of clauses) {
-		if (REQUEST_VERB.test(clause)) return false;
-		if (FIRST_PERSON.test(clause)) return true;
-	}
-	return false;
-}
 
 export function employerCandidate(intent: string): string {
-	const request = currentRequestIntent(intent);
-	for (const match of request.matchAll(EMPLOYER_INTENT_PATTERN)) {
-		if (isSelfDescription(request, match.index)) continue;
-		const company = match[1].replace(/[.,]+$/, "");
-		if (!isRegionName(company)) return company;
-	}
-	return "";
-}
-
-// "mentors from Canada" is a location, not an employer. Region names come from
-// Intl so there is no hand-typed country list to keep current.
-let regionNames: Set<string> | undefined;
-function isRegionName(value: string): boolean {
-	if (!regionNames) {
-		const names = new Intl.DisplayNames(["en"], { type: "region", fallback: "none" });
-		regionNames = new Set(["us", "usa", "uk", "eu", "america", "europe", "asia", "africa"]);
-		for (let a = 65; a <= 90; a += 1) {
-			for (let b = 65; b <= 90; b += 1) {
-				const name = names.of(String.fromCharCode(a, b));
-				if (name) regionNames.add(name.toLowerCase());
-			}
-		}
-	}
-	return regionNames.has(value.toLowerCase());
-}
-
-// "and" and legal suffixes are noise: "Johnson and Johnson" is "Johnson & Johnson",
-// "Google" is "Google LLC".
-const EMPLOYER_NOISE_TOKENS = new Set(["and", "inc", "llc", "ltd", "limited", "co", "corp", "corporation", "plc", "gmbh"]);
-function employerTokens(value: string): string[] {
-	return slugifyLiteralName(value)
-		.split("-")
-		.filter((word) => word && !EMPLOYER_NOISE_TOKENS.has(word));
+	const match = EMPLOYER_INTENT_PATTERN.exec(currentRequestIntent(intent));
+	EMPLOYER_INTENT_PATTERN.lastIndex = 0;
+	return match ? match[1].replace(/[.,]+$/, "") : "";
 }
 
 // Exact employer, not "contains": a place is nobody's employer, so "mentors
 // from New York" never promotes New York Times staff, and "ex-Databricks" is
-// not Databricks. Top-ups cover the near misses.
-function employerIs(mentor: SearchServiceMentor, tokens: string[]): boolean {
-	const employer = employerTokens(mentor.employer ?? mentor.company ?? "");
-	return tokens.length > 0 && employer.length === tokens.length && employer.every((word, i) => word === tokens[i]);
-}
-
-// The captured phrase may carry trailing request words ("Google please"), so
-// the longest prefix that names an employer in the results wins.
-function employerMatches(results: SearchServiceMentor[], company: string): SearchServiceMentor[] {
-	const tokens = employerTokens(company);
-	for (let length = tokens.length; length >= 1; length -= 1) {
-		const matches = results.filter((mentor) => employerIs(mentor, tokens.slice(0, length)));
-		if (matches.length > 0) return matches;
-	}
-	return [];
+// not Databricks. "and" and legal suffixes are noise ("Johnson & Johnson",
+// "Google LLC"). Top-ups cover the near misses.
+const EMPLOYER_NOISE_TOKENS = new Set(["and", "inc", "llc", "ltd", "limited", "co", "corp", "corporation", "plc", "gmbh"]);
+function employerTokens(value: string): string {
+	return slugifyLiteralName(value)
+		.split("-")
+		.filter((word) => word && !EMPLOYER_NOISE_TOKENS.has(word))
+		.join(" ");
 }
 
 async function searchMentorsByEmployer(
@@ -1200,7 +1140,10 @@ async function searchMentorsByEmployer(
 	} catch {
 		return null;
 	}
-	const results = employerMatches(response.results ?? [], company);
+	const wanted = employerTokens(company);
+	const results = (response.results ?? []).filter(
+		(mentor) => employerTokens(mentor.employer ?? mentor.company ?? "") === wanted,
+	);
 	if (results.length === 0) return null;
 	const result = mapSearchMentorsResponse({ ...response, results }, input, false);
 	const mentors = result.mentors.map((mentor) => ({
