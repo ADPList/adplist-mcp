@@ -475,6 +475,7 @@ function clampUtf8Bytes(value: string, maxBytes: number): string {
 export function mapSearchMentorsResponse(
 	response: SearchServiceResponse,
 	input: SearchMentorsInput,
+	trimToRows = true,
 ): SearchMentorsOutput {
 	input = withInferredFilters(input);
 	const domainRule = domainFitRuleFor(input);
@@ -543,7 +544,7 @@ export function mapSearchMentorsResponse(
 	// Drop a partial trailing row so the 3-up grid never renders with gaps;
 	// below one full row there is nothing to trim against, so keep what exists.
 	const fullRowCount =
-		mentors.length > ROW_SIZE
+		trimToRows && mentors.length > ROW_SIZE
 			? Math.floor(mentors.length / ROW_SIZE) * ROW_SIZE
 			: mentors.length;
 	return {
@@ -1078,25 +1079,29 @@ async function searchMentorsByIntent(
 // Explicit employment wording always counts; a bare "at"/"from" only counts
 // right after a people noun ("mentors at Google", never "good at strategy").
 const EMPLOYER_INTENT_PATTERN =
-	/\b(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|(?:mentors?|people|someone|anyone|folks|designers?|engineers?|developers?|managers?|leaders?|founders?|researchers?|recruiters?|experts?|pms?)\s+(?:at|from))\s+(?:(?:a|an|the)\s+)?([A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})/i;
+	/\b(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|(?:mentors?|people|someone|anyone|folks|designers?|engineers?|developers?|managers?|leaders?|founders?|researchers?|recruiters?|experts?|pms?)\s+(?:at|from))\s+(?:(?:a|an|the)\s+)?([A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})/gi;
 const EMPLOYER_INTENT_TERMINATORS = new Set([
 	"who", "that", "which", "with", "in", "for", "and", "or", "to", "on", "about", "as",
 ]);
-// "I'm a PM at Google who wants…" describes the member, not the mentor they want.
-const FIRST_PERSON_CLAUSE = /\b(?:i|i'm|i am|i've|i work|we|our)\b[^.,;!?\n]*$/i;
+// "I'm a PM at Google", "As a designer at Meta", "I work at Google" describe the
+// member, not the mentor they want. Only the words leading into the match count,
+// so "I want mentors who work at Google" still resolves Google.
+const SELF_DESCRIPTION_LEAD =
+	/(?:\b(?:i'?m|i am|as|currently)\s+(?:an?\s+)?(?:[a-z-]+\s+){0,2}|\b(?:i|we)\s+)$/i;
 
 export function employerCandidate(intent: string): string {
 	const request = currentRequestIntent(intent);
-	const match = request.match(EMPLOYER_INTENT_PATTERN);
-	if (!match || match.index === undefined) return "";
-	if (FIRST_PERSON_CLAUSE.test(request.slice(0, match.index))) return "";
-	const words: string[] = [];
-	for (const word of match[1].split(/\s+/)) {
-		if (EMPLOYER_INTENT_TERMINATORS.has(word.toLowerCase())) break;
-		words.push(word.replace(/[.,]+$/, ""));
+	for (const match of request.matchAll(EMPLOYER_INTENT_PATTERN)) {
+		if (SELF_DESCRIPTION_LEAD.test(request.slice(0, match.index))) continue;
+		const words: string[] = [];
+		for (const word of match[1].split(/\s+/)) {
+			if (EMPLOYER_INTENT_TERMINATORS.has(word.toLowerCase())) break;
+			words.push(word.replace(/[.,]+$/, ""));
+		}
+		const company = words.filter(Boolean).join(" ");
+		return isRegionName(company) ? "" : company;
 	}
-	const company = words.filter(Boolean).join(" ");
-	return isRegionName(company) ? "" : company;
+	return "";
 }
 
 // "mentors from Canada" is a location, not an employer. Region names come from
@@ -1136,7 +1141,9 @@ async function searchMentorsByEmployer(
 	url.searchParams.set("pageSize", String(searchPageSize(input)));
 	let result: SearchMentorsOutput;
 	try {
-		result = mapSearchMentorsResponse(await fetchSearchMentors(url.toString(), props), input);
+		// Row trimming happens once in mergeSearchMentorOutputs; trimming here
+		// would drop the 4th and 5th of five Googlers before the top-up.
+		result = mapSearchMentorsResponse(await fetchSearchMentors(url.toString(), props), input, false);
 	} catch {
 		return null;
 	}

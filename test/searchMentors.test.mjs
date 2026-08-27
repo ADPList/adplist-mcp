@@ -2245,6 +2245,40 @@ test("employerCandidate detects at / from / work at phrasing without a capitalis
 	assert.equal(employerCandidate("help transitioning from design to product management"), "");
 	assert.equal(employerCandidate("I'm a PM at Google who wants help transitioning to design"), "");
 	assert.equal(employerCandidate("I'm a designer. Find mentors who work at Google"), "Google");
+	assert.equal(employerCandidate("As a PM at Google, I want design mentorship"), "");
+	assert.equal(employerCandidate("I work at Google and want a design mentor"), "");
+	assert.equal(employerCandidate("I want mentors who work at Google"), "Google");
+	assert.equal(employerCandidate("Can we find mentors who work at Google"), "Google");
+	assert.equal(employerCandidate("As a designer at Meta, I want mentors at Google"), "Google");
+});
+
+test("search_mentors keeps a partial row of employer matches ahead of the top-up", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (url) => {
+		if (new URL(url).searchParams.get("q") === "Google") {
+			return jsonResponse({
+				results: Array.from({ length: 5 }, (_, i) => employerMentor(i, "Google")),
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({
+			results: Array.from({ length: 9 }, (_, i) => employerMentor(i + 10, "Other")),
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "mentors who work at Google" },
+		);
+		assert.equal(result.mentors.length, 9);
+		assert.equal(result.mentors.filter((mentor) => mentor.company === "Google").length, 5);
+		assert.ok(result.mentors.slice(0, 5).every((mentor) => mentor.company === "Google"));
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });
 
 test("search_mentors keeps the role intent when filtering employer hits", async () => {
