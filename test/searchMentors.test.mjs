@@ -2238,6 +2238,54 @@ test("employerCandidate detects at / from / work at phrasing without a capitalis
 		"Meta",
 	);
 	assert.equal(employerCandidate("senior product designer for portfolio review"), "");
+	// Reviewer findings: geography, skills, transitions and self-descriptions are not employers.
+	assert.equal(employerCandidate("mentors from Canada"), "");
+	assert.equal(employerCandidate("mentors from the US"), "");
+	assert.equal(employerCandidate("someone good at product strategy"), "");
+	assert.equal(employerCandidate("help transitioning from design to product management"), "");
+	assert.equal(employerCandidate("I'm a PM at Google who wants help transitioning to design"), "");
+	assert.equal(employerCandidate("I'm a designer. Find mentors who work at Google"), "Google");
+});
+
+test("search_mentors keeps the role intent when filtering employer hits", async () => {
+	const originalFetch = globalThis.fetch;
+	const requests = [];
+	globalThis.fetch = async (url) => {
+		const parsed = new URL(url);
+		requests.push({ q: parsed.searchParams.get("q"), pageSize: parsed.searchParams.get("pageSize") });
+		if (parsed.searchParams.get("q") === "Google") {
+			return jsonResponse({
+				results: [
+					{ ...employerMentor(1, "Google"), title: "Senior Product Manager" },
+					{ ...employerMentor(2, "Google"), title: "Staff Software Engineer" },
+					{ ...employerMentor(3, "Google"), title: "Group Product Manager" },
+				],
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({
+			results: Array.from({ length: 9 }, (_, i) => ({ ...employerMentor(i + 10, "Other"), title: "Product Manager" })),
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "product managers who work at Google" },
+		);
+		assert.equal(requests[0].q, "Google");
+		assert.equal(requests[0].pageSize, "72");
+		assert.deepEqual(
+			result.mentors.slice(0, 2).map((mentor) => mentor.slug),
+			["mentor-1", "mentor-3"],
+		);
+		assert.ok(!result.mentors.some((mentor) => mentor.slug === "mentor-2"));
+		assert.equal(result.mentors.length, 9);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });
 
 test("search_mentors puts employer matches first and tops up to nine from the intent path", async () => {

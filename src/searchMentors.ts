@@ -1075,21 +1075,45 @@ async function searchMentorsByIntent(
 // company (no prefix, same filters) and keep hits whose employer carries every
 // company token; callers top up from the intent path. Zero hits → null, so the
 // request behaves exactly as before.
+// Explicit employment wording always counts; a bare "at"/"from" only counts
+// right after a people noun ("mentors at Google", never "good at strategy").
 const EMPLOYER_INTENT_PATTERN =
-	/\b(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|at|from)\s+(?:(?:a|an|the)\s+)?([A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})/i;
+	/\b(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|(?:mentors?|people|someone|anyone|folks|designers?|engineers?|developers?|managers?|leaders?|founders?|researchers?|recruiters?|experts?|pms?)\s+(?:at|from))\s+(?:(?:a|an|the)\s+)?([A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})/i;
 const EMPLOYER_INTENT_TERMINATORS = new Set([
 	"who", "that", "which", "with", "in", "for", "and", "or", "to", "on", "about", "as",
 ]);
+// "I'm a PM at Google who wants…" describes the member, not the mentor they want.
+const FIRST_PERSON_CLAUSE = /\b(?:i|i'm|i am|i've|i work|we|our)\b[^.,;!?\n]*$/i;
 
 export function employerCandidate(intent: string): string {
-	const match = currentRequestIntent(intent).match(EMPLOYER_INTENT_PATTERN);
-	if (!match) return "";
+	const request = currentRequestIntent(intent);
+	const match = request.match(EMPLOYER_INTENT_PATTERN);
+	if (!match || match.index === undefined) return "";
+	if (FIRST_PERSON_CLAUSE.test(request.slice(0, match.index))) return "";
 	const words: string[] = [];
 	for (const word of match[1].split(/\s+/)) {
 		if (EMPLOYER_INTENT_TERMINATORS.has(word.toLowerCase())) break;
 		words.push(word.replace(/[.,]+$/, ""));
 	}
-	return words.filter(Boolean).join(" ");
+	const company = words.filter(Boolean).join(" ");
+	return isRegionName(company) ? "" : company;
+}
+
+// "mentors from Canada" is a location, not an employer. Region names come from
+// Intl so there is no hand-typed country list to keep current.
+let regionNames: Set<string> | undefined;
+function isRegionName(value: string): boolean {
+	if (!regionNames) {
+		const names = new Intl.DisplayNames(["en"], { type: "region", fallback: "none" });
+		regionNames = new Set(["us", "usa", "uk", "eu", "america", "europe", "asia", "africa"]);
+		for (let a = 65; a <= 90; a += 1) {
+			for (let b = 65; b <= 90; b += 1) {
+				const name = names.of(String.fromCharCode(a, b));
+				if (name) regionNames.add(name.toLowerCase());
+			}
+		}
+	}
+	return regionNames.has(value.toLowerCase());
 }
 
 function employerContainsEveryToken(employer: string, company: string): boolean {
@@ -1105,10 +1129,14 @@ async function searchMentorsByEmployer(
 ): Promise<SearchMentorsOutput | null> {
 	const company = employerCandidate(input.intent);
 	if (!company) return null;
-	const companyInput = { intent: company, filters: input.filters };
+	// Query the bare company, but keep the request's page size and map with the
+	// original input so role/domain filters and ranking still apply
+	// ("product managers who work at Google" must not return nine designers).
+	const url = new URL(buildSearchMentorsUrl(baseUrl, { intent: company, filters: input.filters }));
+	url.searchParams.set("pageSize", String(searchPageSize(input)));
 	let result: SearchMentorsOutput;
 	try {
-		result = await fetchAndMapSearchMentors(baseUrl, props, companyInput, companyInput);
+		result = mapSearchMentorsResponse(await fetchSearchMentors(url.toString(), props), input);
 	} catch {
 		return null;
 	}
@@ -1534,7 +1562,15 @@ async function fetchAndMapSearchMentors(
 	searchInput: SearchMentorsInput,
 	resultInput: SearchMentorsInput,
 ): Promise<SearchMentorsOutput> {
-	const response = await fetch(buildSearchMentorsUrl(baseUrl, searchInput), {
+	const response = await fetchSearchMentors(buildSearchMentorsUrl(baseUrl, searchInput), props);
+	return mapSearchMentorsResponse(response, resultInput);
+}
+
+async function fetchSearchMentors(
+	url: string,
+	props: McpUserProps | undefined,
+): Promise<SearchServiceResponse> {
+	const response = await fetch(url, {
 		headers: {
 			Accept: "application/json",
 			...(props?.cognitoAccessToken
@@ -1547,7 +1583,7 @@ async function fetchAndMapSearchMentors(
 		throw new Error(`search-service returned HTTP ${response.status}`);
 	}
 
-	return mapSearchMentorsResponse((await response.json()) as SearchServiceResponse, resultInput);
+	return (await response.json()) as SearchServiceResponse;
 }
 
 function buildWhyMatch(mentor: SearchServiceMentor, input: SearchMentorsInput): string {
