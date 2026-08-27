@@ -963,7 +963,7 @@ export async function searchMentors(
 	const browse = await fetchAndMapSearchMentors(
 		baseUrl,
 		props,
-		{ ...input, intent: "" },
+		{ ...withInferredFilters(input), intent: "" },
 		input,
 	).catch(() => null);
 	return browse ? mergeSearchMentorOutputs(input, [employerHits, intentResult, browse]) : merged;
@@ -1106,7 +1106,13 @@ const REQUEST_VERB =
 	/\b(?:want|need|looking|find|show|recommend|suggest|search|book|connect|match|interested|help)\w*/i;
 
 function isSelfDescription(request: string, matchIndex: number): boolean {
-	const clause = request.slice(0, matchIndex).split(/[.;!?\n]/).pop() ?? "";
+	// Only the immediate clause counts: "I need a design mentor because I work
+	// at Google" is judged on "I work", not on "need".
+	const clause =
+		request
+			.slice(0, matchIndex)
+			.split(/[.;!?,\n]|\b(?:because|since|but|and|so|while)\b/i)
+			.pop() ?? "";
 	return FIRST_PERSON.test(clause) && !REQUEST_VERB.test(clause);
 }
 
@@ -1137,10 +1143,29 @@ function isRegionName(value: string): boolean {
 	return regionNames.has(value.toLowerCase());
 }
 
-function employerContainsEveryToken(employer: string, company: string): boolean {
-	const employerTokens = new Set(slugifyLiteralName(employer).split("-").filter(Boolean));
-	const words = slugifyLiteralName(company).split("-").filter(Boolean);
-	return words.length > 0 && words.every((word) => employerTokens.has(word));
+function companyTokens(company: string): string[] {
+	// "and" is noise: "Johnson and Johnson" must match "Johnson & Johnson".
+	return slugifyLiteralName(company)
+		.split("-")
+		.filter((word) => word && word !== "and");
+}
+
+function employerHasTokens(mentor: SearchServiceMentor, tokens: string[]): boolean {
+	const employer = new Set(
+		slugifyLiteralName(mentor.employer ?? mentor.company ?? "").split("-").filter(Boolean),
+	);
+	return tokens.length > 0 && tokens.every((token) => employer.has(token));
+}
+
+// The captured phrase may carry trailing request words ("Google please"), so
+// the longest prefix that names an employer in the results wins.
+function employerMatches(results: SearchServiceMentor[], company: string): SearchServiceMentor[] {
+	const tokens = companyTokens(company);
+	for (let length = tokens.length; length >= 1; length -= 1) {
+		const matches = results.filter((mentor) => employerHasTokens(mentor, tokens.slice(0, length)));
+		if (matches.length > 0) return matches;
+	}
+	return [];
 }
 
 async function searchMentorsByEmployer(
@@ -1165,9 +1190,7 @@ async function searchMentorsByEmployer(
 	} catch {
 		return null;
 	}
-	const results = (response.results ?? []).filter((mentor) =>
-		employerContainsEveryToken(mentor.employer ?? mentor.company ?? "", company),
-	);
+	const results = employerMatches(response.results ?? [], company);
 	if (results.length === 0) return null;
 	const result = mapSearchMentorsResponse({ ...response, results }, input, false);
 	const mentors = result.mentors.map((mentor) => ({

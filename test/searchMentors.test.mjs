@@ -2261,6 +2261,8 @@ test("employerCandidate detects at / from / work at phrasing without a capitalis
 	);
 	assert.equal(employerCandidate("mentors who work at Johnson and Johnson"), "Johnson and Johnson");
 	assert.equal(employerCandidate("mentors who work at Bank of America"), "Bank of America");
+	assert.equal(employerCandidate("I need a design mentor because I work at Google"), "");
+	assert.equal(employerCandidate("I'm a designer and I need mentors who work at Google"), "Google");
 });
 
 test("search_mentors carries inferred filters into the employer query", async () => {
@@ -2282,6 +2284,30 @@ test("search_mentors carries inferred filters into the employer query", async ()
 		for (const [key, value] of intentUrl.searchParams) {
 			if (key === "q" || key === "pageSize") continue;
 			assert.equal(urls[0].searchParams.get(key), value, `${key} differs`);
+		}
+		// The browse top-up (employer hits exist but the list is short) keeps them too.
+		const [, , browseUrl] = await (async () => {
+			const seen = [];
+			globalThis.fetch = async (url) => {
+				const parsed = new URL(url);
+				seen.push(parsed);
+				const q = parsed.searchParams.get("q");
+				return jsonResponse({
+					results: q === "Google" ? [employerMentor(1, "Google")] : [],
+					indexUsed: "explore",
+				});
+			};
+			await searchMentors(
+				{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+				undefined,
+				{ intent: "senior mentors who work at Google" },
+			);
+			return seen;
+		})();
+		assert.equal(browseUrl.searchParams.get("q"), "");
+		for (const [key, value] of intentUrl.searchParams) {
+			if (key === "q" || key === "pageSize") continue;
+			assert.equal(browseUrl.searchParams.get(key), value, `browse ${key} differs`);
 		}
 	} finally {
 		globalThis.fetch = originalFetch;
@@ -2471,6 +2497,41 @@ test("search_mentors puts employer matches first and tops up to nine from the in
 		assert.equal(result.mentors[0].why_match, "Works at Google.");
 		assert.ok(!result.mentors.some((mentor) => mentor.slug === "mentor-4"));
 		assert.equal(new Set(result.mentors.map((mentor) => mentor.slug)).size, 9);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors tolerates trailing request words after the company", async () => {
+	const originalFetch = globalThis.fetch;
+	const queries = [];
+	globalThis.fetch = async (url) => {
+		queries.push(new URL(url).searchParams.get("q"));
+		return jsonResponse({
+			results: [
+				...Array.from({ length: 9 }, (_, i) => employerMentor(i, "Google")),
+				employerMentor(9, "Johnson & Johnson"),
+			],
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "mentors at Google please" },
+		);
+		assert.equal(queries[0], "Google please");
+		assert.ok(result.mentors.every((mentor) => mentor.why_match === "Works at Google."));
+		assert.equal(result.mentors.length, 9);
+
+		const jnj = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "mentors who work at Johnson and Johnson" },
+		);
+		assert.equal(jnj.mentors[0].company, "Johnson & Johnson");
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
