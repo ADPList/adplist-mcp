@@ -2305,7 +2305,7 @@ test("search_mentors returns only employer matches when they fill the requested 
 		);
 		assert.deepEqual(queries, ["google"]);
 		assert.equal(result.mentors.length, 9);
-		assert.ok(result.mentors.every((mentor) => mentor.company === "Google"));
+		assert.ok(result.mentors.every((mentor) => mentor.why_match === "Works at Google."));
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

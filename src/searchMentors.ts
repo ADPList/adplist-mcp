@@ -1114,7 +1114,7 @@ async function searchMentorsByEmployer(
 	}
 	const mentors = result.mentors
 		.filter((mentor) => employerContainsEveryToken(mentor.company, company))
-		.map((mentor) => ({ ...mentor, why_match: `Works at ${company}.` }));
+		.map((mentor) => ({ ...mentor, why_match: `Works at ${mentor.company}.` }));
 	if (mentors.length === 0) return null;
 	return { ...result, mentors };
 }
