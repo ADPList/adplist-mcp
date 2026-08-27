@@ -132,6 +132,12 @@ const LITERAL_NAME_BLOCKLIST = new Set([
 	"lead",
 	"coach",
 	"career",
+	// employer phrasing belongs to the employer path, not a person's name
+	"at",
+	"from",
+	"work",
+	"works",
+	"working",
 ]);
 const GROWTH_MARKETING_EXPANSION =
 	"growth marketing acquisition lifecycle marketing retention activation experimentation conversion optimization demand generation go-to-market marketing analytics";
@@ -944,6 +950,19 @@ export async function searchMentors(
 	const literalNameResult = await searchMentorByLiteralName(env, props, input);
 	if (literalNameResult) return literalNameResult;
 
+	const employerHits = await searchMentorsByEmployer(baseUrl, props, input);
+	if (employerHits && employerHits.mentors.length >= resultMaxResults(input)) return employerHits;
+	const intentResult = await searchMentorsByIntent(env, props, input);
+	if (!employerHits) return intentResult;
+	return mergeSearchMentorOutputs(input, [employerHits, intentResult]);
+}
+
+async function searchMentorsByIntent(
+	env: Env,
+	props: McpUserProps | undefined,
+	input: SearchMentorsInput,
+): Promise<SearchMentorsOutput> {
+	const baseUrl = env.SEARCH_SERVICE_URL as string;
 	const profileText = await getProfileTextForSearch(env, props).catch(() => "");
 	const searchInput = {
 		...input,
@@ -1049,6 +1068,55 @@ export async function searchMentors(
 		bestResult,
 		{ ...bareRelaxedResult, relaxed_filters: ["profile_context", "discipline"] },
 	]);
+}
+
+// "mentors who work at Google": Algolia scores by matched words, so filler and
+// the stored-profile prefix outweigh the one word that matters. Search the bare
+// company (no prefix, same filters) and keep hits whose employer carries every
+// company token; callers top up from the intent path. Zero hits → null, so the
+// request behaves exactly as before.
+const EMPLOYER_INTENT_PATTERN =
+	/\b(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|at|from)\s+(?:(?:a|an|the)\s+)?([A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})/i;
+const EMPLOYER_INTENT_TERMINATORS = new Set([
+	"who", "that", "which", "with", "in", "for", "and", "or", "to", "on", "about", "as",
+]);
+
+export function employerCandidate(intent: string): string {
+	const match = currentRequestIntent(intent).match(EMPLOYER_INTENT_PATTERN);
+	if (!match) return "";
+	const words: string[] = [];
+	for (const word of match[1].split(/\s+/)) {
+		if (EMPLOYER_INTENT_TERMINATORS.has(word.toLowerCase())) break;
+		words.push(word.replace(/[.,]+$/, ""));
+	}
+	return words.filter(Boolean).join(" ");
+}
+
+function employerContainsEveryToken(employer: string, company: string): boolean {
+	const employerTokens = new Set(slugifyLiteralName(employer).split("-").filter(Boolean));
+	const words = slugifyLiteralName(company).split("-").filter(Boolean);
+	return words.length > 0 && words.every((word) => employerTokens.has(word));
+}
+
+async function searchMentorsByEmployer(
+	baseUrl: string,
+	props: McpUserProps | undefined,
+	input: SearchMentorsInput,
+): Promise<SearchMentorsOutput | null> {
+	const company = employerCandidate(input.intent);
+	if (!company) return null;
+	const companyInput = { intent: company, filters: input.filters };
+	let result: SearchMentorsOutput;
+	try {
+		result = await fetchAndMapSearchMentors(baseUrl, props, companyInput, companyInput);
+	} catch {
+		return null;
+	}
+	const mentors = result.mentors
+		.filter((mentor) => employerContainsEveryToken(mentor.company, company))
+		.map((mentor) => ({ ...mentor, why_match: `Works at ${company}.` }));
+	if (mentors.length === 0) return null;
+	return { ...result, mentors };
 }
 
 async function searchMentorByLiteralName(
