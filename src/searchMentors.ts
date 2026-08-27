@@ -1089,28 +1089,23 @@ async function searchMentorsByIntent(
 // request behaves exactly as before.
 // Explicit employment wording always counts; a bare "at"/"from" only counts
 // right after a people noun ("mentors at Google", never "good at strategy").
+// A company is one to four tokens; the capture stops before clause words such
+// as "who", so "mentors from Canada who work at Google" leaves the Google clause
+// for the next match.
 const EMPLOYER_INTENT_PATTERN =
-	/\b(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|(?:mentors?|people|someone|anyone|folks|designers?|engineers?|developers?|managers?|leaders?|founders?|researchers?|recruiters?|experts?|pms?)\s+(?:at|from))\s+(?:(?:a|an|the)\s+)?([A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})/gi;
-const EMPLOYER_INTENT_TERMINATORS = new Set([
-	"who", "that", "which", "with", "in", "for", "and", "or", "to", "on", "about", "as",
-]);
-// "I'm a PM at Google", "As a designer at Meta", "I work at Google" describe the
-// member, not the mentor they want. Only the words leading into the match count,
-// so "I want mentors who work at Google" still resolves Google.
+	/\b(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|(?:mentors?|people|someone|anyone|folks|designers?|engineers?|developers?|managers?|leaders?|founders?|researchers?|recruiters?|experts?|pms?)\s+(?:at|from))\s+(?:(?:a|an|the)\s+)?((?:(?!(?:who|that|which|with|in|for|and|or|to|on|about|as)\b)[A-Za-z0-9][A-Za-z0-9&.'-]*)(?:\s+(?!(?:who|that|which|with|in|for|and|or|to|on|about|as)\b)[A-Za-z0-9][A-Za-z0-9&.'-]*){0,3})/gi;
+// "I'm a PM at Google", "I was a designer at Meta", "I work at Google" describe
+// the member, not the mentor they want. Only the words leading into the match
+// count, so "I want mentors who work at Google" still resolves Google.
 const SELF_DESCRIPTION_LEAD =
-	/(?:\b(?:i'?m|i am|as|currently)\s+(?:an?\s+)?(?:[a-z-]+\s+){0,2}|\b(?:i|we)\s+)$/i;
+	/(?:\b(?:i'?m|i am|i was|i'?ve been|i have been|i used to be|as|currently|formerly|previously)\s+(?:an?\s+)?(?:[a-z-]+\s+){0,2}|\b(?:i|we)\s+)$/i;
 
 export function employerCandidate(intent: string): string {
 	const request = currentRequestIntent(intent);
 	for (const match of request.matchAll(EMPLOYER_INTENT_PATTERN)) {
 		if (SELF_DESCRIPTION_LEAD.test(request.slice(0, match.index))) continue;
-		const words: string[] = [];
-		for (const word of match[1].split(/\s+/)) {
-			if (EMPLOYER_INTENT_TERMINATORS.has(word.toLowerCase())) break;
-			words.push(word.replace(/[.,]+$/, ""));
-		}
-		const company = words.filter(Boolean).join(" ");
-		return isRegionName(company) ? "" : company;
+		const company = match[1].replace(/[.,]+$/, "");
+		if (!isRegionName(company)) return company;
 	}
 	return "";
 }
@@ -1145,22 +1140,28 @@ async function searchMentorsByEmployer(
 ): Promise<SearchMentorsOutput | null> {
 	const company = employerCandidate(input.intent);
 	if (!company) return null;
-	// Query the bare company, but keep the request's page size and map with the
-	// original input so role/domain filters and ranking still apply
-	// ("product managers who work at Google" must not return nine designers).
+	// Query the bare company with the request's page size, keep only rows whose
+	// employer carries every company token, then map with the original input so
+	// role/domain filters and ranking apply to those rows ("product managers who
+	// work at Google" must not return nine designers). Row trimming happens once
+	// in mergeSearchMentorOutputs.
 	const url = new URL(buildSearchMentorsUrl(baseUrl, { intent: company, filters: input.filters }));
 	url.searchParams.set("pageSize", String(searchPageSize(input)));
-	let result: SearchMentorsOutput;
+	let response: SearchServiceResponse;
 	try {
-		// Row trimming happens once in mergeSearchMentorOutputs; trimming here
-		// would drop the 4th and 5th of five Googlers before the top-up.
-		result = mapSearchMentorsResponse(await fetchSearchMentors(url.toString(), props), input, false);
+		response = await fetchSearchMentors(url.toString(), props);
 	} catch {
 		return null;
 	}
-	const mentors = result.mentors
-		.filter((mentor) => employerContainsEveryToken(mentor.company, company))
-		.map((mentor) => ({ ...mentor, why_match: `Works at ${mentor.company}.` }));
+	const results = (response.results ?? []).filter((mentor) =>
+		employerContainsEveryToken(mentor.employer ?? mentor.company ?? "", company),
+	);
+	if (results.length === 0) return null;
+	const result = mapSearchMentorsResponse({ ...response, results }, input, false);
+	const mentors = result.mentors.map((mentor) => ({
+		...mentor,
+		why_match: `Works at ${mentor.company}.`,
+	}));
 	if (mentors.length === 0) return null;
 	return { ...result, mentors };
 }

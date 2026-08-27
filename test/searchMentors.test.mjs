@@ -2250,6 +2250,40 @@ test("employerCandidate detects at / from / work at phrasing without a capitalis
 	assert.equal(employerCandidate("I want mentors who work at Google"), "Google");
 	assert.equal(employerCandidate("Can we find mentors who work at Google"), "Google");
 	assert.equal(employerCandidate("As a designer at Meta, I want mentors at Google"), "Google");
+	assert.equal(employerCandidate("I've been a PM at Google and want design mentorship"), "");
+	assert.equal(employerCandidate("I was a PM at Google and want design mentorship"), "");
+	assert.equal(employerCandidate("mentors from Canada who work at Google"), "Google");
+});
+
+test("search_mentors filters employer rows before the result limit applies", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (url) => {
+		if (new URL(url).searchParams.get("q") === "Google") {
+			return jsonResponse({
+				results: [
+					...Array.from({ length: 10 }, (_, i) => ({ ...employerMentor(i, "Other"), title: "Product Manager" })),
+					{ ...employerMentor(20, "Google"), title: "Product Manager" },
+					{ ...employerMentor(21, "Google"), title: "Group Product Manager" },
+				],
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({ results: [], indexUsed: "explore" });
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "product managers who work at Google" },
+		);
+		assert.deepEqual(
+			result.mentors.slice(0, 2).map((mentor) => mentor.slug),
+			["mentor-20", "mentor-21"],
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });
 
 test("search_mentors fills a short employer result from the browse", async () => {
