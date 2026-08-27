@@ -1879,6 +1879,80 @@ test("search_mentors finds a mentor typed in lowercase", async () => {
 	}
 });
 
+test("search_mentors extracts a name the model wrapped in a sentence (ADPLIST-3805)", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		if (String(url).includes("/users/profile/mentor/")) {
+			return jsonResponse({ message: "Not found" }, 404);
+		}
+		if (String(url).includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
+		return jsonResponse({
+			results: [{ name: "Charlie Lowe", slug: "charlie-lowe-mr1vua47" }],
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		for (const [intent, expectedName] of [
+			["Looking for a specific mentor named Charlie Lowe on ADPList", "Charlie Lowe"],
+			["Is Charlie Lowe available for a session?", "Charlie Lowe"],
+			["My colleague told me to talk to Charlie Lowe.", "Charlie Lowe"],
+			["Charlie Lowe is the mentor I want", "Charlie Lowe"],
+			["Charlie Lowe (Google) please", "Charlie Lowe"],
+			["Charlie Lowe - Google", "Charlie Lowe"],
+			["Show me Charlie Lowe's profile", "Charlie Lowe"],
+		]) {
+			calls.length = 0;
+			const result = await searchMentors(
+				{
+					SEARCH_SERVICE_URL: "https://search.example",
+					AUTH_SERVICE_URL: "https://auth.example",
+					PROFILE_DB: EMPTY_PROFILE_DB,
+				},
+				AUTHED_PROPS,
+				{ intent },
+			);
+			assert.ok(calls[0].endsWith("/users/profile/mentor/charlie-lowe"), intent);
+			const searchCalls = calls.filter((c) => c.includes("/search?"));
+			assert.equal(searchCalls.length, 1, intent);
+			assert.equal(new URL(searchCalls[0]).searchParams.get("q"), expectedName, intent);
+			assert.equal(result.mentors[0].slug, "charlie-lowe-mr1vua47", intent);
+			assert.equal(result.mentors[0].why_match, `Name matches "${expectedName}".`, intent);
+		}
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors does not mistake capitalised career intents for names", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		return jsonResponse({ results: [], indexUsed: "explore" });
+	};
+
+	try {
+		for (const intent of [
+			"Senior product manager at a fintech startup transitioning into UX research, wants help running discovery interviews",
+			"Product Designer at Meta moving into Design Systems work",
+			"I need guidance in Data Science for healthcare",
+		]) {
+			calls.length = 0;
+			await searchMentors(
+				{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+				undefined,
+				{ intent },
+			);
+			assert.equal(calls.filter((c) => c.includes("/users/profile/mentor/")).length, 0, intent);
+		}
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 function jsonResponse(body, status = 200) {
 	return new Response(JSON.stringify(body), {
 		status,
