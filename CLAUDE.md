@@ -19,6 +19,11 @@ green. A commit titled `chore: trigger MCP production deploy` (`cd0728b`,
 2026-07-04) produced zero deployments. Production served code that was missing
 `search_journal_learnings` for the whole period.
 
+The guard now fails loudly rather than exiting 0: in CI it blocks and returns a
+non-zero exit, so the Cloudflare check goes red instead of implying a release.
+It also refuses to deploy from a dirty tree or from a HEAD that does not match
+`origin/main`, which is how a deploy run before its merge ships the old code.
+
 To actually ship:
 
 ```bash
