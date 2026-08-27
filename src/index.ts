@@ -128,7 +128,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"search_mentors",
 			{
 				description:
-					"Search ADPList's mentor community for a career intent, ranked by the Explore personalization ranker. Takes a few seconds because it queries the live search service. The intent parameter accepts a full description of the person's situation, and ranks on that far better than on topic keywords: current role, seniority, company or industry, and what they want to achieve and why. For example, 'senior PM at a fintech startup moving into UX research, wants help running first discovery interviews' rather than 'user research for startups'. One call is sufficient for a request: the server overfetches, reranks, relaxes over-strict discipline filters, and tops up sparse domain results internally, returning up to nine ranked mentor cards. Each result carries the mentor's slug, headline, company, expertise, and an Algolia queryID used for booking attribution.",
+					"Search ADPList's mentor community for a career intent, ranked by the Explore personalization ranker. Takes a few seconds because it queries the live search service. The intent parameter accepts a full description of the person's situation, and ranks on that far better than on topic keywords: current role, seniority, company or industry, and what they want to achieve and why. For example, 'senior PM at a fintech startup moving into UX research, wants help running first discovery interviews' rather than 'user research for startups'. A mentor's name also works as the intent and returns that mentor's card. One call is sufficient for a request: the server overfetches, reranks, relaxes over-strict discipline filters, and tops up sparse domain results internally, returning up to nine ranked mentor cards. Each result carries the mentor's slug, headline, company, expertise, and an Algolia queryID used for booking attribution.",
 				_meta: appToolMeta(UI_RESOURCES.mentorCards),
 				annotations: {
 					title: "Search ADPList mentors",
@@ -205,7 +205,9 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.string()
 						.trim()
 						.min(1)
-						.describe("Mentor slug from search_mentors results (e.g. felix-lee)."),
+						.describe(
+							"Mentor slug (e.g. felix-lee) or the mentor's full adplist.org/mentors/... profile URL.",
+						),
 				},
 			},
 			async (input) => this.toolResponse(() => getMentorProfile(this.env, input)),

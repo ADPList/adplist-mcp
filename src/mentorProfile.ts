@@ -68,7 +68,7 @@ export async function getMentorProfile(
 ): Promise<GetMentorProfileOutput> {
 	const baseUrl = env.AUTH_SERVICE_URL;
 	if (!baseUrl) throw new Error("AUTH_SERVICE_URL is not configured");
-	const slug = input.mentor_slug.trim();
+	const slug = mentorSlugFromInput(input.mentor_slug);
 	if (!slug) throw new Error("mentor_slug is required");
 
 	const profileResponse = await fetch(buildMentorProfileUrl(baseUrl, slug), {
@@ -124,6 +124,18 @@ export async function getMentorProfile(
 		recent_reviews: recentReviews,
 		profile_url: `https://adplist.org/mentors/${encodeURIComponent(slug)}`,
 	};
+}
+
+// People usually have the profile link rather than the slug, so accept either.
+export function mentorSlugFromInput(value: string): string {
+	const trimmed = value.trim();
+	const fromUrl = trimmed.match(/adplist\.org\/mentors\/([^/?#\s]+)/i)?.[1];
+	if (!fromUrl) return trimmed;
+	try {
+		return decodeURIComponent(fromUrl);
+	} catch {
+		return fromUrl;
+	}
 }
 
 const NO_STATS = Promise.resolve({ average_rating: null, reviews_count: null });
