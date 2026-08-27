@@ -2252,6 +2252,47 @@ test("employerCandidate detects at / from / work at phrasing without a capitalis
 	assert.equal(employerCandidate("As a designer at Meta, I want mentors at Google"), "Google");
 });
 
+test("search_mentors fills a short employer result from the browse", async () => {
+	const originalFetch = globalThis.fetch;
+	const queries = [];
+	globalThis.fetch = async (url) => {
+		const q = new URL(url).searchParams.get("q");
+		queries.push(q);
+		if (q === "Databricks") {
+			return jsonResponse({
+				results: Array.from({ length: 3 }, (_, i) => employerMentor(i, "Databricks")),
+				indexUsed: "explore",
+			});
+		}
+		if (q === "") {
+			return jsonResponse({
+				results: Array.from({ length: 9 }, (_, i) => employerMentor(i + 20, "Browse Co")),
+				indexUsed: "explore",
+			});
+		}
+		return jsonResponse({
+			results: [employerMentor(0, "Databricks"), employerMentor(10, "Other")],
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "mentors who work at Databricks" },
+		);
+		assert.deepEqual(queries, ["Databricks", "mentors who work at Databricks", ""]);
+		assert.equal(result.mentors.length, 9);
+		assert.deepEqual(
+			result.mentors.slice(0, 4).map((mentor) => mentor.slug),
+			["mentor-0", "mentor-1", "mentor-2", "mentor-10"],
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("search_mentors keeps a partial row of employer matches ahead of the top-up", async () => {
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async (url) => {

@@ -951,11 +951,22 @@ export async function searchMentors(
 	const literalNameResult = await searchMentorByLiteralName(env, props, input);
 	if (literalNameResult) return literalNameResult;
 
+	const targetResultCount = resultMaxResults(input);
 	const employerHits = await searchMentorsByEmployer(baseUrl, props, input);
-	if (employerHits && employerHits.mentors.length >= resultMaxResults(input)) return employerHits;
+	if (employerHits && employerHits.mentors.length >= targetResultCount) return employerHits;
 	const intentResult = await searchMentorsByIntent(env, props, input);
 	if (!employerHits) return intentResult;
-	return mergeSearchMentorOutputs(input, [employerHits, intentResult]);
+	const merged = mergeSearchMentorOutputs(input, [employerHits, intentResult]);
+	if (merged.mentors.length >= targetResultCount) return merged;
+	// A company with three mentors still owes a full set: fill from the filtered
+	// browse (personalized for signed-in users) rather than return a short list.
+	const browse = await fetchAndMapSearchMentors(
+		baseUrl,
+		props,
+		{ ...input, intent: "" },
+		input,
+	).catch(() => null);
+	return browse ? mergeSearchMentorOutputs(input, [employerHits, intentResult, browse]) : merged;
 }
 
 async function searchMentorsByIntent(
