@@ -1130,13 +1130,23 @@ async function searchLiteralNameViaExplore(
 	return { ...result, mentors };
 }
 
+// Every requested word must start a token of the mentor's name ("Lee" for
+// "Leeman", never "ann" inside "Joanne"). Two adjacent requested words may also
+// match one token together, because names get typed split where the profile
+// stores them joined ("Ria Santika" for "Riasantika").
 function nameContainsEveryWord(name: string, candidateName: string): boolean {
-	const haystack = slugifyLiteralName(name);
-	if (!haystack) return false;
-	return slugifyLiteralName(candidateName)
-		.split("-")
-		.filter(Boolean)
-		.every((word) => haystack.includes(word));
+	const nameTokens = slugifyLiteralName(name).split("-").filter(Boolean);
+	const words = slugifyLiteralName(candidateName).split("-").filter(Boolean);
+	if (nameTokens.length === 0 || words.length === 0) return false;
+	const startsToken = (word: string) => nameTokens.some((token) => token.startsWith(word));
+	for (let i = 0; i < words.length; i += 1) {
+		if (i + 1 < words.length && startsToken(words[i] + words[i + 1])) {
+			i += 1;
+			continue;
+		}
+		if (!startsToken(words[i])) return false;
+	}
+	return true;
 }
 
 function literalNameCandidate(intent: string): string {
@@ -1151,14 +1161,7 @@ function literalNameCandidate(intent: string): string {
 	const words = candidate.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
 	if (words.length < 2 || words.length > 4) return "";
 	if (words.some((word) => LITERAL_NAME_BLOCKLIST.has(word.toLowerCase()))) return "";
-	// Names are written Capitalised; lowercase intents ("discovery interview help")
-	// and acronyms ("US SEO") are not, and must not pay for a name lookup.
-	if (!words.every(isCapitalisedWord)) return "";
 	return words.join(" ");
-}
-
-function isCapitalisedWord(word: string): boolean {
-	return /^[A-Z]/.test(word) && word !== word.toUpperCase();
 }
 
 function currentRequestIntent(intent: string): string {

@@ -168,6 +168,7 @@ test("get_mentor_profile accepts a pasted profile URL as well as a slug (ADPLIST
 	assert.equal(mentorSlugFromInput("https://adplist.org/mentors/regina-rahayu"), "regina-rahayu");
 	assert.equal(mentorSlugFromInput("adplist.org/mentors/regina-rahayu?utm=x#top "), "regina-rahayu");
 	assert.equal(mentorSlugFromInput("https://www.adplist.org/mentors/regina%20rahayu/"), "regina rahayu");
+	assert.equal(mentorSlugFromInput("https://adplist.org/mentors/bad%E0%A4%A"), "bad%E0%A4%A");
 	assert.match(indexSource, /full adplist\.org\/mentors\/\.\.\. profile URL/);
 });
 

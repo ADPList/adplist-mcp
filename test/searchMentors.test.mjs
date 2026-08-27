@@ -1260,7 +1260,8 @@ test("search_mentors does not use growth top-up for non-growth marketing special
 			},
 		);
 
-		assert.equal(calls.length, 2);
+		// bare-name probe ("US SEO"), constrained search, relaxed retry
+		assert.equal(calls.length, 3);
 		assert.doesNotMatch(
 			new URL(calls.at(-1)).searchParams.get("q") ?? "",
 			/^growth marketing acquisition/,
@@ -1757,6 +1758,7 @@ test("search_mentors keeps only name hits that contain every requested word", as
 				{ name: "Priyal Jain", slug: "priyal-jain" },
 				{ name: "Priya Verma", slug: "priya-verma-5wq9" },
 				{ name: "Priya Verma", slug: "priya-verma" },
+				{ name: "Supriya Vermani", slug: "supriya-vermani" },
 			],
 			indexUsed: "explore",
 		});
@@ -1772,6 +1774,33 @@ test("search_mentors keeps only name hits that contain every requested word", as
 			result.mentors.map((m) => m.slug),
 			["priya-verma-5wq9", "priya-verma"],
 		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors name match requires token starts, not substrings", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		if (String(url).includes("/users/profile/mentor/")) {
+			return jsonResponse({ message: "Not found" }, 404);
+		}
+		return jsonResponse({
+			results: [{ name: "Joanne Leeman", slug: "joanne-leeman" }],
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "Ann Lee" },
+		);
+		assert.equal(calls.filter((c) => c.includes("/search?")).length, 2, "fell through to intent path");
+		assert.notEqual(result.mentors[0]?.why_match, 'Name matches "Ann Lee".');
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
@@ -1819,25 +1848,32 @@ test("search_mentors falls through to the intent path when no Explore hit carrie
 	}
 });
 
-test("search_mentors skips the name lookup for lowercase intents and acronyms", async () => {
+test("search_mentors finds a mentor typed in lowercase", async () => {
 	const originalFetch = globalThis.fetch;
-	const calls = [];
 	globalThis.fetch = async (url) => {
-		calls.push(String(url));
-		return jsonResponse({ results: [{ name: "Some Mentor", slug: "some-mentor" }] });
+		if (String(url).includes("/users/profile/mentor/")) {
+			return jsonResponse({ message: "Not found" }, 404);
+		}
+		if (String(url).includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
+		return jsonResponse({
+			results: [{ name: "Regina Riasantika Rahayu", slug: "regina-rahayu" }],
+			indexUsed: "explore",
+		});
 	};
 
 	try {
-		for (const intent of ["discovery interview help", "US SEO mentors", "Regina ria"]) {
-			calls.length = 0;
-			await searchMentors(
-				{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
-				undefined,
-				{ intent },
-			);
-			assert.equal(calls.filter((c) => c.includes("/users/profile/mentor/")).length, 0, intent);
-			assert.equal(calls.filter((c) => c.includes("/search?")).length, 1, intent);
-		}
+		const result = await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+				PROFILE_DB: EMPTY_PROFILE_DB,
+			},
+			AUTHED_PROPS,
+			{ intent: "regina ria santika" },
+		);
+		assert.equal(result.mentors.length, 1);
+		assert.equal(result.mentors[0].slug, "regina-rahayu");
+		assert.equal(result.mentors[0].why_match, 'Name matches "regina ria santika".');
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
@@ -2045,8 +2081,9 @@ test("search_mentors fails open to the bare intent when the profile fetch errors
 			AUTHED_PROPS,
 			{ intent: "bare intent survives" },
 		);
-		assert.equal(searchCalls.length, 1);
-		assert.equal(new URL(searchCalls[0]).searchParams.get("q"), "bare intent survives");
+		// bare-name probe, then the intent search with no profile prefix
+		assert.equal(searchCalls.length, 2);
+		assert.equal(new URL(searchCalls.at(-1)).searchParams.get("q"), "bare intent survives");
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
@@ -2080,7 +2117,8 @@ test("search_mentors keeps the ADPList profile when the D1 stored-context read t
 			AUTHED_PROPS,
 			{ intent: "discovery interview help" },
 		);
-		const q = new URL(searchCalls[0]).searchParams.get("q");
+		// [0] bare-name probe, [1] profile-enriched search, [2] bare retry
+		const q = new URL(searchCalls[1]).searchParams.get("q");
 		assert.match(q, /Senior Product Manager at Finch Fintech/);
 		assert.match(q, /Current request: discovery interview help/);
 	} finally {

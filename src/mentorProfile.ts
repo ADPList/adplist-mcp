@@ -130,7 +130,12 @@ export async function getMentorProfile(
 export function mentorSlugFromInput(value: string): string {
 	const trimmed = value.trim();
 	const fromUrl = trimmed.match(/adplist\.org\/mentors\/([^/?#\s]+)/i)?.[1];
-	return fromUrl ? decodeURIComponent(fromUrl) : trimmed;
+	if (!fromUrl) return trimmed;
+	try {
+		return decodeURIComponent(fromUrl);
+	} catch {
+		return fromUrl;
+	}
 }
 
 const NO_STATS = Promise.resolve({ average_rating: null, reviews_count: null });
