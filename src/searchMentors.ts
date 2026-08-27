@@ -941,7 +941,7 @@ export async function searchMentors(
 	if (!baseUrl) throw new Error("SEARCH_SERVICE_URL is not configured");
 	validateDisciplineFilter(input);
 
-	const literalNameResult = await searchMentorByLiteralName(env, input);
+	const literalNameResult = await searchMentorByLiteralName(env, props, input);
 	if (literalNameResult) return literalNameResult;
 
 	const profileText = await getProfileTextForSearch(env, props).catch(() => "");
@@ -1053,12 +1053,24 @@ export async function searchMentors(
 
 async function searchMentorByLiteralName(
 	env: Env,
+	props: McpUserProps | undefined,
 	input: SearchMentorsInput,
 ): Promise<SearchMentorsOutput | null> {
-	if (!env.AUTH_SERVICE_URL) return null;
 	const candidateName = literalNameCandidate(input.intent);
 	if (!candidateName) return null;
 
+	const profileResult = await lookupLiteralProfile(env, candidateName, input);
+	if (profileResult) return profileResult;
+	return searchLiteralNameViaExplore(env, props, candidateName, input);
+}
+
+// Slug guess: works only when the mentor's slug is exactly their slugified name.
+async function lookupLiteralProfile(
+	env: Env,
+	candidateName: string,
+	input: SearchMentorsInput,
+): Promise<SearchMentorsOutput | null> {
+	if (!env.AUTH_SERVICE_URL) return null;
 	const slug = slugifyLiteralName(candidateName);
 	if (!slug) return null;
 
@@ -1091,6 +1103,42 @@ async function searchMentorByLiteralName(
 	}
 }
 
+// Slugs carry random suffixes or different surnames ("Regina Ria Santika" is
+// regina-rahayu), so most names miss the slug guess. Ask the search service for
+// the bare name instead — without the stored-profile prefix that otherwise
+// drowns a single name hit under hundreds of career-context matches — and keep
+// only hits whose name actually contains the requested one. Anything else falls
+// through to the intent path.
+async function searchLiteralNameViaExplore(
+	env: Env,
+	props: McpUserProps | undefined,
+	candidateName: string,
+	input: SearchMentorsInput,
+): Promise<SearchMentorsOutput | null> {
+	if (!env.SEARCH_SERVICE_URL) return null;
+	const nameInput = { intent: candidateName, filters: input.filters };
+	let result: SearchMentorsOutput;
+	try {
+		result = await fetchAndMapSearchMentors(env.SEARCH_SERVICE_URL, props, nameInput, nameInput);
+	} catch {
+		return null;
+	}
+	const mentors = result.mentors
+		.filter((mentor) => nameContainsEveryWord(mentor.name, candidateName))
+		.map((mentor) => ({ ...mentor, why_match: `Name matches "${candidateName}".` }));
+	if (mentors.length === 0) return null;
+	return { ...result, mentors };
+}
+
+function nameContainsEveryWord(name: string, candidateName: string): boolean {
+	const haystack = slugifyLiteralName(name);
+	if (!haystack) return false;
+	return slugifyLiteralName(candidateName)
+		.split("-")
+		.filter(Boolean)
+		.every((word) => haystack.includes(word));
+}
+
 function literalNameCandidate(intent: string): string {
 	const requestIntent = currentRequestIntent(intent)
 		.replace(/[“”]/g, '"')
@@ -1103,7 +1151,14 @@ function literalNameCandidate(intent: string): string {
 	const words = candidate.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
 	if (words.length < 2 || words.length > 4) return "";
 	if (words.some((word) => LITERAL_NAME_BLOCKLIST.has(word.toLowerCase()))) return "";
+	// Names are written Capitalised; lowercase intents ("discovery interview help")
+	// and acronyms ("US SEO") are not, and must not pay for a name lookup.
+	if (!words.every(isCapitalisedWord)) return "";
 	return words.join(" ");
+}
+
+function isCapitalisedWord(word: string): boolean {
+	return /^[A-Z]/.test(word) && word !== word.toUpperCase();
 }
 
 function currentRequestIntent(intent: string): string {

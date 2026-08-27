@@ -1662,9 +1662,10 @@ test("search_mentors falls back to Explore when a literal profile candidate does
 			{ intent: "Brennan Collins" },
 		);
 
-		assert.equal(calls.length, 2);
+		assert.equal(calls.length, 3);
 		assert.equal(calls[0], "https://auth.example/users/profile/mentor/brennan-collins");
-		assert.equal(new URL(calls[1]).pathname, "/search");
+		assert.equal(new URL(calls[1]).searchParams.get("q"), "Brennan Collins");
+		assert.equal(new URL(calls[2]).pathname, "/search");
 		assert.equal(result.mentors[0].slug, "explore-brennan");
 		assert.equal(result.queryID, "explore-query");
 	} finally {
@@ -1694,7 +1695,7 @@ test("search_mentors falls back to Explore when literal profile filters do not m
 			{ intent: "Brennan Collins", filters: { country: "CA" } },
 		);
 
-		assert.equal(calls.length, 2);
+		assert.equal(calls.length, 3);
 		assert.equal(result.mentors[0].slug, "filtered-explore");
 		assert.equal(result.queryID, "filtered-query");
 	} finally {
@@ -1702,9 +1703,149 @@ test("search_mentors falls back to Explore when literal profile filters do not m
 	}
 });
 
-function jsonResponse(body) {
+test("search_mentors finds a mentor by name through Explore when the slug guess misses (ADPLIST-3805)", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		if (String(url).includes("/users/profile/mentor/")) {
+			return jsonResponse({ message: "Not found" }, 404);
+		}
+		if (String(url).includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
+		return jsonResponse({
+			results: [
+				{ name: "Regina Riasantika Rahayu", slug: "regina-rahayu", title: "CX", countryISO: "ID" },
+			],
+			queryID: "name-query",
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+				PROFILE_DB: EMPTY_PROFILE_DB,
+			},
+			AUTHED_PROPS,
+			{ intent: "Regina Ria Santika" },
+		);
+
+		const searchCalls = calls.filter((c) => c.includes("/search?"));
+		assert.equal(searchCalls.length, 1, "one bare-name search, no profile-enriched retry");
+		const q = new URL(searchCalls[0]).searchParams.get("q");
+		assert.equal(q, "Regina Ria Santika", "the name reaches the search service as typed");
+		assert.doesNotMatch(q, /Stored ADPList career context/);
+		assert.equal(result.mentors.length, 1);
+		assert.equal(result.mentors[0].slug, "regina-rahayu");
+		assert.equal(result.mentors[0].why_match, 'Name matches "Regina Ria Santika".');
+		assert.equal(result.queryID, "name-query");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors keeps only name hits that contain every requested word", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (url) => {
+		if (String(url).includes("/users/profile/mentor/")) {
+			return jsonResponse({ message: "Not found" }, 404);
+		}
+		return jsonResponse({
+			results: [
+				{ name: "Priyal Jain", slug: "priyal-jain" },
+				{ name: "Priya Verma", slug: "priya-verma-5wq9" },
+				{ name: "Priya Verma", slug: "priya-verma" },
+			],
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "Priya Verma" },
+		);
+		assert.deepEqual(
+			result.mentors.map((m) => m.slug),
+			["priya-verma-5wq9", "priya-verma"],
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors falls through to the intent path when no Explore hit carries the name", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		if (String(url).includes("/users/profile/mentor/")) {
+			return jsonResponse({ message: "Not found" }, 404);
+		}
+		if (String(url).includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
+		return jsonResponse({
+			results: [
+				{ name: "Ezzeddine Jradi", slug: "ezzeddine-jradi" },
+				{ name: "Louise Honore", slug: "louise-honore" },
+			],
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{
+				SEARCH_SERVICE_URL: "https://search.example",
+				AUTH_SERVICE_URL: "https://auth.example",
+				PROFILE_DB: EMPTY_PROFILE_DB,
+			},
+			AUTHED_PROPS,
+			{ intent: "Portfolio Review" },
+		);
+
+		const queries = calls
+			.filter((c) => c.includes("/search?"))
+			.map((c) => new URL(c).searchParams.get("q"));
+		assert.equal(queries[0], "Portfolio Review");
+		assert.match(queries[1], /Stored ADPList career context/);
+		assert.match(queries[1], /Current request: Portfolio Review/);
+		assert.equal(result.mentors.length, 2);
+		assert.notEqual(result.mentors[0].why_match, 'Name matches "Portfolio Review".');
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors skips the name lookup for lowercase intents and acronyms", async () => {
+	const originalFetch = globalThis.fetch;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		return jsonResponse({ results: [{ name: "Some Mentor", slug: "some-mentor" }] });
+	};
+
+	try {
+		for (const intent of ["discovery interview help", "US SEO mentors", "Regina ria"]) {
+			calls.length = 0;
+			await searchMentors(
+				{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+				undefined,
+				{ intent },
+			);
+			assert.equal(calls.filter((c) => c.includes("/users/profile/mentor/")).length, 0, intent);
+			assert.equal(calls.filter((c) => c.includes("/search?")).length, 1, intent);
+		}
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+function jsonResponse(body, status = 200) {
 	return new Response(JSON.stringify(body), {
-		status: 200,
+		status,
 		headers: { "content-type": "application/json" },
 	});
 }

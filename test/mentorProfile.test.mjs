@@ -7,6 +7,7 @@ import {
 	buildMentorReviewsUrl,
 	buildMentorStatisticsUrl,
 	getMentorProfile,
+	mentorSlugFromInput,
 } from "../src/mentorProfile.ts";
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
@@ -160,6 +161,14 @@ test("getMentorProfile still returns the profile when stats and reviews fail", a
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
+});
+
+test("get_mentor_profile accepts a pasted profile URL as well as a slug (ADPLIST-3805)", () => {
+	assert.equal(mentorSlugFromInput("felix-lee"), "felix-lee");
+	assert.equal(mentorSlugFromInput("https://adplist.org/mentors/regina-rahayu"), "regina-rahayu");
+	assert.equal(mentorSlugFromInput("adplist.org/mentors/regina-rahayu?utm=x#top "), "regina-rahayu");
+	assert.equal(mentorSlugFromInput("https://www.adplist.org/mentors/regina%20rahayu/"), "regina rahayu");
+	assert.match(indexSource, /full adplist\.org\/mentors\/\.\.\. profile URL/);
 });
 
 test("getMentorProfile reports a clear error for unknown slugs", async () => {
