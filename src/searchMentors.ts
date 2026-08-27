@@ -1214,7 +1214,11 @@ function literalNameCandidate(intent: string): string {
 // acronyms, stop/blocklist words, and any punctuation (parentheses, slashes)
 // end a run, so "Charlie Lowe (Google)" yields "Charlie Lowe".
 function capitalisedNameRun(intent: string): string | undefined {
-	const tokens = intent.match(/[A-Za-z][A-Za-z'-]*|[^A-Za-z\s'-]/g) ?? [];
+	// A word is letters with optional internal apostrophes/hyphens; every other
+	// non-space character (including a standalone "-" or "'") is a boundary.
+	const tokens = (intent.match(/[A-Za-z](?:[A-Za-z'-]*[A-Za-z])?|\S/g) ?? []).map((token) =>
+		token.replace(/'s$/i, ""),
+	);
 	const isNameWord = (token: string) =>
 		/^[A-Z]/.test(token) &&
 		token !== token.toUpperCase() &&

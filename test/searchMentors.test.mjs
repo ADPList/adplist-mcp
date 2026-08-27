@@ -1901,6 +1901,8 @@ test("search_mentors extracts a name the model wrapped in a sentence (ADPLIST-38
 			["My colleague told me to talk to Charlie Lowe.", "Charlie Lowe"],
 			["Charlie Lowe is the mentor I want", "Charlie Lowe"],
 			["Charlie Lowe (Google) please", "Charlie Lowe"],
+			["Charlie Lowe - Google", "Charlie Lowe"],
+			["Show me Charlie Lowe's profile", "Charlie Lowe"],
 		]) {
 			calls.length = 0;
 			const result = await searchMentors(
