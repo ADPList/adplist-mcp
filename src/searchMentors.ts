@@ -1102,8 +1102,11 @@ const EMPLOYER_INTENT_PATTERN = new RegExp(
 // describe the member: a first-person clause with no request verb in it.
 // "I want mentors who work at Google" asks for mentors.
 const FIRST_PERSON = /\b(?:i|i'm|i am|i've|i'd|we|my|as an?)\b/i;
+// A first-person clause with a request verb asks for mentors; without one it
+// describes the member. An unlisted verb falls back to the intent path, i.e.
+// today's behaviour.
 const REQUEST_VERB =
-	/\b(?:want|need|looking|find|show|recommend|suggest|search|book|connect|match|interested|help)\w*/i;
+	/\b(?:want|need|look|find|show|recommend|suggest|search|book|connect|match|interest|help|like|love|seek|hope|wish|prefer|could|can|would|please|see|explore|meet|talk|speak|chat|introduc)\w*/i;
 
 function isSelfDescription(request: string, matchIndex: number): boolean {
 	// Judge on the nearest preceding clause that has a subject: "I need a design
@@ -1147,34 +1150,29 @@ function isRegionName(value: string): boolean {
 	return regionNames.has(value.toLowerCase());
 }
 
-function companyTokens(company: string): string[] {
-	// "and" is noise: "Johnson and Johnson" must match "Johnson & Johnson".
-	return slugifyLiteralName(company)
+// "and" and legal suffixes are noise: "Johnson and Johnson" is "Johnson & Johnson",
+// "Google" is "Google LLC".
+const EMPLOYER_NOISE_TOKENS = new Set(["and", "inc", "llc", "ltd", "limited", "co", "corp", "corporation", "plc", "gmbh"]);
+function employerTokens(value: string): string[] {
+	return slugifyLiteralName(value)
 		.split("-")
-		.filter((word) => word && word !== "and");
+		.filter((word) => word && !EMPLOYER_NOISE_TOKENS.has(word));
 }
 
-function employerHasTokens(mentor: SearchServiceMentor, tokens: string[]): boolean {
-	// Counted, not a set: "Johnson Johnson" needs two, so Johnson Controls fails.
-	const employer = slugifyLiteralName(mentor.employer ?? mentor.company ?? "")
-		.split("-")
-		.filter(Boolean);
-	return (
-		tokens.length > 0 &&
-		tokens.every(
-			(token) =>
-				employer.filter((word) => word === token).length >=
-				tokens.filter((word) => word === token).length,
-		)
-	);
+// Exact employer, not "contains": a place is nobody's employer, so "mentors
+// from New York" never promotes New York Times staff, and "ex-Databricks" is
+// not Databricks. Top-ups cover the near misses.
+function employerIs(mentor: SearchServiceMentor, tokens: string[]): boolean {
+	const employer = employerTokens(mentor.employer ?? mentor.company ?? "");
+	return tokens.length > 0 && employer.length === tokens.length && employer.every((word, i) => word === tokens[i]);
 }
 
 // The captured phrase may carry trailing request words ("Google please"), so
 // the longest prefix that names an employer in the results wins.
 function employerMatches(results: SearchServiceMentor[], company: string): SearchServiceMentor[] {
-	const tokens = companyTokens(company);
+	const tokens = employerTokens(company);
 	for (let length = tokens.length; length >= 1; length -= 1) {
-		const matches = results.filter((mentor) => employerHasTokens(mentor, tokens.slice(0, length)));
+		const matches = results.filter((mentor) => employerIs(mentor, tokens.slice(0, length)));
 		if (matches.length > 0) return matches;
 	}
 	return [];

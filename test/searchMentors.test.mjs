@@ -2263,6 +2263,8 @@ test("employerCandidate detects at / from / work at phrasing without a capitalis
 	assert.equal(employerCandidate("mentors who work at Bank of America"), "Bank of America");
 	assert.equal(employerCandidate("I need a design mentor because I work at Google"), "");
 	assert.equal(employerCandidate("I'm a designer and I need mentors who work at Google"), "Google");
+	assert.equal(employerCandidate("I'd like mentors who work at Google"), "Google");
+	assert.equal(employerCandidate("We are seeking mentors who work at Google"), "Google");
 	assert.equal(
 		employerCandidate("I'm a PM and currently work at Google, looking for design mentorship"),
 		"",
@@ -2494,11 +2496,9 @@ test("search_mentors puts employer matches first and tops up to nine from the in
 
 		assert.deepEqual(queries, ["Google", "find me mentors who work at Google"]);
 		assert.equal(result.mentors.length, 9);
-		assert.deepEqual(
-			result.mentors.slice(0, 2).map((mentor) => mentor.slug),
-			["mentor-1", "mentor-3"],
-		);
+		assert.equal(result.mentors[0].slug, "mentor-1");
 		assert.equal(result.mentors[0].why_match, "Works at Google.");
+		assert.equal(result.mentors.filter((mentor) => mentor.why_match.startsWith("Works at")).length, 1);
 		assert.ok(!result.mentors.some((mentor) => mentor.slug === "mentor-4"));
 		assert.equal(new Set(result.mentors.map((mentor) => mentor.slug)).size, 9);
 	} finally {
@@ -2537,6 +2537,40 @@ test("search_mentors tolerates trailing request words after the company", async 
 			{ intent: "mentors who work at Johnson and Johnson" },
 		);
 		assert.deepEqual(jnj.mentors.filter((m) => m.why_match.startsWith("Works at")).map((m) => m.company), ["Johnson & Johnson"]);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("search_mentors treats a place as nobody's employer", async () => {
+	const originalFetch = globalThis.fetch;
+	const queries = [];
+	globalThis.fetch = async (url) => {
+		queries.push(new URL(url).searchParams.get("q"));
+		return jsonResponse({
+			results: [
+				...Array.from({ length: 9 }, (_, i) => employerMentor(i, "New York Times")),
+				employerMentor(9, "Google LLC"),
+			],
+			indexUsed: "explore",
+		});
+	};
+
+	try {
+		const result = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "mentors from New York" },
+		);
+		assert.deepEqual(queries, ["New York", "mentors from New York"]);
+		assert.ok(result.mentors.every((mentor) => !mentor.why_match.startsWith("Works at")));
+
+		const google = await searchMentors(
+			{ SEARCH_SERVICE_URL: "https://search.example", AUTH_SERVICE_URL: "https://auth.example" },
+			undefined,
+			{ intent: "mentors from Google" },
+		);
+		assert.equal(google.mentors[0].why_match, "Works at Google LLC.");
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
