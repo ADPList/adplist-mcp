@@ -2326,6 +2326,17 @@ test("employerCandidate anchors on a plural people noun or relative pronoun, no 
 		employerCandidate("Stored ADPList career context: Role: PM at Google\nCurrent request: mentors who work at Stripe"),
 		"Stripe",
 	);
+	// Real intents from claude.ai: sentence punctuation ends the company.
+	assert.equal(
+		employerCandidate(
+			"Looking for mentors who currently work at Google. Founder and CEO of a startup in San Francisco, interested in connecting with Googlers across product, design, and engineering.",
+		),
+		"Google",
+	);
+	assert.equal(
+		employerCandidate("Mentors who currently work at Google. I want to talk to people employed at Google specifically."),
+		"Google",
+	);
 	// The member's own employer follows a singular title and never matches.
 	assert.equal(employerCandidate("Senior PM at Google, wants design mentorship"), "");
 	assert.equal(employerCandidate("I'm a PM at Google who wants help transitioning to design"), "");
