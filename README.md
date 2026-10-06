@@ -10,8 +10,8 @@
 
 <p align="center">
   <a href="#install"><img alt="Install" src="https://img.shields.io/badge/install-Claude%20apps%20%2B%20Claude%20Code-d97757"></a>
-  <a href="https://adplist.org"><img alt="Mentors" src="https://img.shields.io/badge/mentors-1M%2B%20community-success"></a>
-  <img alt="Free 1:1 mentorship" src="https://img.shields.io/badge/price-free-blue">
+  <a href="https://adplist.org"><img alt="People in 160+ countries completed a session in the last 12 months" src="https://img.shields.io/badge/sessions-160%2B%20countries%20(last%2012%20months)-success"></a>
+  <img alt="Free to start" src="https://img.shields.io/badge/price-free%20to%20start-blue">
 </p>
 
 ---
@@ -20,7 +20,7 @@
 
 The best career advice you'll ever get is from a person who's already done the thing you're trying to do. The problem is finding them, figuring out when they're free, and actually getting on their calendar — usually across three browser tabs and a week of back-and-forth.
 
-ADPList already solved the hard part: **1M+ people who volunteer their time to mentor others, for free.** Designers, PMs, engineers, founders, and leaders from companies like Google, Stripe, Figma, and Netflix. This connector puts all of them one sentence away inside Claude.
+ADPList already solved the hard part: **a mentorship marketplace, free to start, where people in 160+ countries completed a session in the last 12 months.** Mentors volunteer their time: designers, PMs, engineers, founders, and leaders from companies like Google, Stripe, Figma, and Netflix. This connector puts all of them one sentence away inside Claude.
 
 Tell Claude what you're working through — *"I'm a designer trying to break into product"* — and it searches ADPList for the right mentors, shows you who's a fit, finds an open slot, and books the session. The whole loop, in the chat you're already in.
 

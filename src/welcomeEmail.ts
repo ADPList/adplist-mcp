@@ -216,7 +216,7 @@ Try this first: ask Claude something like
 
  
 
-It'll find the right expert from 40K+ mentors and set up the call for you.
+It'll find the right ADPList mentor and set up the call for you.
 
  
 
@@ -242,7 +242,7 @@ function welcomeEmailHtml(firstName: string, gifUrl: string): string {
 			<p>Hey ${escapeHtml(welcomeGreetingName(firstName))},</p>
 			<p>You're in. ADPList is now connected to Claude, which means you can book a mentor without ever leaving your chat.</p>
 			<p>Try this first: ask Claude something like<br><strong>&ldquo;Book me a mentor who can help me prep for a product design interview.&rdquo;</strong></p>
-			<p>It'll find the right expert from 40K+ mentors and set up the call for you.</p>
+			<p>It'll find the right ADPList mentor and set up the call for you.</p>
 			<p><img src="${escapeHtml(gifUrl)}" alt="Booking an ADPList mentor from Claude" style="display:block;width:100%;max-width:560px;height:auto;border:0;border-radius:8px;margin:18px 0 24px;" /></p>
 			<p>A few other things to try:</p>
 			<p>&ldquo;Find me a mentor who made the jump from designer to PM.&rdquo;<br>&ldquo;Summarize what I've learned across my ADPList sessions.&rdquo;</p>
