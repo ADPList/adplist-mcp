@@ -23,8 +23,9 @@ test("sendWelcomeEmailOnce sends the SendGrid welcome email and marks the user w
 	assert.deepEqual(body.reply_to, { email: "felix@adplist.org", name: "Felix Lee" });
 	assert.equal(body.subject, "You just connected ADPList to Claude 🎉");
 	assert.match(body.content[0].value, /Hey Ada,/);
-	assert.match(body.content[0].value, /40K\+ mentors/);
-	assert.match(body.content[1].value, /It'll find the right expert from 40K\+ mentors/);
+	assert.doesNotMatch(body.content[0].value, /\d+K\+ mentors/);
+	assert.match(body.content[0].value, /It'll find the right ADPList mentor/);
+	assert.match(body.content[1].value, /It'll find the right ADPList mentor/);
 	assert.match(body.content[1].value, /https:\/\/mcp\.adplist\.org\/assets\/claude-mcp\.gif/);
 	assert.equal(env.rows.get("user-1").welcome_email_sent_at > 0, true);
 	assert.equal(env.rows.get("user-1").welcome_email_in_flight_at, null);
