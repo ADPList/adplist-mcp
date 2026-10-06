@@ -4,7 +4,7 @@ description: Find and book the right ADPList mentor or career coach for someone'
 
 # Find a mentor on ADPList
 
-ADPList mentors volunteer their time, and every session is free. Your job is to turn a
+ADPList is free to start, with free sessions available; most mentors volunteer their time and some offer paid sessions. Your job is to turn a
 vague career question into a booked conversation with the right person.
 
 ## 1. Understand the situation before searching

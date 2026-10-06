@@ -1,6 +1,6 @@
 # ADPList plugin for Claude Code
 
-Free 1:1 mentorship and career coaching from ADPList's community of 1M+ mentors, without
+1:1 mentorship and career coaching from ADPList, free to start, without
 leaving Claude.
 
 Tell Claude what you're working through — *"I'm a designer trying to break into
