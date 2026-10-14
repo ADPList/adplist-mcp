@@ -1142,7 +1142,7 @@ async function searchMentorsByIntent(
 // so "mentors from Canada who work at Google" leaves Google for the next match.
 // Sentence punctuation ends it too: "…work at Google. Founder and CEO of…" is
 // what the model actually sends.
-const CLAUSE_WORD = String.raw`(?!(?:who|that|which|with|in|for|or|to|on|about|as|looking|seeking|wants?|needs?)\b)`;
+const CLAUSE_WORD = String.raw`(?!(?:who|that|which|with|using|via|in|for|or|to|on|about|as|looking|seeking|wants?|needs?)\b)`;
 const EMPLOYER_INTENT_PATTERN = new RegExp(
 	String.raw`\b(?:who|that|which|mentors|people|someone|anyone|folks|designers|engineers|developers|managers|leaders|founders|researchers|recruiters|experts|professionals|pms)\s+(?:[a-z']+\s+){0,2}?(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|at|from)\s+(?:the\s+)?(${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&'-]*(?:\s+${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&'-]*){0,3})`,
 	"gi",

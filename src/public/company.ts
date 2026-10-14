@@ -1,0 +1,228 @@
+import { employerCandidate, employerTokens } from "../searchMentors.ts";
+
+// Company handling for the public search (ADPLIST-4479). Company always means
+// the mentor's CURRENT employer: the search row's employer or the identity
+// record's profile.organization, cut before any "previously"/"formerly"/"ex-"
+// tail. Work history and bio never count.
+
+// A separator (or the start) followed by a past-employer marker.
+const PAST_EMPLOYER_MARKER =
+	/(?:^|[\s|,;/·•([–—-])\s*(?:previously|formerly|former\b|prev\b\.?|ex[-–])/i;
+
+// "Google | previously at Meta" → "Google"; "ex-Databricks" → "".
+export function currentEmployer(value: string): string {
+	const cut = value.search(PAST_EMPLOYER_MARKER);
+	const head = cut >= 0 ? value.slice(0, cut) : value;
+	return head.replace(/[\s|,;/·•([–—-]+$/, "").trim();
+}
+
+// Current-employer match on whole tokens, with the signed-in search's token
+// rule: the employer must start with every company token. "Google" matches
+// "Google DeepMind"; "Google DeepMind" matches neither "Google" nor
+// "Google Cloud"; "Snap" never matches "Snapchat".
+export function isCurrentEmployer(companyText: string, company: string): boolean {
+	const wanted = employerTokens(company);
+	if (!wanted) return false;
+	const have = employerTokens(currentEmployer(companyText));
+	return have === wanted || have.startsWith(`${wanted} `);
+}
+
+// A well-known company the phrase starts with, in display form: "Google" for
+// "google", "Google DeepMind" for "Google DeepMind" (the full phrase is kept;
+// only an exact match takes the canonical spelling).
+function knownCompanyPrefix(phrase: string): string {
+	const tokens = employerTokens(phrase).split(" ");
+	for (let n = tokens.length; n >= 1; n -= 1) {
+		const known = KNOWN_COMPANIES.get(tokens.slice(0, n).join(" "));
+		if (known) return n === tokens.length ? known : phrase;
+	}
+	return "";
+}
+
+// Well-known employers that may be named bare in a query ("google pm"). Keyed
+// by employerTokens; the value is the display / search form.
+const KNOWN_COMPANIES = new Map(
+	[
+		"Google", "Meta", "Facebook", "Apple", "Amazon", "AWS", "Microsoft", "Netflix", "Airbnb", "Uber",
+		"Lyft", "Stripe", "Spotify", "Shopify", "LinkedIn", "Salesforce", "Adobe", "Figma", "Atlassian",
+		"Canva", "Grab", "Shopee", "Gojek", "Tokopedia", "TikTok", "ByteDance", "OpenAI", "Anthropic",
+		"Nvidia", "Intel", "IBM", "Oracle", "PayPal", "Pinterest", "Snap", "Dropbox", "Slack", "Notion",
+		"Booking.com", "Expedia", "Deloitte", "McKinsey", "Accenture", "IDEO", "Revolut", "Wise", "Klarna",
+		"Coinbase", "Databricks", "Snowflake", "Twilio", "Zendesk", "HubSpot", "Intuit", "Samsung",
+		"Visa", "Mastercard", "Goldman Sachs", "JPMorgan", "Duolingo", "Instacart", "DoorDash",
+	].map((name) => [employerTokens(name), name]),
+);
+
+// Words that describe a role, level, field, or request, never an employer.
+// A candidate made of any of them is not a company ("product manager" alone).
+const NON_COMPANY_WORDS = new Set(
+	`a an the and or of for to with in on at from by about as my me i im someone anyone people person
+	who that which works work working worked currently looking find finding need needs want wants help
+	advice mentor mentors mentorship mentoring coach coaching career careers job jobs interview interviews
+	product products manager managers management pm pms apm tpm gpm owner design designer designers
+	ux ui uxr research researcher researchers engineer engineers engineering developer developers dev
+	software data scientist scientists science analyst analysts analytics marketing marketer growth
+	sales founder founders cofounder ceo cto cpo cmo coo vp head director directors lead leads leader
+	leaders leadership senior sr junior jr staff principal mid entry level intern interns associate
+	executive startup startups fintech ai ml frontend backend fullstack mobile web app apps ios android
+	content brand visual graphic interaction user users experience strategy strategic b2b b2c saas
+	remote big tech company companies ex former previously transition switch switching portfolio
+	review resume cv hiring recruiter recruiting operations ops program project consultant consulting
+	using use uses via tool tools skill skills learn learning based located living near around area
+region city country`.split(
+		/\s+/,
+	),
+);
+
+// Role words that make a neighbouring company an employer: "google pm",
+// "product manager Google", "ux designer Initech".
+const ROLE_WORDS = new Set(
+	`pm pms apm tpm gpm manager managers designer designers engineer engineers developer developers dev
+	devs swe sde researcher researchers scientist scientists analyst analysts marketer marketers founder
+	founders lead leads leader leaders director directors recruiter recruiters mentor mentors product
+	design engineering ux ui uxr`.split(/\s+/),
+);
+
+// Products and skills people learn, not employers: "help with Figma", "Figma
+// designer", "Canva designer". Some are also companies; only an explicit
+// at/from/@ phrase makes one of these a company.
+const TOOL_WORDS = new Set(
+	`figma canva notion miro webflow framer airtable salesforce hubspot tableau excel jira python sql
+	sketch photoshop illustrator invision zeplin asana trello confluence javascript typescript react`.split(/\s+/),
+);
+
+// The requester's own employment, as a whole first-person clause: "I work at
+// Google", "I'm PM at Meta", "Im currently a designer with Acme", "we are at
+// Stripe", "my team is at Airbnb", "my company is Acme". The company there is
+// who is asking, never who they want. The clause ends at punctuation or a
+// clause word ("and", "but", "need", "looking"), so "I'm at Stripe, looking
+// for a PM at Google" still wants Google.
+const CLAUSE_STOP = String.raw`(?:and|but|so|need|needs|looking|seeking|want|wants|hoping|trying|interested|who|that|which|mentor|mentors|someone|anyone|people)\b`;
+const CLAUSE_WORD = String.raw`[A-Za-z0-9&'-]+(?:\.[A-Za-z0-9&'-]+)*`;
+const CLAUSE_WORDS = String.raw`(?:\s+(?!${CLAUSE_STOP})${CLAUSE_WORD})`;
+const SELF_SUBJECT = String.raw`(?:i\s*'\s*m|i\s+am|im|we\s*'\s*re|we\s+are|(?:my|our)\s+team\s+is|(?:i|we)(?:\s*'\s*ve|\s+have)?(?:\s+been)?(?:\s+(?:currently|now))?\s+(?:work|works|working|worked|employed))`;
+const SELF_COMPANY = String.raw`(?:the\s+)?${CLAUSE_WORD}${CLAUSE_WORDS}*`;
+const SELF_EMPLOYMENT = new RegExp(
+	[
+		String.raw`\b${SELF_SUBJECT}${CLAUSE_WORDS}*?(?:\s+(?:at|for|with|by)\s+|\s*@\s*)${SELF_COMPANY}`,
+		String.raw`\b(?:my|our)\s+(?:current\s+)?(?:company|employer|workplace|org|organization|organisation)(?:\s+is|\s*[:,])?\s+${SELF_COMPANY}`,
+	].join("|"),
+	"gi",
+);
+
+// Skill or proficiency phrasing: "get better at Figma", "good at Google Ads",
+// "experience at Stripe", "skilled with SQL". What follows is something the
+// requester wants to learn or has done, never the mentor's employer.
+const SKILL_PHRASE = new RegExp(
+	String.raw`\b(?:better|best|good|great|bad|worse|stronger|skilled|skillful|proficient|expert|experienced|competent|confident|comfortable|fluent|improve|improving|skills?|experience|expertise|proficiency|background)\s+(?:at|with|in)\s+(?:the\s+)?[A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.'-]*){0,2}`,
+	"gi",
+);
+
+// Words before a bare at/from that make a tool-named company an employer:
+// "designers at Figma", "people at Notion". Anything else ("help at Figma")
+// leaves the tool a tool.
+const EMPLOYEE_WORDS = new Set(
+	`people folks someone anyone employees staff team experts professionals`.split(/\s+/),
+);
+
+// Typographic apostrophes and quotes to ASCII, so "I’m a PM at Google" reads
+// like "I'm a PM at Google".
+const asciiQuotes = (value: string) => value.replace(/[’‘ʼ‛′`]/g, "'").replace(/[“”„‟″]/g, '"');
+
+const WORD = /[A-Za-z0-9][A-Za-z0-9&.'-]*/g;
+const bare = (word: string) => word.toLowerCase().replace(/[.']+$/, "");
+
+// Words ignored when the whole query may be a company: "mentors Google",
+// "people at Google DeepMind".
+const QUERY_FILLER_WORDS = new Set(["mentors", "mentor", "people", "at"]);
+
+// The whole query, fillers dropped, when it is or starts with a well-known
+// company that is not also a tool: "Google", "Google DeepMind", "mentors
+// Google". "Canva" alone stays something to learn.
+function wholeQueryCompany(query: string): string {
+	const words = (query.match(WORD) ?? []).filter((word) => !QUERY_FILLER_WORDS.has(bare(word)));
+	if (words.length === 0 || TOOL_WORDS.has(bare(words[0]))) return "";
+	return knownCompanyPrefix(words.join(" ")) ? words.join(" ") : "";
+}
+
+// The phrases in the query that could name the mentor's employer, most
+// explicit first. `explicit`: a whole query that is a well-known company
+// ("Google DeepMind"), the employer phrase ("mentors at Google") and
+// at/from/@ phrases ("PM at Meta", "designer from Airbnb"). `implied`: 1–3
+// words at either end next to a role word ("product manager Google", "google
+// pm"), never a tool. The requester's own employer is removed first. Phrases
+// containing a role or filler word are dropped.
+function companyPhrases(query: string): { explicit: string[]; implied: string[] } {
+	const text = asciiQuotes(query).replace(SELF_EMPLOYMENT, " | ").replace(SKILL_PHRASE, " | ");
+	const seen: string[] = [];
+	// True when the value is a usable company phrase (even if already seen).
+	const collect = (into: string[], value: string, allowTools: boolean): boolean => {
+		const words = value.match(WORD) ?? [];
+		if (words.length === 0 || words.length > 3) return false;
+		if (words.some((word) => NON_COMPANY_WORDS.has(bare(word)))) return false;
+		if (!allowTools && words.some((word) => TOOL_WORDS.has(bare(word)))) return false;
+		const phrase = words.join(" ");
+		if (!seen.some((existing) => employerTokens(existing) === employerTokens(phrase))) {
+			seen.push(phrase);
+			into.push(phrase);
+		}
+		return true;
+	};
+	const explicit: string[] = [];
+	collect(explicit, wholeQueryCompany(text), false);
+	collect(explicit, employerCandidate(text), true);
+	for (const match of text.matchAll(/(?:\b(?:at|from)\s+|@\s*)([A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.'-]*){0,2})/gi)) {
+		// Shrink from the right only past clause words: "Meta in London" → "Meta",
+		// but "Google DeepMind" stays whole and never also yields "Google".
+		// A tool after a bare at/from is an employer only after a role or people
+		// word: "designers at Figma", not "help at Figma". "@ Figma" always is.
+		const preceding = text.slice(0, match.index).match(WORD) ?? [];
+		const before = bare(preceding[preceding.length - 1] ?? "");
+		const allowTools = match[0].startsWith("@") || ROLE_WORDS.has(before) || EMPLOYEE_WORDS.has(before);
+		const words = match[1].match(WORD) ?? [];
+		for (let n = words.length; n >= 1; n -= 1) {
+			if (collect(explicit, words.slice(0, n).join(" "), allowTools)) break;
+		}
+	}
+	const implied: string[] = [];
+	const words = text.match(WORD) ?? [];
+	const isRole = (word: string | undefined) => word !== undefined && ROLE_WORDS.has(bare(word));
+	for (let n = Math.min(3, words.length - 1); n >= 1; n -= 1) {
+		if (isRole(words[words.length - n - 1])) collect(implied, words.slice(words.length - n).join(" "), false);
+		if (isRole(words[n])) collect(implied, words.slice(0, n).join(" "), false);
+	}
+	return { explicit, implied };
+}
+
+export function companyCandidates(query: string): string[] {
+	const { explicit, implied } = companyPhrases(query);
+	return [...explicit, ...implied];
+}
+
+// A company the query names as the mentor's employer that is, or starts with,
+// a well-known company: "Google", or the full "Google DeepMind". An explicit
+// at/from phrase wins: when there is one, role-adjacent words are not
+// consulted ("mentors at Acme using Figma" is about Acme).
+export function knownCompanyIn(query: string): string {
+	const { explicit, implied } = companyPhrases(query);
+	for (const candidate of explicit.length > 0 ? explicit : implied) {
+		const known = knownCompanyPrefix(candidate);
+		if (known) return known;
+	}
+	return "";
+}
+
+// A candidate that some returned mentor's current employer starts with. An
+// exact match takes that mentor's spelling; a prefix match keeps the query's
+// phrase, so "Acme" confirmed by an "Acme Labs" mentor still means all of
+// Acme. "product manager" never becomes a company.
+export function companyConfirmedByEmployers(query: string, employers: string[]): string {
+	const current = employers.map(currentEmployer).filter(Boolean);
+	for (const candidate of companyCandidates(query)) {
+		const wanted = employerTokens(candidate);
+		const exact = current.find((employer) => employerTokens(employer) === wanted);
+		if (exact) return exact;
+		if (current.some((employer) => isCurrentEmployer(employer, candidate))) return candidate;
+	}
+	return "";
+}

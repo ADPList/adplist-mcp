@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { emitPublicEvent } from "./analytics.ts";
 import { formatPublicError, publicErrorCode, type PublicErrorBody } from "./errors.ts";
-import { enforcePublicRateLimit } from "./rateLimit.ts";
+import { enforcePublicRateLimit, type RateLimitSignal } from "./rateLimit.ts";
 import {
 	parsePublicMcpPath,
 	sessionIdForSource,
@@ -19,7 +19,7 @@ import {
 
 // Public, no-login, read-only MCP tier (ADPLIST-4479): `/public/mcp` and
 // `/public/{source}/mcp`. Stateless Streamable HTTP with JSON responses — no
-// Durable Object, KV, or D1 on this path. Hand-rolled rather than the SDK
+// KV or D1, and no Durable Object beyond the per-IP rate limiter. Hand-rolled rather than the SDK
 // transport so every byte of every response, including validation failures,
 // is under the public mapper's control.
 export const PUBLIC_SERVER_INFO = { name: "adplist-mcp-public", version: "0.1.0" } as const;
@@ -38,7 +38,7 @@ export const PUBLIC_TOOLS = [
 		name: "search_mentors",
 		title: "Search ADPList mentors",
 		description:
-			"Search ADPList's public mentor directory without signing in. Accepts a natural-language query or a mentor's name, plus optional company, discipline, country, and language filters. Returns up to 9 mentors (5 by default), each with name, headline, company, expertise, disciplines, languages, country, profile photo, public rating and review count when available, a short note on which of the mentor's profile fields match the query, and a link to the mentor's public adplist.org profile. Mentors who are not publicly listed are never returned. Read-only; booking happens on adplist.org.",
+			"Search ADPList's public mentor directory without signing in. Accepts a natural-language query or a mentor's name, plus optional company, discipline, country, and language filters. Company means the mentor's current employer only: a company given in the filter, or a well-known company named in the query (e.g. \"product manager Google\"), returns only mentors who currently work there, never people who worked there in the past. Returns up to 9 mentors (5 by default), each with name, headline, current company, expertise, disciplines, languages, country, profile photo, public rating and review count when available, a short note on which of the mentor's profile fields match the query, and a link to the mentor's public adplist.org profile. Mentors who are not publicly listed are never returned. Read-only; booking happens on adplist.org.",
 		inputSchema: jsonSchema(publicSearchInputSchema),
 		annotations: { title: "Search ADPList mentors", ...TOOL_ANNOTATIONS },
 	},
@@ -123,6 +123,7 @@ async function routePublicRequest(
 
 	const sessionSource = sourceFromSessionId(request.headers.get("Mcp-Session-Id"));
 	let newSessionId: string | null = null;
+	const rateLimit: RateLimitSignal = {};
 	const responses: JsonRpcResponse[] = [];
 	for (const message of messages) {
 		const record = isRecord(message) ? message : null;
@@ -146,11 +147,15 @@ async function routePublicRequest(
 			continue;
 		}
 		const source: PublicSource = route.source ?? sessionSource ?? "mcp";
-		const response = await handleMethod(record.method, id, params, request, env, ctx, source);
+		const response = await handleMethod(record.method, id, params, request, env, ctx, source, rateLimit);
 		responses.push(response);
 	}
 
 	const extra: Record<string, string> = newSessionId ? { "Mcp-Session-Id": newSessionId } : {};
+	// The JSON-RPC body stays the fixed RATE_LIMITED tool error; the HTTP layer
+	// carries the retry hint. Numbers only, never the key or IP.
+	if (rateLimit.remaining !== undefined) extra["x-public-rl-remaining"] = String(rateLimit.remaining);
+	if (rateLimit.retryAfter !== undefined) extra["Retry-After"] = String(rateLimit.retryAfter);
 	if (responses.length === 0) return new Response(null, { status: 202, headers: publicHeaders(extra) });
 	return jsonResponse(Array.isArray(body) ? responses : responses[0], 200, extra);
 }
@@ -163,6 +168,7 @@ async function handleMethod(
 	env: Env,
 	ctx: WaitUntil | undefined,
 	source: PublicSource,
+	rateLimit: RateLimitSignal,
 ): Promise<JsonRpcResponse> {
 	switch (method) {
 		case "ping":
@@ -180,7 +186,7 @@ async function handleMethod(
 			if (name !== "search_mentors" && name !== "get_mentor_profile") {
 				return { jsonrpc: "2.0", id, error: RPC_ERRORS.invalidParams };
 			}
-			const result = await callPublicTool(name, params.arguments, request, env, ctx, source);
+			const result = await callPublicTool(name, params.arguments, request, env, ctx, source, rateLimit);
 			return { jsonrpc: "2.0", id, result };
 		}
 		default:
@@ -195,9 +201,10 @@ export async function callPublicTool(
 	env: Env,
 	ctx: WaitUntil | undefined,
 	source: PublicSource,
+	rateLimit: RateLimitSignal = {},
 ) {
 	try {
-		await enforcePublicRateLimit(env, request);
+		await enforcePublicRateLimit(env, request, rateLimit);
 	} catch (error) {
 		return toolError(error);
 	}
@@ -288,7 +295,7 @@ export function publicHeaders(extra: Record<string, string> = {}): Headers {
 		"Access-Control-Allow-Methods": "POST, GET, OPTIONS",
 		"Access-Control-Allow-Headers":
 			"Content-Type, Accept, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID",
-		"Access-Control-Expose-Headers": "Mcp-Session-Id",
+		"Access-Control-Expose-Headers": "Mcp-Session-Id, Retry-After, x-public-rl-remaining",
 		"Access-Control-Max-Age": "86400",
 	});
 	for (const [key, value] of Object.entries(extra)) headers.set(key, value);

@@ -35,6 +35,9 @@ import { enforceToolCallRateLimit } from "./rateLimit";
 import { handlePublicRequest } from "./public/mcp";
 import type { McpUserProps } from "./types";
 
+// Strict per-IP limiter for the public tier (binding PUBLIC_RATE_LIMIT_DO).
+export { PublicRateLimiter } from "./public/rateLimiterObject";
+
 export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 	server = new McpServer(
 		{

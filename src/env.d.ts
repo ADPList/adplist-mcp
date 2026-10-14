@@ -11,6 +11,8 @@ declare global {
 		// Public no-login tier (ADPLIST-4479).
 		PUBLIC_OPT_OUT_SLUGS?: string;
 		PUBLIC_RATE_LIMITER?: RateLimit;
+		// Strict per-IP limit: PublicRateLimiter Durable Object.
+		PUBLIC_RATE_LIMIT_DO?: DurableObjectNamespace;
 		AMPLITUDE_API_KEY?: string;
 	}
 }

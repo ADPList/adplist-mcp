@@ -42,6 +42,11 @@
 			{
 				"class_name": "MyMCP",
 				"name": "MCP_OBJECT"
+			},
+			// Strict per-IP limit for public tools/call (src/public/rateLimiterObject.ts).
+			{
+				"class_name": "PublicRateLimiter",
+				"name": "PUBLIC_RATE_LIMIT_DO"
 			}
 		]
 	},
@@ -66,6 +71,12 @@
 			"tag": "v1",
 			"new_sqlite_classes": [
 				"MyMCP"
+			]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": [
+				"PublicRateLimiter"
 			]
 		}
 	]

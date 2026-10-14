@@ -6,6 +6,14 @@ import { handlePublicRequest, PUBLIC_TOOLS } from "../src/public/mcp.ts";
 import { PUBLIC_MENTOR_KEYS, publicPhotoUrl, publicProfileUrl } from "../src/public/mapper.ts";
 import { normalizeSource, parsePublicMcpPath, sourceFromClientName } from "../src/public/source.ts";
 import { publicVisibilityUrl } from "../src/public/visibility.ts";
+import { PUBLIC_RATE_WINDOWS, takeRateSlot } from "../src/public/rateWindows.ts";
+import {
+	companyCandidates,
+	companyConfirmedByEmployers,
+	currentEmployer,
+	isCurrentEmployer,
+	knownCompanyIn,
+} from "../src/public/company.ts";
 import { checkField, FIELDS, pageTexts, verifyMentor } from "../scripts/verify-public-fields.mjs";
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
@@ -59,10 +67,36 @@ const NAMES = {
 	"array-flags": "Ari Flags",
 	"no-optout-flag": "Nova Flagless",
 	"left-google": "Lee Left",
+	"now-google": "Nora Now",
+	"past-google": "Pat Past",
+	"ina-initech": "Ina Initech",
+	"pia-google": "Pia Pm",
+	"nico-google": "Nico Now",
+	"paul-google": "Paul Past",
+	"mia-meta": "Mia Meta",
+	"dee-deepmind": "Dee Mind",
+	"rita-reality": "Rita Reality",
+	"fay-figma": "Fay Figma",
+	"cara-canva": "Cara Canva",
 };
 
-// Search rows say Google for every *-google slug; these identity records disagree.
-const RECORD_COMPANY = { "left-google": "Other Company" };
+// Search rows say Google for every *-google slug unless overridden here.
+const ROW_EMPLOYER = {
+	"now-google": "Google | previously at Meta",
+	"past-google": "Stripe | previously at Google",
+	"ina-initech": "Initech",
+	"nico-google": "Google | previously at Meta",
+	"paul-google": "Stripe | previously at Google",
+	"mia-meta": "Meta",
+	"dee-deepmind": "Google DeepMind",
+	"rita-reality": "Meta Reality Labs | previously at Google",
+	"fay-figma": "Figma",
+	"cara-canva": "Canva",
+};
+const PM_SLUGS = new Set(["pia-google", "nico-google", "paul-google", "mia-meta"]);
+const titleOf = (slug) => (PM_SLUGS.has(slug) ? "Senior Product Manager" : "Senior Product Designer");
+// Identity records; left-google disagrees with its search row.
+const RECORD_COMPANY = { ...ROW_EMPLOYER, "left-google": "Other Company" };
 
 const HIDDEN_OVERRIDES = {
 	"inactive-mentor": { is: { active: false } },
@@ -114,7 +148,7 @@ function identityRecord(slug) {
 			email: `${slug}@${FAKE_HOST}`,
 			bio: `Bio for ${NAMES[slug]}. ${"Mentoring product teams for a decade. ".repeat(20)}`,
 			profile: {
-				title: "Senior Product Designer",
+				title: titleOf(slug),
 				organization: company,
 				image: `https://adplist-bucket.s3.us-east-2.amazonaws.com/media/${slug}.jpg?X-Amz-Signature=${FAKE_TOKEN}`,
 			},
@@ -150,8 +184,8 @@ function searchRow(slug, position) {
 		position,
 		name: NAMES[slug],
 		slug,
-		title: "Senior Product Designer",
-		employer: slug.endsWith("google") ? "Google" : "Acme Labs",
+		title: titleOf(slug),
+		employer: ROW_EMPLOYER[slug] ?? (slug.endsWith("google") ? "Google" : "Acme Labs"),
 		expertise: ["Product Strategy", "Mobile Apps"],
 		disciplines: ["Product Design"],
 		languages: ["English"],
@@ -264,7 +298,32 @@ function makeEnv(overrides = {}) {
 				return { success: true };
 			},
 		},
+		PUBLIC_RATE_LIMIT_DO: fakeRateLimitNamespace(),
 		...overrides,
+	};
+}
+
+// Stands in for the PublicRateLimiter namespace: one Map-backed store per
+// idFromName, running the same window logic the Durable Object runs.
+function fakeRateLimitNamespace({ now = () => Date.now(), take } = {}) {
+	const stores = new Map();
+	const names = [];
+	return {
+		names,
+		idFromName(name) {
+			names.push(name);
+			return { name };
+		},
+		get(id) {
+			return {
+				async take() {
+					if (take) return take();
+					if (!stores.has(id.name)) stores.set(id.name, new Map());
+					const store = stores.get(id.name);
+					return takeRateSlot({ get: (key) => store.get(key), set: (key, value) => store.set(key, value) }, now());
+				},
+			};
+		},
 	};
 }
 
@@ -635,14 +694,14 @@ test("search (intent path) returns only allowlisted fields, built from scratch",
 	assert.equal(searchCall.url.searchParams.get("provider"), "explore");
 });
 
-test("search (company path) puts employer matches first and stays clean", async () => {
+test("search (company path) returns only current employees and stays clean", async () => {
 	await withFetch(fakeUpstream(), async () => {
 		const result = await callTool("search_mentors", { query: "mentors at Google", limit: 9 });
 		assertPublicOutputClean(result);
 		const mentors = mentorsOf(result.body);
 		assert.deepEqual(
 			mentors.map((mentor) => mentor.slug),
-			["gina-google", "gary-google", "bob-visible"],
+			["gina-google", "gary-google"],
 		);
 		assert.equal(mentors[0].why_match, "Works at Google.");
 
@@ -675,13 +734,387 @@ test("an explicit company filter drops intent results and identity records at ot
 		const none = await callTool("search_mentors", { query: "design", company: "Initech" });
 		assert.deepEqual(mentorsOf(none.body), []);
 
-		// A company read from the query only orders; other matches still follow.
+		// A well-known company read from the query filters the same way.
 		const implied = await callTool("search_mentors", { query: "mentors at Google", limit: 9 });
 		assert.deepEqual(
 			mentorsOf(implied.body).map((mentor) => mentor.slug),
-			["gina-google", "left-google", "gary-google", "bob-visible"],
+			["gina-google", "gary-google"],
+		);
+
+		// An unconfirmed "mentors at X" phrase (no mentor works at X) only orders.
+		const place = await callTool("search_mentors", { query: "mentors from Canada", limit: 9 });
+		assert.equal(place.body.result.isError, undefined);
+	});
+});
+
+test("company is parsed out of free-text queries; role words alone are not a company", () => {
+	for (const [query, company] of [
+		["product manager Google", "Google"],
+		["PM at Meta", "Meta"],
+		["designer from Airbnb", "Airbnb"],
+		["google pm", "Google"],
+		["Senior UX designer @ Stripe", "Stripe"],
+		["mentors who work at Google", "Google"],
+	]) {
+		assert.equal(knownCompanyIn(query), company, query);
+	}
+	for (const query of ["product manager", "senior product designer", "mentors from Canada", "Alice Visible", "pm"]) {
+		assert.equal(knownCompanyIn(query), "", query);
+	}
+	assert.deepEqual(companyCandidates("product manager"), []);
+	assert.ok(companyCandidates("ux designer Initech").includes("Initech"));
+	assert.ok(!companyCandidates("ux designer Initech").some((candidate) => /designer|ux/i.test(candidate)));
+});
+
+test("tools, skills and the requester's own employer are not a mentor-employer filter", () => {
+	// A product or skill named without at/from is something to learn.
+	for (const query of [
+		"help with Figma",
+		"Figma designer",
+		"designer Figma",
+		"learn Notion",
+		"Jira",
+		"product manager Excel",
+		"python engineer",
+		"SQL analyst",
+		"Webflow designer",
+		"Framer developer",
+		"Sketch designer",
+		// Tools that are also companies (Codex repro: "Canva designer").
+		"Canva designer",
+		"designer Canva",
+		"Salesforce admin",
+		"HubSpot marketer",
+		"Tableau analyst",
+		"Miro facilitator",
+		"Airtable consultant",
+	]) {
+		assert.equal(knownCompanyIn(query), "", query);
+		assert.deepEqual(companyCandidates(query), [], query);
+	}
+	// The requester's employer is who is asking, not who they want.
+	for (const query of [
+		"I work at Google and need a design mentor",
+		"I'm at Google, looking for a design mentor",
+		"I'm a PM at Meta and want design mentorship",
+		"I've been working at Stripe and need career advice",
+		"my company Google wants me to learn design",
+		"my company is Airbnb, need a mentor",
+		// Any first-person clause, with or without an article (Codex repro).
+		"I'm PM at Google and need a design mentor",
+		"I’m PM at Google and need a design mentor",
+		"Im PM at Google, need a design mentor",
+		"I am senior designer at Meta but want PM mentorship",
+		"I'm currently a designer for Stripe and looking for a mentor",
+		"we are at Airbnb and need a mentor",
+		"my team is with Google. Need a design mentor",
+		"I work for Google and need a design mentor",
+	]) {
+		assert.equal(knownCompanyIn(query), "", query);
+	}
+	// Explicit employer intent wins over a tool and over the requester.
+	assert.equal(knownCompanyIn("mentors at Acme using Figma"), "");
+	assert.equal(companyCandidates("mentors at Acme using Figma")[0], "Acme");
+	assert.ok(!companyCandidates("mentors at Acme using Figma").includes("Figma"));
+	assert.equal(knownCompanyIn("mentors at Google using Figma"), "Google");
+	assert.equal(knownCompanyIn("I work at Google and want mentors from Meta"), "Meta");
+	assert.equal(knownCompanyIn("I'm at Stripe, looking for a PM at Google"), "Google");
+	// at/from still makes a tool-named company an employer.
+	assert.equal(knownCompanyIn("designers at Figma"), "Figma");
+	assert.equal(knownCompanyIn("PM from Notion"), "Notion");
+	assert.equal(knownCompanyIn("people at Figma"), "Figma");
+	assert.equal(knownCompanyIn("designer at Canva"), "Canva");
+	assert.equal(knownCompanyIn("mentors from Canva"), "Canva");
+	assert.equal(knownCompanyIn("designer @Canva"), "Canva");
+	assert.equal(knownCompanyIn("I'm PM at Stripe and need a designer at Google"), "Google");
+	// Skill phrasing is never an employer, and a tool after a bare at is not one.
+	for (const query of [
+		"I want to get better at Figma",
+		"good at Figma",
+		"someone good at Figma",
+		"skilled at Google Ads",
+		"experience at Stripe",
+		"mentor with experience with Notion",
+		"help at Figma",
+	]) {
+		assert.equal(knownCompanyIn(query), "", query);
+		assert.deepEqual(companyCandidates(query), [], query);
+	}
+	// Typographic apostrophes still mark the requester's own employer.
+	for (const query of [
+		"I’m a PM at Google and need a design mentor",
+		"I‘m at Google, looking for a design mentor",
+		"Iʼve been working at Stripe and need career advice",
+	]) {
+		assert.equal(knownCompanyIn(query), "", query);
+	}
+});
+
+test("tool and requester mentions do not filter search results; an explicit company wins", async () => {
+	const search = {
+		...COMPANY_SEARCH,
+		"help with Figma": ["alice-visible", "gina-google", "bob-visible"],
+		"I work at Google and need a design mentor": ["alice-visible", "gina-google", "bob-visible"],
+		"I want to get better at Figma": ["alice-visible", "gina-google", "fay-figma"],
+		"I'm a PM at Google and need a design mentor": ["alice-visible", "gina-google", "fay-figma"],
+		"I’m a PM at Google and need a design mentor": ["alice-visible", "gina-google", "fay-figma"],
+		"I’m PM at Google and need a design mentor": ["alice-visible", "gina-google", "fay-figma"],
+		"Canva designer": ["alice-visible", "cara-canva", "bob-visible"],
+	};
+	await withFetch(fakeUpstream({ search }), async () => {
+		for (const query of ["help with Figma", "I work at Google and need a design mentor"]) {
+			const result = await callTool("search_mentors", { query, limit: 9 });
+			assertPublicOutputClean(result);
+			assert.deepEqual(
+				mentorsOf(result.body).map((mentor) => mentor.slug),
+				["alice-visible", "gina-google", "bob-visible"],
+				query,
+			);
+		}
+		// Skill phrasing and a typographic apostrophe in the requester's own
+		// employment keep mentors at Acme, Google and Figma alike.
+		for (const query of [
+			"I want to get better at Figma",
+			"I'm a PM at Google and need a design mentor",
+			"I’m a PM at Google and need a design mentor",
+			// Requester phrasing without an article (Codex repro).
+			"I’m PM at Google and need a design mentor",
+		]) {
+			const result = await callTool("search_mentors", { query, limit: 9 });
+			assertPublicOutputClean(result);
+			assert.deepEqual(
+				mentorsOf(result.body).map((mentor) => mentor.slug),
+				["alice-visible", "gina-google", "fay-figma"],
+				query,
+			);
+		}
+
+		// A tool that is also a company is a skill without at/from (Codex repro):
+		// "Canva designer" keeps the Acme designers alongside the Canva one.
+		const canva = await callTool("search_mentors", { query: "Canva designer", limit: 9 });
+		assertPublicOutputClean(canva);
+		assert.deepEqual(
+			mentorsOf(canva.body).map((mentor) => mentor.slug),
+			["alice-visible", "cara-canva", "bob-visible"],
+		);
+
+		// The explicit company argument overrides whatever the text implies.
+		const explicit = await callTool("search_mentors", { query: "help with Figma", company: "Google", limit: 9 });
+		const mentors = mentorsOf(explicit.body);
+		assert.ok(mentors.length > 0);
+		for (const mentor of mentors) assert.equal(mentor.company, "Google");
+		const overridden = await callTool("search_mentors", { query: "PM at Meta", company: "Google", limit: 9 });
+		assert.ok(mentorsOf(overridden.body).length > 0);
+		for (const mentor of mentorsOf(overridden.body)) assert.equal(mentor.company, "Google");
+	});
+});
+
+test("company matching uses the current employer only, never a previous one", () => {
+	assert.equal(currentEmployer("Google | previously at Meta"), "Google");
+	assert.equal(currentEmployer("Stripe | previously at Google"), "Stripe");
+	assert.equal(currentEmployer("Spotify (ex-Google)"), "Spotify");
+	assert.equal(currentEmployer("Meta, formerly Facebook"), "Meta");
+	assert.equal(currentEmployer("Canva · Prev. Atlassian"), "Canva");
+	assert.equal(currentEmployer("ex-Google"), "");
+	assert.equal(currentEmployer("Coca-Cola"), "Coca-Cola");
+	assert.equal(currentEmployer("Acme Labs"), "Acme Labs");
+	assert.ok(isCurrentEmployer("Google | previously at Meta", "Google"));
+	assert.ok(!isCurrentEmployer("Google | previously at Meta", "Meta"));
+	assert.ok(!isCurrentEmployer("Stripe | previously at Google", "Google"));
+	assert.ok(!isCurrentEmployer("Spotify (ex-Google)", "Google"));
+	assert.ok(isCurrentEmployer("Google LLC", "google"));
+});
+
+test("multiword employers sharing a well-known prefix are kept whole and matched by token prefix", () => {
+	// The full employer phrase survives parsing; it is never cut to the known prefix.
+	assert.equal(knownCompanyIn("mentors at Google DeepMind"), "Google DeepMind");
+	assert.equal(knownCompanyIn("PM at Meta Reality Labs"), "Meta Reality Labs");
+	assert.equal(knownCompanyIn("designer from Google DeepMind"), "Google DeepMind");
+	assert.equal(knownCompanyIn("google deepmind pm"), "google deepmind");
+	for (const query of ["mentors at Google DeepMind", "PM at Meta Reality Labs", "google deepmind pm"]) {
+		const candidates = companyCandidates(query);
+		assert.ok(!candidates.some((c) => /^(google|meta)$/i.test(c)), `${query}: ${candidates.join()}`);
+	}
+	// Clause words still end the phrase.
+	assert.equal(knownCompanyIn("mentors at Google in London"), "Google");
+	assert.equal(knownCompanyIn("mentors at Google based in London"), "Google");
+	assert.equal(knownCompanyIn("PM at Meta who mentors"), "Meta");
+
+	// Token prefix: a company matches employers that start with all its tokens.
+	assert.ok(isCurrentEmployer("Google DeepMind", "Google"));
+	assert.ok(isCurrentEmployer("Google DeepMind", "Google DeepMind"));
+	assert.ok(isCurrentEmployer("Google DeepMind Ltd", "google deepmind"));
+	assert.ok(!isCurrentEmployer("Google", "Google DeepMind"));
+	assert.ok(!isCurrentEmployer("Google Cloud", "Google DeepMind"));
+	assert.ok(!isCurrentEmployer("DeepMind", "Google DeepMind"));
+	assert.ok(!isCurrentEmployer("Snapchat", "Snap"));
+	assert.ok(isCurrentEmployer("Meta Reality Labs | previously at Google", "Meta"));
+	// Still current employer only.
+	assert.ok(!isCurrentEmployer("Meta Reality Labs | previously at Google", "Google"));
+	assert.ok(!isCurrentEmployer("Stripe (ex-Google DeepMind)", "Google"));
+
+	// A prefix-confirmed company keeps the query's phrase, not the longer employer.
+	assert.equal(companyConfirmedByEmployers("ux designer Initech", ["Initech Labs"]), "Initech");
+	assert.equal(companyConfirmedByEmployers("ux designer Initech", ["INITECH"]), "INITECH");
+	assert.equal(companyConfirmedByEmployers("mentors at Initech Labs", ["Initech"]), "");
+});
+
+test("a multiword employer filters to that employer; its known prefix still covers it", async () => {
+	const search = {
+		...DEFAULT_SEARCH,
+		Google: ["gina-google", "dee-deepmind"],
+		"Google DeepMind": ["dee-deepmind", "gina-google"],
+		"mentors at Google DeepMind": ["gina-google", "dee-deepmind", "alice-visible"],
+		"mentors at Google": ["alice-visible", "dee-deepmind"],
+		Meta: ["mia-meta", "rita-reality"],
+		"Meta Reality Labs": ["rita-reality", "mia-meta"],
+		"PM at Meta Reality Labs": ["mia-meta", "rita-reality"],
+		"PM at Meta": ["rita-reality"],
+	};
+	const slugsFor = async (query) => {
+		const result = await callTool("search_mentors", { query, limit: 9 });
+		assertPublicOutputClean(result);
+		return mentorsOf(result.body).map((mentor) => mentor.slug);
+	};
+	await withFetch(fakeUpstream({ search }), async () => {
+		assert.deepEqual(await slugsFor("mentors at Google DeepMind"), ["dee-deepmind"]);
+		assert.deepEqual((await slugsFor("mentors at Google")).sort(), ["dee-deepmind", "gina-google"]);
+		assert.deepEqual(await slugsFor("PM at Meta Reality Labs"), ["rita-reality"]);
+		assert.deepEqual((await slugsFor("PM at Meta")).sort(), ["mia-meta", "rita-reality"]);
+
+		// The explicit argument follows the same rule.
+		const explicit = await callTool("search_mentors", { query: "design", company: "Google DeepMind", limit: 9 });
+		assert.deepEqual(
+			mentorsOf(explicit.body).map((mentor) => mentor.slug),
+			["dee-deepmind"],
+		);
+		for (const mentor of mentorsOf(explicit.body)) assert.equal(mentor.company, "Google DeepMind");
+	});
+});
+
+test("a bare well-known company query is an employer filter; a bare tool is not (Codex repro)", async () => {
+	for (const [query, company] of [
+		["Google", "Google"],
+		["google", "Google"],
+		["  Google  ", "Google"],
+		["Google DeepMind", "Google DeepMind"],
+		["mentors Google", "Google"],
+		["Google mentors", "Google"],
+		["mentor at Google DeepMind", "Google DeepMind"],
+		["people at Meta", "Meta"],
+		["Goldman Sachs", "Goldman Sachs"],
+	]) {
+		assert.equal(knownCompanyIn(query), company, query);
+	}
+	for (const query of ["Canva", "Figma", "Notion", "Salesforce", "mentors Figma", "Initech", "mentors"]) {
+		assert.equal(knownCompanyIn(query), "", query);
+	}
+
+	const search = {
+		...DEFAULT_SEARCH,
+		Google: ["gina-google", "mia-meta", "dee-deepmind"],
+		"Google DeepMind": ["gina-google", "mia-meta", "dee-deepmind"],
+		Canva: ["alice-visible", "cara-canva", "bob-visible"],
+	};
+	const callSearch = async (query) => {
+		const result = await callTool("search_mentors", { query, limit: 9 });
+		assertPublicOutputClean(result);
+		return result;
+	};
+	await withFetch(fakeUpstream({ search }), async () => {
+		const google = await callSearch("Google");
+		assert.deepEqual(mentorsOf(google.body).map((mentor) => mentor.slug).sort(), ["dee-deepmind", "gina-google"]);
+		const deepmind = await callSearch("Google DeepMind");
+		assert.deepEqual(mentorsOf(deepmind.body).map((mentor) => mentor.slug), ["dee-deepmind"]);
+		const canva = await callSearch("Canva");
+		assert.deepEqual(
+			mentorsOf(canva.body).map((mentor) => mentor.slug),
+			["alice-visible", "cara-canva", "bob-visible"],
 		);
 	});
+});
+
+const COMPANY_SEARCH = {
+	...DEFAULT_SEARCH,
+	Google: ["gina-google", "past-google", "now-google", "left-google", "gary-google"],
+	"product manager Google": ["mia-meta", "paul-google", "pia-google", "nico-google"],
+	"google pm": ["paul-google", "mia-meta"],
+	"PM at Meta": ["nico-google", "paul-google"],
+	"designer from Airbnb": ["alice-visible", "bob-visible"],
+	"ux designer Initech": ["alice-visible", "ina-initech", "bob-visible"],
+	"product manager": ["mia-meta", "paul-google", "pia-google"],
+};
+// Employer searches for the PM test: Google returns a past employee and a
+// mentor whose company text mentions Meta only as a previous employer.
+const PM_COMPANY_SEARCH = {
+	...COMPANY_SEARCH,
+	Google: ["pia-google", "paul-google", "nico-google"],
+	Meta: ["nico-google", "mia-meta"],
+};
+
+test("a company named in free text runs the company path and filters on current employer", async () => {
+	const calls = [];
+	await withFetch(fakeUpstream({ search: PM_COMPANY_SEARCH, calls }), async () => {
+		for (const query of ["product manager Google", "google pm"]) {
+			const result = await callTool("search_mentors", { query, limit: 9 });
+			assertPublicOutputClean(result);
+			const mentors = mentorsOf(result.body);
+			assert.deepEqual(
+				mentors.map((mentor) => mentor.slug).sort(),
+				["nico-google", "pia-google"],
+				query,
+			);
+			for (const mentor of mentors) assert.equal(mentor.company, "Google", query);
+			assert.ok(mentors.every((mentor) => mentor.why_match.startsWith("Works at Google")), query);
+		}
+		// The employer search used the canonical company, not the query's casing.
+		assert.ok(calls.some(({ url }) => url.pathname === "/search" && url.searchParams.get("q") === "Google"));
+
+		// "Google | previously at Meta" is a Google employee, not a Meta one.
+		const meta = await callTool("search_mentors", { query: "PM at Meta", limit: 9 });
+		assert.deepEqual(
+			mentorsOf(meta.body).map((mentor) => mentor.slug),
+			["mia-meta"],
+		);
+
+		// "from Airbnb" runs the company path; nobody works there, so nobody else
+		// is passed off as an Airbnb mentor.
+		const airbnb = await callTool("search_mentors", { query: "designer from Airbnb", limit: 9 });
+		assert.deepEqual(mentorsOf(airbnb.body), []);
+		assert.ok(calls.some(({ url }) => url.searchParams.get("q") === "Airbnb"));
+
+		// Not a well-known company, but a returned mentor currently works there.
+		const initech = await callTool("search_mentors", { query: "ux designer Initech", limit: 9 });
+		assert.deepEqual(
+			mentorsOf(initech.body).map((mentor) => mentor.slug),
+			["ina-initech"],
+		);
+
+		// Role words alone: no company filter, mentors at any employer.
+		const role = await callTool("search_mentors", { query: "product manager", limit: 9 });
+		const companies = new Set(mentorsOf(role.body).map((mentor) => mentor.company));
+		assert.ok(companies.has("Meta") && companies.has("Google") && companies.has("Stripe"), [...companies].join());
+	});
+});
+
+test("an explicit company filter matches the current employer only", async () => {
+	await withFetch(fakeUpstream({ search: COMPANY_SEARCH }), async () => {
+		const google = await callTool("search_mentors", { query: "design", company: "Google", limit: 9 });
+		assertPublicOutputClean(google);
+		const slugs = mentorsOf(google.body).map((mentor) => mentor.slug);
+		assert.deepEqual(slugs, ["gina-google", "now-google", "gary-google"]);
+		assert.ok(!slugs.includes("past-google"), "previously at Google is not at Google");
+		assert.equal(mentorsOf(google.body)[1].company, "Google", "past employers are cut from company");
+
+		const meta = await callTool("search_mentors", { query: "design", company: "Meta", limit: 9 });
+		assert.deepEqual(mentorsOf(meta.body), []);
+	});
+});
+
+test("search_mentors description says company is the current employer", () => {
+	const [search] = PUBLIC_TOOLS;
+	assert.match(search.description, /current employer/);
+	assert.match(search.inputSchema.properties.company.description, /current employer/);
 });
 
 test("search (literal name path) finds a visible mentor by name and stays clean", async () => {
@@ -1012,8 +1445,194 @@ test("missing or broken rate limiter binding returns UNAVAILABLE", async () => {
 	}
 });
 
+test("strict windows: 10 calls / 10 s and 30 calls / 60 s, denied calls not counted", () => {
+	assert.deepEqual(
+		PUBLIC_RATE_WINDOWS.map(({ limit, periodMs }) => [limit, periodMs]),
+		[
+			[10, 10_000],
+			[30, 60_000],
+		],
+	);
+	const store = new Map();
+	const fake = { get: (key) => store.get(key), set: (key, value) => store.set(key, value) };
+	const results = [];
+	for (let i = 0; i < 12; i += 1) results.push(takeRateSlot(fake, 120_000 + i * 100));
+	assert.equal(results.filter((r) => r.allowed).length, 10);
+	assert.deepEqual(results[0], { allowed: true, remaining: 9, retryAfter: 0 });
+	assert.equal(results[9].remaining, 0);
+	assert.deepEqual(results[10], { allowed: false, remaining: 0, retryAfter: 9 });
+
+	// Three full bursts fill the minute; the fourth burst waits for the minute.
+	const minute = new Map();
+	const m = { get: (key) => minute.get(key), set: (key, value) => minute.set(key, value) };
+	let allowed = 0;
+	for (const start of [0, 10_000, 20_000, 30_000]) {
+		for (let i = 0; i < 10; i += 1) allowed += takeRateSlot(m, 600_000 + start + i).allowed ? 1 : 0;
+	}
+	assert.equal(allowed, 30);
+	assert.deepEqual(takeRateSlot(m, 630_500), { allowed: false, remaining: 0, retryAfter: 30 });
+	assert.equal(takeRateSlot(m, 660_000).allowed, true, "a new minute starts fresh");
+});
+
+test("strict per-IP limiter caps a 32-calls-in-11s burst and sets Retry-After", async () => {
+	let clock = 1_000_000;
+	const namespace = fakeRateLimitNamespace({ now: () => clock });
+	const env = makeEnv({ PUBLIC_RATE_LIMIT_DO: namespace });
+	let searchCalls = 0;
+	const upstream = fakeUpstream();
+	const statuses = [];
+	await withFetch(
+		async (input, init) => {
+			if (new URL(String(input)).pathname === "/search") searchCalls += 1;
+			return upstream(input, init);
+		},
+		async () => {
+			for (let i = 0; i < 32; i += 1) {
+				clock = 1_000_000 + Math.floor((i * 11_000) / 32);
+				const result = await callTool(
+					"search_mentors",
+					{ query: "mobile app design" },
+					{ env, headers: { "X-Forwarded-For": "198.51.100.1" } },
+				);
+				assertPublicOutputClean(result);
+				const limited = result.body.result.isError === true;
+				if (limited) {
+					assert.equal(errorCodeOf(result.body), "RATE_LIMITED");
+					assert.equal(result.response.status, 200, "JSON-RPC result stays a tool error");
+					assert.match(result.response.headers.get("Retry-After"), /^[1-9]\d*$/);
+					assert.equal(result.response.headers.get("x-public-rl-remaining"), "0");
+				} else {
+					assert.equal(result.response.headers.get("Retry-After"), null);
+					assert.match(result.response.headers.get("x-public-rl-remaining"), /^\d+$/);
+				}
+				for (const value of result.response.headers.values()) assert.ok(!value.includes("203.0.113.7"));
+				statuses.push(limited ? "limited" : "ok");
+			}
+		},
+	);
+	const ok = statuses.filter((s) => s === "ok").length;
+	// 30 calls land in the first 10 s window (10 allowed), 2 in the next.
+	assert.equal(ok, 12);
+	assert.ok(searchCalls > 0);
+	assert.ok(namespace.names.every((name) => name === "ip:203.0.113.7"), "keyed on CF-Connecting-IP only");
+	assert.ok(env.PUBLIC_RATE_LIMITER.keys.length === 32, "binding stays the first gate");
+});
+
+test("a rate-limited call never reaches upstream; the binding gate short-circuits the DO", async () => {
+	const namespace = fakeRateLimitNamespace({ take: () => ({ allowed: false, remaining: 0, retryAfter: 7 }) });
+	let upstreamCalls = 0;
+	await withFetch(
+		async () => {
+			upstreamCalls += 1;
+			return new Response("{}");
+		},
+		async () => {
+			const strict = await callTool("search_mentors", { query: "design" }, { env: makeEnv({ PUBLIC_RATE_LIMIT_DO: namespace }) });
+			assert.equal(errorCodeOf(strict.body), "RATE_LIMITED");
+			assert.equal(strict.response.headers.get("Retry-After"), "7");
+
+			const gateDo = fakeRateLimitNamespace();
+			const env = makeEnv({
+				PUBLIC_RATE_LIMIT_DO: gateDo,
+				PUBLIC_RATE_LIMITER: { limit: async () => ({ success: false }) },
+			});
+			const gated = await callTool("get_mentor_profile", { mentor_slug: "alice-visible" }, { env });
+			assert.equal(errorCodeOf(gated.body), "RATE_LIMITED");
+			assert.equal(gated.response.headers.get("Retry-After"), "60");
+			assert.deepEqual(gateDo.names, [], "DO not consulted once the binding says no");
+		},
+	);
+	assert.equal(upstreamCalls, 0);
+});
+
+test("missing, throwing, or malformed strict limiter fails closed with UNAVAILABLE", async () => {
+	let upstreamCalls = 0;
+	await withFetch(
+		async () => {
+			upstreamCalls += 1;
+			return new Response("{}");
+		},
+		async () => {
+			for (const namespace of [
+				undefined,
+				{},
+				fakeRateLimitNamespace({
+					take: () => {
+						throw new Error(`DO overloaded ${FAKE_HOST} ${FAKE_ID}`);
+					},
+				}),
+				fakeRateLimitNamespace({ take: () => ({ allowed: true }) }),
+				fakeRateLimitNamespace({ take: () => null }),
+			]) {
+				const result = await callTool(
+					"search_mentors",
+					{ query: "design" },
+					{ env: makeEnv({ PUBLIC_RATE_LIMIT_DO: namespace }) },
+				);
+				assertPublicOutputClean(result);
+				assert.equal(errorCodeOf(result.body), "UNAVAILABLE");
+				assert.equal(result.response.headers.get("Retry-After"), null);
+			}
+		},
+	);
+	assert.equal(upstreamCalls, 0);
+});
+
+test("PublicRateLimiter Durable Object counts atomically in SQLite storage", async () => {
+	register(
+		`data:text/javascript,${encodeURIComponent(
+			'export async function resolve(s, c, n) { if (s === "cloudflare:workers") return { url: "data:text/javascript,export class WorkerEntrypoint {} export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }", shortCircuit: true }; return n(s, c); }',
+		)}`,
+	);
+	const { PublicRateLimiter } = await import("../src/public/rateLimiterObject.ts");
+	// Just enough of SqlStorage for the three statements the class runs.
+	const rows = new Map();
+	const statements = [];
+	let inTransaction = false;
+	const sql = {
+		exec(query, ...params) {
+			statements.push({ query, inTransaction });
+			if (query.startsWith("CREATE TABLE")) return { toArray: () => [] };
+			if (query.startsWith("SELECT")) {
+				const row = rows.get(params[0]);
+				return { toArray: () => (row ? [{ ...row }] : []) };
+			}
+			if (query.startsWith("INSERT")) {
+				rows.set(params[0], { start: params[1], count: params[2] });
+				return { toArray: () => [] };
+			}
+			throw new Error(`unexpected SQL ${query}`);
+		},
+	};
+	const ctx = {
+		storage: {
+			sql,
+			transactionSync(fn) {
+				inTransaction = true;
+				try {
+					return fn();
+				} finally {
+					inTransaction = false;
+				}
+			},
+		},
+	};
+	const limiter = new PublicRateLimiter(ctx, {});
+	assert.match(statements[0].query, /CREATE TABLE IF NOT EXISTS windows/);
+	const decisions = Array.from({ length: 11 }, () => limiter.take());
+	assert.equal(decisions.filter((d) => d.allowed).length, 10);
+	assert.equal(decisions[10].allowed, false);
+	assert.ok(decisions[10].retryAfter >= 1);
+	assert.deepEqual([...rows.keys()].sort(), ["burst", "minute"]);
+	assert.equal(rows.get("minute").count, 10);
+	assert.ok(
+		statements.slice(1).every((statement) => statement.inTransaction),
+		"every read and write runs inside one synchronous transaction",
+	);
+});
+
 test("rate limit applies to tools/call only, not to initialize or tools/list", async () => {
-	const env = makeEnv({ PUBLIC_RATE_LIMITER: undefined });
+	const env = makeEnv({ PUBLIC_RATE_LIMITER: undefined, PUBLIC_RATE_LIMIT_DO: undefined });
 	assert.equal((await rpc("initialize", {}, { env })).response.status, 200);
 	const list = await rpc("tools/list", {}, { env });
 	assert.equal(list.body.result.tools.length, 2);
@@ -1083,7 +1702,7 @@ test("analytics events carry no query, IP, or slug and never block the response"
 	assert.equal(events[0].source, "claude");
 	assert.equal(events[0].had_company_filter, true);
 	assert.equal(events[0].intent_category, "company");
-	assert.equal(events[0].result_count, 3);
+	assert.equal(events[0].result_count, 2);
 	assert.equal(events[1].found, true);
 	assert.equal(events[2].found, false);
 
@@ -1253,4 +1872,20 @@ test("wrangler binds the public rate limiter; preview config never touches prod"
 	assert.doesNotMatch(previewSource, /cf4e12c1471a4be59dd1cf6c1f7f6de3|bf3eddaf-3e63-4b26-8008-9ee111a010ea/);
 	assert.match(previewSource, /"name": "PUBLIC_RATE_LIMITER"/);
 	assert.doesNotMatch(previewSource, /"namespace_id": "4479"/);
+});
+
+test("both configs bind the PublicRateLimiter DO with an appended SQLite migration", () => {
+	assert.match(indexSource, /export \{ PublicRateLimiter \} from "\.\/public\/rateLimiterObject"/);
+	for (const [source, firstTag, newTag] of [
+		[wranglerSource, "v1", "v2"],
+		[previewSource, "preview-v1", "preview-v2"],
+	]) {
+		assert.match(source, /"class_name": "PublicRateLimiter",\s*"name": "PUBLIC_RATE_LIMIT_DO"/);
+		const migrations = source.slice(source.indexOf('"migrations"'));
+		const first = migrations.indexOf(`"tag": "${firstTag}"`);
+		const added = migrations.indexOf(`"tag": "${newTag}"`);
+		assert.ok(first > 0 && added > first, "new migration appended after the existing one");
+		assert.match(migrations.slice(first, added), /"new_sqlite_classes": \[\s*"MyMCP"\s*\]/, "existing migration unchanged");
+		assert.match(migrations.slice(added), /"new_sqlite_classes": \[\s*"PublicRateLimiter"\s*\]/);
+	}
 });

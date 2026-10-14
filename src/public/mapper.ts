@@ -1,5 +1,6 @@
 import { asRecord, labelsOf, textOf } from "../profile.ts";
 import { employerTokens, type SearchServiceMentor } from "../searchMentors.ts";
+import { currentEmployer } from "./company.ts";
 import type { PublicSource } from "./source.ts";
 
 // Public mapper (ADPLIST-4479). Every public object is built field by field
@@ -203,7 +204,9 @@ function buildMentor(fields: {
 		profile_url: publicProfileUrl(fields.slug, fields.source),
 	};
 	if (fields.title) mentor.title = fields.title;
-	if (fields.company) mentor.company = fields.company;
+	// Current employer only: "Google | previously at Meta" is shown as Google.
+	const company = currentEmployer(fields.company);
+	if (company) mentor.company = company;
 	if (fields.country) mentor.country = fields.country;
 	if (fields.bio) mentor.bio = fields.bio;
 	if (fields.photo_url) mentor.photo_url = fields.photo_url;

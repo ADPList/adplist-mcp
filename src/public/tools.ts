@@ -12,6 +12,7 @@ import {
 	type SearchMentorsInput,
 	type SearchServiceMentor,
 } from "../searchMentors.ts";
+import { companyConfirmedByEmployers, isCurrentEmployer, knownCompanyIn } from "./company.ts";
 import { PublicError } from "./errors.ts";
 import {
 	mapPublicProfile,
@@ -41,7 +42,7 @@ export const publicSearchInputSchema = z.object({
 		.min(1)
 		.max(100)
 		.optional()
-		.describe("Only mentors whose current employer is this company, e.g. Google."),
+		.describe("Only mentors whose current employer is this company, e.g. Google. Past employers do not count."),
 	discipline: z
 		.string()
 		.trim()
@@ -123,8 +124,17 @@ export async function publicSearchMentors(
 		throw new PublicError("INVALID_INPUT");
 	}
 
-	const company = input.company ?? employerCandidate(input.query);
-	const nameCandidate = company ? "" : literalNameCandidate(input.query);
+	// Company = current employer. An explicit `company` always wins. Otherwise a
+	// well-known company the query names as the mentor's employer ("PM at Meta",
+	// "product manager Google", "google pm") is a filter; tools ("help with
+	// Figma") and the requester's own employer ("I work at Google") are not. A
+	// query phrase like "mentors at X" or a role-adjacent word becomes one too
+	// once a returned mentor's current employer confirms it; an unconfirmed
+	// "mentors at X" phrase only orders, as before.
+	let company = input.company ?? knownCompanyIn(input.query);
+	let strictCompany = Boolean(company);
+	const phrasedCompany = company ? "" : employerCandidate(input.query);
+	const nameCandidate = company || phrasedCompany ? "" : literalNameCandidate(input.query);
 	const meta = (count: number, byName = false): PublicSearchMeta => ({
 		result_count: count,
 		had_company_filter: Boolean(company),
@@ -132,7 +142,6 @@ export async function publicSearchMentors(
 	});
 	const why: WhyMatchContext = {
 		query: input.query,
-		company: company || undefined,
 		discipline: input.discipline,
 		language: input.language,
 	};
@@ -155,26 +164,41 @@ export async function publicSearchMentors(
 		if (named.length > 0) return { output: { mentors: named }, meta: meta(named.length, true) };
 	}
 
-	const [employerRows, intentRows] = await Promise.all([
-		company ? employerSearch(baseUrl, company, searchInput, intentUrl) : Promise.resolve([]),
+	const searchCompany = company || phrasedCompany;
+	const [firstEmployerRows, intentRows] = await Promise.all([
+		searchCompany ? employerSearch(baseUrl, searchCompany, searchInput, intentUrl) : Promise.resolve([]),
 		anonymousSearch(intentUrl)
 			.then((rows) => rankRows(rows, searchInput))
 			.catch(() => null),
 	]);
+	let employerRows = firstEmployerRows;
 	if (employerRows === null && intentRows === null) throw new PublicError("UNAVAILABLE");
-	if (!company && intentRows === null) throw new PublicError("UNAVAILABLE");
+	if (!searchCompany && intentRows === null) throw new PublicError("UNAVAILABLE");
 
-	// An explicit company is a filter, not a hint: intent rows at other
-	// employers are dropped before gating (so they cannot take the ≤9 slots),
-	// and every mapped card is checked again after the identity record has had
-	// its say on the company. A company found in the query only orders results.
-	const requiredCompany = input.company ? employerTokens(input.company) : undefined;
-	const atRequiredCompany = (value: string) =>
-		requiredCompany === undefined || (Boolean(requiredCompany) && employerTokens(value) === requiredCompany);
-	const candidates: Candidate[] = [
-		...(employerRows ?? []),
-		...(intentRows ?? []).filter((row) => atRequiredCompany(textOf(row.employer) || textOf(row.company))),
-	]
+	if (!company) {
+		const confirmed = companyConfirmedByEmployers(input.query, [
+			...(employerRows ?? []).map(rowEmployer),
+			...(intentRows ?? []).map(rowEmployer),
+		]);
+		if (confirmed) {
+			company = confirmed;
+			strictCompany = true;
+			if (employerTokens(confirmed) !== employerTokens(phrasedCompany)) {
+				employerRows = await employerSearch(baseUrl, confirmed, searchInput, intentUrl);
+			}
+		} else if (phrasedCompany) {
+			company = phrasedCompany;
+		}
+	}
+	why.company = company || undefined;
+
+	// A company filter, not a hint: rows at other current employers are
+	// dropped before gating (so they cannot take the ≤9 slots), and every
+	// mapped card is checked again after the identity record has had its say
+	// on the company. Past employers never count.
+	const atRequiredCompany = (value: string) => !strictCompany || isCurrentEmployer(value, company);
+	const candidates: Candidate[] = [...(employerRows ?? []), ...(intentRows ?? [])]
+		.filter((row) => atRequiredCompany(rowEmployer(row)))
 		.filter((row) => textOf(row.slug))
 		.map((row) => ({ slug: textOf(row.slug), row }));
 	const mentors = (await gateCandidates(env, candidates, source, why, MAX_PUBLIC_LIMIT))
@@ -247,8 +271,13 @@ async function gateCandidates(
 	return mentors.slice(0, limit);
 }
 
-// Bare company query, keep rows whose employer carries every company token —
-// the same rule the signed-in search uses — then apply its domain ranking.
+function rowEmployer(row: SearchServiceMentor): string {
+	return textOf(row.employer) || textOf(row.company);
+}
+
+// Bare company query, keep rows whose current employer carries every company
+// token — the signed-in search's rule, minus any "previously …" tail — then
+// apply its domain ranking.
 async function employerSearch(
 	baseUrl: string,
 	company: string,
@@ -259,10 +288,7 @@ async function employerSearch(
 	url.searchParams.set("pageSize", new URL(intentUrl).searchParams.get("pageSize") ?? "9");
 	const rows = await anonymousSearch(url.toString()).catch(() => null);
 	if (!rows) return null;
-	const wanted = employerTokens(company);
-	const matching = rows.filter(
-		(row) => employerTokens(textOf(row.employer) || textOf(row.company)) === wanted,
-	);
+	const matching = rows.filter((row) => isCurrentEmployer(rowEmployer(row), company));
 	return rankRows(matching, searchInput);
 }
 

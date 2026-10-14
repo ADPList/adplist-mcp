@@ -21,7 +21,8 @@ Field check: `scripts/verify-public-fields.mjs`
   `tools/list`, `tools/call`, notifications (→ `202`), and empty
   `resources/list` / `prompts/list`. `GET`/`DELETE` → `405` (no server stream).
   Body cap 64 KB, batch cap 10.
-- Stateless: no Durable Object, KV, or D1. Because `clientInfo` only arrives on
+- Stateless: no KV or D1, and no Durable Object beyond the per-IP rate
+  limiter (see Rate limit). Because `clientInfo` only arrives on
   `initialize`, the chosen source is carried in the `Mcp-Session-Id` the server
   issues (`adplist-public-{source}-{uuid}`). Only the enum value is ever read
   back; a path segment always wins over the session id.
@@ -39,14 +40,37 @@ links, or `_meta` UI.
 
 - **`search_mentors`** — `query` (required, 1–200 chars), optional `company`,
   `discipline` (ADPList taxonomy), `country` (ISO alpha-2), `language`,
-  `limit` (1–9, default 5). Flow: employer match (explicit `company`, or
-  inferred from "mentors at X") → literal-name lookup → intent search, all via
-  anonymous `GET {SEARCH_SERVICE_URL}/search?provider=explore` using the
-  existing URL builder, employer-token rule and domain ranking. At most 9
-  candidates are gated in parallel per phase. An explicit `company` is a hard
-  filter: intent results at other employers are dropped, and every returned
-  card's final company (identity record first) must match it. A company
-  inferred from the query only puts employer matches first.
+  `limit` (1–9, default 5). Flow: company detection → literal-name lookup →
+  employer + intent search, all via anonymous
+  `GET {SEARCH_SERVICE_URL}/search?provider=explore` using the existing URL
+  builder, employer-token rule and domain ranking. At most 9 candidates are
+  gated in parallel per phase.
+
+  **Company = current employer** (`src/public/company.ts`). The mentor's
+  company is the search row's `employer` / identity `profile.organization`,
+  cut before any `previously` / `prev.` / `formerly` / `ex-` tail:
+  `"Google | previously at Meta"` is Google and only Google, and is shown as
+  `Google`. Work history and bio never count. A company is a hard filter —
+  intent rows at other current employers are dropped before gating, and every
+  card's final company (identity record first) must match — when it is:
+  - the explicit `company` input;
+  - a well-known company (small built-in list) named in the query, or a
+    phrase starting with one: "product manager Google", "PM at Meta",
+    "designer from Airbnb", "google pm", "mentors at Google DeepMind"; or
+  - a phrase from the query ("mentors at X", "… at/from X", or 1–3 words at
+    either end) that a returned mentor's current employer starts with.
+
+  Matching is by whole-token prefix: the employer must start with every
+  company token. A query for `Google` matches `Google` and `Google DeepMind`;
+  a query for `Google DeepMind` matches only employers starting with
+  `Google DeepMind`, never plain `Google`. The query's employer phrase is kept
+  whole and only shortened at clause words ("Meta in London" → Meta), so
+  "Meta Reality Labs" is never cut down to "Meta".
+
+  Candidate phrases containing a role, level, field or filler word are never
+  companies, so "product manager" alone is not one. An unconfirmed
+  "mentors at X" phrase (e.g. "mentors from Canada") only orders results, as
+  before.
 - **`get_mentor_profile`** — `mentor_slug` (slug or adplist.org/mentors URL).
   Rating and review count come from the existing statistics endpoint,
   best-effort (fields omitted if it fails).
@@ -58,7 +82,7 @@ Nothing upstream is spread or passed through.
 
 | Field | Notes |
 |---|---|
-| `name`, `slug`, `title`, `company` | identity record first, search row as fallback |
+| `name`, `slug`, `title`, `company` | identity record first, search row as fallback; `company` is the current employer only (text before any "previously"/"ex-" tail) |
 | `expertise[]`, `disciplines[]`, `languages[]` | ≤10 labels, ≤80 chars each |
 | `country` | display name, never ISO code alone |
 | `bio` | profile only, ≤300 chars |
@@ -150,12 +174,33 @@ errors use fixed messages too (`Parse error`, `Invalid Request`,
 
 ## Rate limit
 
-`PUBLIC_RATE_LIMITER` (Workers Rate Limiting binding, `wrangler.jsonc`
-`ratelimits`, 30 calls / 60 s) on every `tools/call`, keyed on
-`CF-Connecting-IP` — never `X-Forwarded-For`. `initialize`, `tools/list` and
-`ping` are not counted. If the binding is missing or throws, tools return
-`UNAVAILABLE` rather than serving unthrottled. The binding is per-location and
-eventually consistent; it is a cost/abuse brake, not an enumeration guarantee.
+Two layers on every `tools/call`, both keyed on `CF-Connecting-IP` — never
+`X-Forwarded-For` — and both checked before any upstream fetch.
+`initialize`, `tools/list` and `ping` are not counted.
+
+1. `PUBLIC_RATE_LIMITER` (Workers Rate Limiting binding, `wrangler.jsonc`
+   `ratelimits`, 30 calls / 60 s): a cheap first gate. It is per-location,
+   cached and eventually consistent — a preview reviewer got 32 calls in 11 s,
+   all 200 — so it is not the limit.
+2. `PUBLIC_RATE_LIMIT_DO` → `PublicRateLimiter` (`src/public/rateLimiterObject.ts`),
+   a SQLite-backed Durable Object addressed by `idFromName("ip:" + IP)`.
+   Fixed-window counters, **10 calls / 10 s and 30 calls / 60 s**, read and
+   written in one synchronous `transactionSync`, so each decision is atomic and
+   global. Denied calls are not counted. It stores only window start times and
+   counts, never the IP (the IP is only the object's name).
+
+If either binding is missing, throws, or returns an unexpected shape, tools
+return `UNAVAILABLE` (fail closed).
+
+When limited, the JSON-RPC result is still the fixed `RATE_LIMITED` tool error
+(HTTP 200); the HTTP response adds `Retry-After` (seconds until the exceeded
+window resets; 60 when the first-gate binding refused). Every response to a
+`tools/call` that reached the strict limiter also carries
+`x-public-rl-remaining` — a bare number (calls left in the tightest window), no
+key or IP. Both headers are CORS-exposed.
+
+Migrations are append-only: `v2` (`wrangler.jsonc`) and `preview-v2`
+(`wrangler.preview.jsonc`) add `PublicRateLimiter` as a new SQLite class.
 
 ## Reporting
 

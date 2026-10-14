@@ -199,17 +199,18 @@ Configured in `wrangler.jsonc`:
 - `PROFILE_DB` — D1 database for MCP career context
 - `MCP_OBJECT` — Durable Object binding for MCP SSE sessions
 - `routes` — custom-domain binding for `mcp.adplist.org`
-- `PUBLIC_RATE_LIMITER` — Workers Rate Limiting binding for the public tier (30 `tools/call` per minute per IP)
+- `PUBLIC_RATE_LIMITER` — Workers Rate Limiting binding for the public tier (30 `tools/call` per minute per IP), a cheap first gate
+- `PUBLIC_RATE_LIMIT_DO` — `PublicRateLimiter` Durable Object (SQLite, migration `v2`): the strict per-IP public limit, 10 calls / 10 s and 30 calls / 60 s
 - `PUBLIC_OPT_OUT_SLUGS` — comma-separated mentor slugs hidden from the public tier
 - `AMPLITUDE_API_KEY` (secret, optional) — sends public-tier events to Amplitude
 
 ### Public no-login tier
 
-`/public/mcp` and `/public/{chatgpt|claude|mcp|api}/mcp` serve a stateless, read-only MCP endpoint with two tools (`search_mentors`, `get_mentor_profile`) and no sign-in. It runs before the OAuth provider and never touches KV, D1, or the Durable Object. Allowlist, visibility rules, errors, reporting, and the WAF plan: [`docs/public-mcp.md`](docs/public-mcp.md).
+`/public/mcp` and `/public/{chatgpt|claude|mcp|api}/mcp` serve a stateless, read-only MCP endpoint with two tools (`search_mentors`, `get_mentor_profile`) and no sign-in. It runs before the OAuth provider and never touches KV, D1, or the MCP session Durable Object; its only Durable Object is the per-IP `PublicRateLimiter`. Allowlist, visibility rules, errors, reporting, and the WAF plan: [`docs/public-mcp.md`](docs/public-mcp.md).
 
 ### Public tier preview
 
-`wrangler.preview.jsonc` deploys a separate Worker, `adplist-mcp-public-preview`, on `*.workers.dev` only: no routes or custom domain, its own rate-limit namespace, and placeholder KV/D1 IDs. KV, D1, and the Durable Object are only there because `src/index.ts` exports the OAuth tier at module load; the public route never uses them.
+`wrangler.preview.jsonc` deploys a separate Worker, `adplist-mcp-public-preview`, on `*.workers.dev` only: no routes or custom domain, its own rate-limit namespace, and placeholder KV/D1 IDs. KV, D1, and the `MyMCP` Durable Object are only there because `src/index.ts` exports the OAuth tier at module load; the public route never uses them. The `PublicRateLimiter` Durable Object (migration `preview-v2`) is used: without it every public tool call returns `UNAVAILABLE`.
 
 One-time setup, with preview-only resources (never the production IDs):
 
