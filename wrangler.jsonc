@@ -15,8 +15,22 @@
 		"SEARCH_SERVICE_URL": "https://api.adplist.org",
 		"MEETINGS_SERVICE_URL": "https://api.adplist.org",
 		"WELCOME_EMAIL_FROM_EMAIL": "felix@adplist.org",
-		"WELCOME_EMAIL_FROM_NAME": "Felix Lee"
+		"WELCOME_EMAIL_FROM_NAME": "Felix Lee",
+		// Kill list for the public /public/mcp tier: comma-separated mentor slugs,
+		// case-insensitive. See docs/public-mcp.md.
+		"PUBLIC_OPT_OUT_SLUGS": ""
 	},
+	// Per-IP limit for public tools/call (keyed on CF-Connecting-IP).
+	"ratelimits": [
+		{
+			"name": "PUBLIC_RATE_LIMITER",
+			"namespace_id": "4479",
+			"simple": {
+				"limit": 30,
+				"period": 60
+			}
+		}
+	],
 	"routes": [
 		{
 			"pattern": "mcp.adplist.org",

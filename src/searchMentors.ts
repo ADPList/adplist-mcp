@@ -20,7 +20,7 @@ export type SearchMentorsInput = {
 	filters?: SearchMentorsFilters;
 };
 
-type SearchServiceMentor = {
+export type SearchServiceMentor = {
 	name?: string;
 	slug?: string;
 	title?: string;
@@ -68,7 +68,7 @@ type SearchServiceMentor = {
 	position?: number;
 };
 
-type SearchServiceResponse = {
+export type SearchServiceResponse = {
 	results?: SearchServiceMentor[];
 	queryID?: string;
 	indexUsed?: string;
@@ -1159,7 +1159,7 @@ export function employerCandidate(intent: string): string {
 // not Databricks. "and" and legal suffixes are noise ("Johnson & Johnson",
 // "Google LLC"). Top-ups cover the near misses.
 const EMPLOYER_NOISE_TOKENS = new Set(["and", "inc", "llc", "ltd", "limited", "co", "corp", "corporation", "plc", "gmbh"]);
-function employerTokens(value: string): string {
+export function employerTokens(value: string): string {
 	return slugifyLiteralName(value)
 		.split("-")
 		.filter((word) => word && !EMPLOYER_NOISE_TOKENS.has(word))
@@ -1285,7 +1285,7 @@ async function searchLiteralNameViaExplore(
 // "Leeman", never "ann" inside "Joanne"). Two adjacent requested words may also
 // match one token together, because names get typed split where the profile
 // stores them joined ("Ria Santika" for "Riasantika").
-function nameContainsEveryWord(name: string, candidateName: string): boolean {
+export function nameContainsEveryWord(name: string, candidateName: string): boolean {
 	const nameTokens = slugifyLiteralName(name).split("-").filter(Boolean);
 	const words = slugifyLiteralName(candidateName).split("-").filter(Boolean);
 	if (nameTokens.length === 0 || words.length === 0) return false;
@@ -1300,7 +1300,7 @@ function nameContainsEveryWord(name: string, candidateName: string): boolean {
 	return true;
 }
 
-function literalNameCandidate(intent: string): string {
+export function literalNameCandidate(intent: string): string {
 	const requestIntent = currentRequestIntent(intent)
 		.replace(/[“”]/g, '"')
 		.replace(/[’]/g, "'")
@@ -1353,7 +1353,7 @@ function stripLiteralNameFiller(value: string): string {
 	return words.filter((word) => !LITERAL_NAME_STOP_WORDS.has(word.toLowerCase())).join(" ");
 }
 
-function slugifyLiteralName(value: string): string {
+export function slugifyLiteralName(value: string): string {
 	return value
 		.normalize("NFKD")
 		.replace(/[\u0300-\u036f]/g, "")

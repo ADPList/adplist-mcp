@@ -8,6 +8,10 @@ declare global {
 		WELCOME_EMAIL_FROM_EMAIL?: string;
 		WELCOME_EMAIL_FROM_NAME?: string;
 		ASSETS?: Fetcher;
+		// Public no-login tier (ADPLIST-4479).
+		PUBLIC_OPT_OUT_SLUGS?: string;
+		PUBLIC_RATE_LIMITER?: RateLimit;
+		AMPLITUDE_API_KEY?: string;
 	}
 }
 

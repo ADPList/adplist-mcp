@@ -199,6 +199,40 @@ Configured in `wrangler.jsonc`:
 - `PROFILE_DB` — D1 database for MCP career context
 - `MCP_OBJECT` — Durable Object binding for MCP SSE sessions
 - `routes` — custom-domain binding for `mcp.adplist.org`
+- `PUBLIC_RATE_LIMITER` — Workers Rate Limiting binding for the public tier (30 `tools/call` per minute per IP)
+- `PUBLIC_OPT_OUT_SLUGS` — comma-separated mentor slugs hidden from the public tier
+- `AMPLITUDE_API_KEY` (secret, optional) — sends public-tier events to Amplitude
+
+### Public no-login tier
+
+`/public/mcp` and `/public/{chatgpt|claude|mcp|api}/mcp` serve a stateless, read-only MCP endpoint with two tools (`search_mentors`, `get_mentor_profile`) and no sign-in. It runs before the OAuth provider and never touches KV, D1, or the Durable Object. Allowlist, visibility rules, errors, reporting, and the WAF plan: [`docs/public-mcp.md`](docs/public-mcp.md).
+
+### Public tier preview
+
+`wrangler.preview.jsonc` deploys a separate Worker, `adplist-mcp-public-preview`, on `*.workers.dev` only: no routes or custom domain, its own rate-limit namespace, and placeholder KV/D1 IDs. KV, D1, and the Durable Object are only there because `src/index.ts` exports the OAuth tier at module load; the public route never uses them.
+
+One-time setup, with preview-only resources (never the production IDs):
+
+```bash
+npx wrangler login
+npx wrangler kv namespace create adplist-mcp-public-preview-oauth   # → id
+npx wrangler d1 create adplist-mcp-profile-preview                    # → database_id
+# replace __PREVIEW_KV_ID__ and __PREVIEW_D1_ID__ in wrangler.preview.jsonc
+```
+
+Deploy and smoke test:
+
+```bash
+git checkout <branch> && git status            # clean tree; you are shipping what you see
+npx wrangler deploy -c wrangler.preview.jsonc   # bypasses scripts/deploy.mjs on purpose: preview only
+curl -s -X POST https://adplist-mcp-public-preview.<account>.workers.dev/public/claude/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+node scripts/verify-public-fields.mjs \
+  --endpoint https://adplist-mcp-public-preview.<account>.workers.dev/public/mcp
+```
+
+Never run `wrangler deploy` without `-c wrangler.preview.jsonc` from this flow; the default config targets production.
 
 ### Development
 

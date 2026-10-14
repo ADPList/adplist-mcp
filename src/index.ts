@@ -32,6 +32,7 @@ import {
 } from "./mentor";
 import { toolResponse } from "./errors";
 import { enforceToolCallRateLimit } from "./rateLimit";
+import { handlePublicRequest } from "./public/mcp";
 import type { McpUserProps } from "./types";
 
 export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
@@ -647,6 +648,10 @@ export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		try {
 			const url = new URL(request.url);
+			// Public no-login tier (ADPLIST-4479): stateless, read-only, and
+			// deliberately outside OAuthProvider. Everything else falls through.
+			const publicResponse = await handlePublicRequest(request, env, ctx);
+			if (publicResponse) return publicResponse;
 			if (url.pathname === "/assets/claude-mcp.gif" && env.ASSETS) {
 				const response = await env.ASSETS.fetch(request);
 				if (response.status !== 404) return response;
