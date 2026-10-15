@@ -519,14 +519,18 @@ export function mapSearchMentorsResponse(
 	response: SearchServiceResponse,
 	input: SearchMentorsInput,
 	trimToRows = true,
+	// The public search ranks deeper pages (`maxRows` overrides the
+	// max_results cap) and, with `roleDecided`, applies its own role policy, so
+	// the product-management and domain fits here only order, never drop.
+	options: { maxRows?: number; roleDecided?: boolean } = {},
 ): SearchMentorsOutput {
 	input = withInferredFilters(input);
 	const domainRule = domainFitRuleFor(input);
-	const resultCount = resultMaxResults(input, domainRule);
+	const resultCount = options.maxRows ?? resultMaxResults(input, domainRule);
 	const candidates = (response.results ?? [])
 		.filter((mentor) => matchesRequestedCountry(mentor, input.filters?.country))
-		.filter((mentor) => matchesProductManagementFit(mentor, input))
-		.filter((mentor) => matchesDomainFit(mentor, domainRule, input));
+		.filter((mentor) => options.roleDecided || matchesProductManagementFit(mentor, input))
+		.filter((mentor) => options.roleDecided || matchesDomainFit(mentor, domainRule, input));
 	const mentors = rankMentorCandidates(candidates, domainRule, input)
 		.slice(0, resultCount)
 		.map((mentor) => {

@@ -16,6 +16,7 @@ import {
 	knownCompanyIn,
 	titleMarksEmployerPast,
 } from "../src/public/company.ts";
+import { requestedRoleFamilies, roleFit } from "../src/public/role.ts";
 import { checkField, FIELDS, pageTexts, verifyMentor } from "../scripts/verify-public-fields.mjs";
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
@@ -99,7 +100,7 @@ const ROW_EMPLOYER = {
 	"fay-figma": "Figma",
 	"cara-canva": "Canva",
 };
-const PM_SLUGS = new Set(["pia-google", "nico-google", "paul-google", "mia-meta"]);
+const PM_SLUGS = new Set(["pia-google", "nico-google", "paul-google", "mia-meta", "rita-reality"]);
 // Company field Google; the title says whether that is current (ADPLIST-4479).
 const TITLE_OVERRIDES = {
 	"chris-google": "Former Director of UX",
@@ -109,6 +110,13 @@ const TITLE_OVERRIDES = {
 };
 const titleOf = (slug) =>
 	TITLE_OVERRIDES[slug] ?? (PM_SLUGS.has(slug) ? "Senior Product Manager" : "Senior Product Designer");
+// Per-slug disciplines/expertise for both the search row and the identity
+// record; everyone else is a Product Design mentor.
+const LABEL_OVERRIDES = {};
+// A stale search-index title; the card always shows the profile's.
+const ROW_TITLE_OVERRIDES = {};
+const disciplinesOf = (slug) => LABEL_OVERRIDES[slug]?.disciplines ?? ["Product Design"];
+const expertiseOf = (slug) => LABEL_OVERRIDES[slug]?.expertise ?? ["Product Strategy", "Mobile Apps"];
 // Identity records; left-google disagrees with its search row.
 const RECORD_COMPANY = { ...ROW_EMPLOYER, "left-google": "Other Company" };
 
@@ -192,11 +200,8 @@ function identityRecord(slug) {
 			},
 			country: { iso: "SG", countryName: "Singapore", legacyId: 7 },
 			experiences: {
-				expertise: [
-					{ legacyId: 1, expertise: "Product Strategy" },
-					{ legacyId: 2, expertise: "Mobile Apps" },
-				],
-				disciplines: [{ legacyId: 3, discipline: "Product Design" }],
+				expertise: expertiseOf(slug).map((expertise, index) => ({ legacyId: index + 1, expertise })),
+				disciplines: disciplinesOf(slug).map((discipline, index) => ({ legacyId: index + 3, discipline })),
 				experienceLevel: { legacyId: 9, seniority: "Senior" },
 			},
 			preferences: { languages: [{ legacyId: 1, language: "English" }], timezone: "Asia/Singapore" },
@@ -223,10 +228,10 @@ function searchRow(slug, position) {
 		position,
 		name: NAMES[slug],
 		slug,
-		title: titleOf(slug),
+		title: ROW_TITLE_OVERRIDES[slug] ?? titleOf(slug),
 		employer: ROW_EMPLOYER[slug] ?? (slug.endsWith("google") ? "Google" : "Acme Labs"),
-		expertise: ["Product Strategy", "Mobile Apps"],
-		disciplines: ["Product Design"],
+		expertise: expertiseOf(slug),
+		disciplines: disciplinesOf(slug),
 		languages: ["English"],
 		country: { iso: "SG", name: "Singapore" },
 		average_rating: 4.9123,
@@ -1433,6 +1438,267 @@ test("Retired/Past/Ex company text is past when intent results include the emplo
 	} finally {
 		for (const table of [ROW_EMPLOYER, RECORD_COMPANY, NAMES]) delete table["fred-initech"];
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Role relevance (ADPLIST-4479): the right employer, and the right role there
+// ---------------------------------------------------------------------------
+
+// slug → [name, title, current company text, disciplines, expertise, hidden?]
+const ROLE_MENTORS = {
+	"noe-google": ["Noe Network", "Network Operations Engineer", "Google", ["Site Reliability"], ["Networking"]],
+	"cal-google": ["Cal Cad", "Hardware CAD Engineer", "Google", ["Hardware Design"], ["CAD"]],
+	"cy-google": ["Cy Secure", "Cyber Security Instructor", "Google", ["Security Engineering"], ["Teaching"]],
+	"sam-google": ["Sam Swe", "Software Engineer", "Google", ["Back-end"], ["Distributed Systems"]],
+	"uma-google": ["Uma Ux", "Senior UX Designer", "Google", ["UX Design"], ["Design Systems"]],
+	"fran-google": ["Fran Former", "Former UX Designer", "Google", ["UX Design"], []],
+	"pete-google": ["Pete Pd", "Product Designer", "Google", ["Product Design"], ["Prototyping"]],
+	"hal-google": ["Hal Hidden", "UX Designer", "Google", ["UX Design"], [], true],
+	"rae-google": ["Rae Research", "UX Researcher", "Google", ["UX Research"], ["Usability Testing"]],
+	"gus-google": ["Gus Gpm", "Group Product Manager", "Google", ["Generalist Product Management"], ["Roadmapping"]],
+	"dot-google": ["Dot Director", "Director", "Google", ["UX Design"], ["Leadership"]],
+	"fin-google": ["Fin Founder", "Founder", "Google", ["Back-end"], ["Fundraising"]],
+	"flo-google": ["Flo Founder", "Founder", "Google", [], ["Leadership"]],
+	"stu-google": ["Stu Stripe", "UX Designer", "Stripe | previously at Google", ["UX Design"], []],
+	"ivy-meta": ["Ivy Ios", "iOS Engineer", "Meta", ["iOS Engineering"], []],
+	"dan-meta": ["Dan Data", "Data Scientist", "Meta", ["Data Scientist"], []],
+	"mo-meta": ["Mo Pm", "Product Manager", "Meta", ["Generalist Product Management"], []],
+	"don-meta": ["Don Dev", "Software Engineer", "Meta", ["Front-end"], []],
+	"xia-meta": ["Xia Ex", "Ex-Meta Product Manager", "Meta", ["Generalist Product Management"], []],
+	"max-meta": ["Max Pm", "Senior PM", "Meta", ["Growth Product Management"], []],
+	"ed-meta": ["Ed Em", "Engineering Manager", "Meta", ["Back-end"], []],
+	"pam-meta": ["Pam Lead", "Product Lead", "Meta", ["Generalist Product Management"], []],
+	"pd-meta": ["Pia Designer", "Product Designer", "Meta", ["Product Design"], []],
+	"ari-airbnb": ["Ari Swe", "Software Engineer", "Airbnb", ["Back-end"], []],
+	"kay-airbnb": ["Kay Knowledge", "Knowledge Strategist", "Airbnb", ["Content Strategy"], ["Knowledge Management"]],
+	"dee-airbnb": ["Dee Design", "Staff Product Designer", "Airbnb", ["Product Design"], []],
+	"ben-airbnb": ["Ben Swe", "Senior Software Engineer", "Airbnb", ["Full stack"], []],
+	"una-airbnb": ["Una Ux", "UX Designer", "Airbnb", ["UX Design"], []],
+};
+
+const ROLE_SEARCH = {
+	...DEFAULT_SEARCH,
+	Google: [
+		"noe-google", "cal-google", "cy-google", "sam-google", "uma-google", "fran-google", "pete-google",
+		"hal-google", "rae-google", "gus-google", "dot-google", "fin-google", "flo-google", "stu-google",
+	],
+	Meta: ["ivy-meta", "dan-meta", "mo-meta", "don-meta", "xia-meta", "max-meta", "ed-meta", "pam-meta", "pd-meta"],
+	Airbnb: ["ari-airbnb", "kay-airbnb", "dee-airbnb", "ben-airbnb", "una-airbnb"],
+};
+
+async function withRoleMentors(mentors, run) {
+	for (const [slug, [name, title, company, disciplines, expertise, hidden]] of Object.entries(mentors)) {
+		NAMES[slug] = name;
+		TITLE_OVERRIDES[slug] = title;
+		ROW_EMPLOYER[slug] = company;
+		RECORD_COMPANY[slug] = company;
+		LABEL_OVERRIDES[slug] = { disciplines, expertise };
+		if (hidden) HIDDEN_OVERRIDES[slug] = { is: { suspended: true } };
+	}
+	try {
+		return await run();
+	} finally {
+		for (const slug of Object.keys(mentors)) {
+			for (const table of [NAMES, TITLE_OVERRIDES, ROW_EMPLOYER, RECORD_COMPANY, LABEL_OVERRIDES, HIDDEN_OVERRIDES, ROW_TITLE_OVERRIDES]) {
+				delete table[slug];
+			}
+		}
+	}
+}
+
+test("the requested role is parsed from the query without the company, plus the discipline", () => {
+	for (const [query, families] of [
+		["UX at Google", ["design"]],
+		["product manager at Meta", ["product"]],
+		["PM", ["product"]],
+		["designer from Airbnb", ["design"]],
+		["data scientist", ["data"]],
+		["engineering manager", ["engineering"]],
+		["researcher", ["design"]],
+		["growth marketer in Singapore", ["marketing"]],
+		["I'm a designer at Stripe, looking for a PM at Google", ["product"]],
+		["mentors at Google", []],
+		["Google", []],
+		["career advice", []],
+	]) {
+		assert.deepEqual(requestedRoleFamilies(query), families, query);
+	}
+	// The company's own words are not a role: "Data Co" is an employer.
+	assert.deepEqual(requestedRoleFamilies("mentors at Data Co", "Data Co"), []);
+	assert.deepEqual(requestedRoleFamilies("mentors", "", "UX Research"), ["design"]);
+	assert.deepEqual(requestedRoleFamilies("mentors", "", "Generalist Product Management"), ["product"]);
+});
+
+test("role fit: title first, then disciplines; clear mismatches only when nothing matches", () => {
+	const design = ["design"];
+	assert.deepEqual(roleFit(design, { title: "Senior UX Designer", disciplines: ["UX Design"] }), { score: 3, mismatch: false });
+	assert.deepEqual(roleFit(design, { title: "Director", disciplines: ["UX Design"] }), { score: 1, mismatch: false });
+	assert.deepEqual(roleFit(design, { title: "Founder", disciplines: [] }), { score: 0, mismatch: false });
+	assert.deepEqual(roleFit(design, { title: "Founder", disciplines: ["Back-end"] }), { score: 0, mismatch: true });
+	assert.deepEqual(roleFit(design, { title: "Software Engineer", disciplines: ["UX Engineering"] }), { score: 1, mismatch: false });
+	for (const [title, disciplines] of [
+		["Network Operations Engineer", ["Site Reliability"]],
+		["Hardware CAD Engineer", ["Hardware Design"]],
+		["Cyber Security Instructor", ["Security Engineering"]],
+		["Knowledge Strategist", ["Content Strategy"]],
+	]) {
+		assert.equal(roleFit(design, { title, disciplines }).mismatch, true, title);
+	}
+	assert.equal(roleFit(["product"], { title: "Senior Product Designer", disciplines: ["Product Design"] }).mismatch, true);
+	assert.equal(roleFit(["product"], { title: "Product Marketing Manager", disciplines: [] }).mismatch, true);
+});
+
+test("company searches return only the requested role there (live cases)", async () => {
+	await withRoleMentors(ROLE_MENTORS, () =>
+		withFetch(fakeUpstream({ search: ROLE_SEARCH }), async () => {
+			// "UX at Google": designers and researchers lead, the UX director with
+			// an ambiguous title follows, the founder with no role signal last.
+			const ux = await callTool("search_mentors", { query: "UX at Google", limit: 9 });
+			assertPublicOutputClean(ux);
+			const uxSlugs = mentorsOf(ux.body).map((mentor) => mentor.slug);
+			assert.deepEqual(uxSlugs.slice(0, 3).sort(), ["pete-google", "rae-google", "uma-google"]);
+			assert.deepEqual(uxSlugs.slice(3), ["dot-google", "flo-google"]);
+			for (const mentor of mentorsOf(ux.body)) assert.equal(mentor.company, "Google");
+
+			const pm = await callTool("search_mentors", { query: "product manager at Meta", limit: 9 });
+			assertPublicOutputClean(pm);
+			assert.deepEqual(
+				mentorsOf(pm.body).map((mentor) => mentor.slug).sort(),
+				["max-meta", "mo-meta", "pam-meta"],
+			);
+
+			const airbnb = await callTool("search_mentors", { query: "designer from Airbnb", limit: 9 });
+			assertPublicOutputClean(airbnb);
+			assert.deepEqual(
+				mentorsOf(airbnb.body).map((mentor) => mentor.slug).sort(),
+				["dee-airbnb", "una-airbnb"],
+			);
+		}),
+	);
+});
+
+test("PM with an explicit company keeps PMs and ambiguous titles without another role", async () => {
+	await withRoleMentors(ROLE_MENTORS, () =>
+		withFetch(fakeUpstream({ search: ROLE_SEARCH }), async () => {
+			const result = await callTool("search_mentors", { query: "PM", company: "Google", limit: 9 });
+			assertPublicOutputClean(result);
+			// The UX director and the back-end founder are other roles; the founder
+			// with no role signal stays, after the PM.
+			assert.deepEqual(
+				mentorsOf(result.body).map((mentor) => mentor.slug),
+				["gus-google", "flo-google"],
+			);
+		}),
+	);
+});
+
+// Product roles with no product-management label, which the signed-in
+// product-management filter drops for "product manager" but not for "PM".
+const PM_TITLE_MENTORS = {
+	"spm-google": ["Sky Pm", "Senior PM", "Google", [], []],
+	"pl-google": ["Lee Lead", "Product Lead", "Google", [], []],
+	"po-google": ["Oli Owner", "Product Owner", "Google", [], []],
+	"fo-google": ["Fay Founder", "Founder", "Google", [], []],
+	"fe-google": ["Fen Founder", "Founder", "Google", ["Back-end"], []],
+	"se-google": ["Sol Swe", "Software Engineer", "Google", ["Back-end"], []],
+	"spm-meta": ["Sid Pm", "Senior PM", "Meta", [], []],
+	"pl-meta": ["Lou Lead", "Product Lead", "Meta", [], []],
+	"po-meta": ["Oz Owner", "Product Owner", "Meta", [], []],
+	"fo-meta": ["Flynn Founder", "Founder", "Meta", [], []],
+	"fe-meta": ["Fern Founder", "Founder", "Meta", ["Front-end"], []],
+	"de-meta": ["Dev Designer", "Product Designer", "Meta", ["Product Design"], []],
+};
+
+const PM_TITLE_SEARCH = {
+	...DEFAULT_SEARCH,
+	Google: ["spm-google", "pl-google", "po-google", "fo-google", "fe-google", "se-google"],
+	Meta: ["spm-meta", "pl-meta", "po-meta", "fo-meta", "fe-meta", "de-meta"],
+};
+
+test("'product manager' keeps unlabeled PM titles and ambiguous founders, like 'PM'", async () => {
+	await withRoleMentors(PM_TITLE_MENTORS, () =>
+		withFetch(fakeUpstream({ search: PM_TITLE_SEARCH }), async () => {
+			for (const [args, pms, founder] of [
+				[{ query: "product manager", company: "Google", limit: 9 }, ["pl-google", "po-google", "spm-google"], "fo-google"],
+				[{ query: "PM", company: "Google", limit: 9 }, ["pl-google", "po-google", "spm-google"], "fo-google"],
+				[{ query: "product manager at Meta", limit: 9 }, ["pl-meta", "po-meta", "spm-meta"], "fo-meta"],
+			]) {
+				const result = await callTool("search_mentors", args);
+				assertPublicOutputClean(result);
+				const slugs = mentorsOf(result.body).map((mentor) => mentor.slug);
+				// PM titles lead; the founder with no role signal follows; the
+				// founder with an engineering label and other roles are dropped.
+				assert.deepEqual(slugs.slice(0, 3).sort(), pms, args.query);
+				assert.deepEqual(slugs.slice(3), [founder], args.query);
+			}
+		}),
+	);
+});
+
+test("role filtering keeps the company, Former and visibility filters", async () => {
+	await withRoleMentors(ROLE_MENTORS, () =>
+		withFetch(fakeUpstream({ search: ROLE_SEARCH }), async () => {
+			for (const args of [
+				{ query: "UX designer at Google", limit: 9 },
+				{ query: "designer", company: "Google", limit: 9 },
+			]) {
+				const slugs = mentorsOf((await callTool("search_mentors", args)).body).map((mentor) => mentor.slug);
+				assert.ok(slugs.includes("uma-google"), args.query);
+				assert.ok(!slugs.includes("fran-google"), "Former UX Designer is not at Google");
+				assert.ok(!slugs.includes("hal-google"), "hidden designer stays hidden");
+				assert.ok(!slugs.includes("stu-google"), "previously at Google is not at Google");
+			}
+			const pm = await callTool("search_mentors", { query: "product manager at Meta", limit: 9 });
+			assert.ok(!mentorsOf(pm.body).some((mentor) => mentor.slug === "xia-meta"), "Ex-Meta PM is past");
+		}),
+	);
+});
+
+test("with a role, deeper pages and extra gating batches fill the limit past stale rows", async () => {
+	// Nine rows the index still calls UX Designers whose profiles now say
+	// Software Engineer, ahead of five real designers. Both rows score as a
+	// title match, so upstream order holds and the first batch is all stale.
+	const stale = Array.from({ length: 9 }, (_, index) => `stale${index}-google`);
+	const designers = Array.from({ length: 5 }, (_, index) => `des${index}-google`);
+	const mentors = {
+		...Object.fromEntries(stale.map((slug) => [slug, [slug, "Software Engineer", "Google", ["Back-end"], []]])),
+		...Object.fromEntries(designers.map((slug) => [slug, [slug, "Product Designer", "Google", [], []]])),
+	};
+	const calls = [];
+	await withRoleMentors(mentors, async () => {
+		for (const slug of stale) ROW_TITLE_OVERRIDES[slug] = "UX Designer";
+		const search = { ...DEFAULT_SEARCH, Google: [...stale, ...designers] };
+		await withFetch(fakeUpstream({ search, calls }), async () => {
+			const five = await callTool("search_mentors", { query: "UX at Google", limit: 5 });
+			assertPublicOutputClean(five);
+			assert.deepEqual(mentorsOf(five.body).map((mentor) => mentor.slug), designers);
+			for (const { url } of calls.filter(({ url }) => url.pathname === "/search")) {
+				assert.ok(Number(url.searchParams.get("pageSize")) >= 27, url.searchParams.get("q"));
+			}
+
+			// At most 3 × limit candidates are gated: limit 4 checks 12 of 14.
+			const four = await callTool("search_mentors", { query: "UX at Google", limit: 4 });
+			assert.deepEqual(mentorsOf(four.body).map((mentor) => mentor.slug), designers.slice(0, 3));
+		});
+	});
+});
+
+test("a query without a role is unchanged by role relevance", async () => {
+	const calls = [];
+	await withRoleMentors(ROLE_MENTORS, () =>
+		withFetch(fakeUpstream({ search: ROLE_SEARCH, calls }), async () => {
+			const result = await callTool("search_mentors", { query: "Google", limit: 9 });
+			assertPublicOutputClean(result);
+			// Upstream order, every role, the first nine candidates gated.
+			assert.deepEqual(
+				mentorsOf(result.body).map((mentor) => mentor.slug),
+				["noe-google", "cal-google", "cy-google", "sam-google", "uma-google", "pete-google", "rae-google", "gus-google"],
+			);
+			for (const { url } of calls.filter(({ url }) => url.pathname === "/search")) {
+				assert.equal(url.searchParams.get("pageSize"), "9");
+			}
+		}),
+	);
 });
 
 test("search_mentors description says company is the current employer", () => {

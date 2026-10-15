@@ -163,6 +163,12 @@ const EMPLOYEE_WORDS = new Set(
 // like "I'm a PM at Google".
 const asciiQuotes = (value: string) => value.replace(/[’‘ʼ‛′`]/g, "'").replace(/[“”„‟″]/g, '"');
 
+// The query with the requester's own employment clauses blanked out: "I'm a
+// designer at Stripe, looking for a PM" is a request for a PM.
+export function withoutRequesterEmployment(query: string): string {
+	return asciiQuotes(query).replace(SELF_EMPLOYMENT, " | ");
+}
+
 const WORD = /[A-Za-z0-9][A-Za-z0-9&.'-]*/g;
 const bare = (word: string) => word.toLowerCase().replace(/[.']+$/, "");
 

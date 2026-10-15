@@ -28,12 +28,18 @@ import {
 	type PublicStats,
 	type WhyMatchContext,
 } from "./mapper.ts";
+import { requestedRoleFamilies, roleFit, type RoleFamily } from "./role.ts";
 import type { PublicSource } from "./source.ts";
 import { checkMentorVisibility, VISIBILITY_TIMEOUT_MS } from "./visibility.ts";
 
 export const DEFAULT_PUBLIC_LIMIT = 5;
 export const MAX_PUBLIC_LIMIT = 9;
 const SEARCH_TIMEOUT_MS = 5000;
+// With a role requested, clear mismatches are dropped, so up to this many
+// candidates per requested mentor are gated (in batches of MAX_PUBLIC_LIMIT)
+// and the upstream pages are at least this deep.
+const ROLE_CHECKS_PER_RESULT = 3;
+const ROLE_PAGE_SIZE = ROLE_CHECKS_PER_RESULT * MAX_PUBLIC_LIMIT;
 
 export const publicSearchInputSchema = z.object({
 	query: z
@@ -142,6 +148,16 @@ export async function publicSearchMentors(
 	let company = input.company ?? knownCompanyIn(input.query);
 	let strictCompany = Boolean(company);
 	const phrasedCompany = company ? "" : employerCandidate(input.query);
+	// The role asked for, read without the company phrase ("UX at Google" →
+	// design). Deeper pages leave room to drop other roles at that company.
+	const roles = requestedRoleFamilies(input.query, company || phrasedCompany, input.discipline);
+	if (roles.length > 0) {
+		const url = new URL(intentUrl);
+		if (Number(url.searchParams.get("pageSize") ?? 0) < ROLE_PAGE_SIZE) {
+			url.searchParams.set("pageSize", String(ROLE_PAGE_SIZE));
+		}
+		intentUrl = url.toString();
+	}
 	const nameCandidate = company || phrasedCompany ? "" : literalNameCandidate(input.query);
 	const meta = (count: number, byName = false): PublicSearchMeta => ({
 		result_count: count,
@@ -172,11 +188,15 @@ export async function publicSearchMentors(
 		if (named.length > 0) return { output: { mentors: named }, meta: meta(named.length, true) };
 	}
 
+	// With a role, ranking keeps the deeper page instead of cutting it to nine.
+	const rankDepth = roles.length > 0 ? ROLE_PAGE_SIZE : undefined;
 	const searchCompany = company || phrasedCompany;
 	const [firstEmployerSearch, intentRows] = await Promise.all([
-		searchCompany ? employerSearch(baseUrl, searchCompany, searchInput, intentUrl) : Promise.resolve(null),
+		searchCompany
+			? employerSearch(baseUrl, searchCompany, searchInput, intentUrl, rankDepth)
+			: Promise.resolve(null),
 		anonymousSearch(intentUrl)
-			.then((rows) => rankRows(rows, searchInput))
+			.then((rows) => rankRows(rows, searchInput, rankDepth))
 			.catch(() => null),
 	]);
 	let employerRows = searchCompany ? (firstEmployerSearch?.rows ?? null) : [];
@@ -195,7 +215,8 @@ export async function publicSearchMentors(
 			company = confirmed;
 			strictCompany = true;
 			if (employerTokens(confirmed) !== employerTokens(phrasedCompany)) {
-				employerRows = (await employerSearch(baseUrl, confirmed, searchInput, intentUrl))?.rows ?? null;
+				employerRows =
+					(await employerSearch(baseUrl, confirmed, searchInput, intentUrl, rankDepth))?.rows ?? null;
 			}
 		} else {
 			// Every match is a past employer: still a filter, never unfiltered.
@@ -224,10 +245,64 @@ export async function publicSearchMentors(
 		.filter((row) => atRequiredCompany(rowEmployer(row), textOf(row.title)))
 		.filter((row) => textOf(row.slug))
 		.map((row) => ({ slug: textOf(row.slug), row }));
+	if (roles.length > 0) {
+		const mentors = await gateByRole(env, candidates, source, why, limit, roles, (mentor) =>
+			atRequiredCompany(mentor.company ?? "", mentor.title ?? ""),
+		);
+		return { output: { mentors }, meta: meta(mentors.length) };
+	}
 	const mentors = (await gateCandidates(env, candidates, source, why, MAX_PUBLIC_LIMIT))
 		.filter((mentor) => atRequiredCompany(mentor.company ?? "", mentor.title ?? ""))
 		.slice(0, limit);
 	return { output: { mentors }, meta: meta(mentors.length) };
+}
+
+// A role was requested. Candidates whose search row fits the role are gated
+// first, in batches of MAX_PUBLIC_LIMIT, until `limit` visible mentors fit or
+// ROLE_CHECKS_PER_RESULT × limit candidates have been checked. Each card is
+// then scored on its public title, disciplines and expertise: clear
+// mismatches (title in another role, nothing else matching) are dropped,
+// title matches lead, ambiguous titles ("Director") follow. `keep` is the
+// company filter, applied as before.
+async function gateByRole(
+	env: Env,
+	candidates: Candidate[],
+	source: PublicSource,
+	why: WhyMatchContext,
+	limit: number,
+	roles: RoleFamily[],
+	keep: (mentor: PublicMentor) => boolean,
+): Promise<PublicMentor[]> {
+	const labels = (value: unknown) => (Array.isArray(value) ? value.map(textOf) : []);
+	const queue = uniqueCandidates(candidates)
+		.map((candidate) => ({
+			candidate,
+			fit: roleFit(roles, {
+				title: textOf(candidate.row?.title),
+				disciplines: labels(candidate.row?.disciplines),
+				expertise: labels(candidate.row?.expertise),
+			}),
+		}))
+		.sort((a, b) => Number(a.fit.mismatch) - Number(b.fit.mismatch) || b.fit.score - a.fit.score)
+		.map(({ candidate }) => candidate)
+		.slice(0, ROLE_CHECKS_PER_RESULT * limit);
+	const kept: Array<{ mentor: PublicMentor; score: number }> = [];
+	const seen = new Set<string>();
+	for (let start = 0; start < queue.length; start += MAX_PUBLIC_LIMIT) {
+		if (kept.filter(({ score }) => score > 0).length >= limit) break;
+		const batch = queue.slice(start, start + MAX_PUBLIC_LIMIT);
+		for (const mentor of await gateCandidates(env, batch, source, why, MAX_PUBLIC_LIMIT)) {
+			const key = mentor.slug.toLowerCase();
+			if (seen.has(key) || !keep(mentor)) continue;
+			seen.add(key);
+			const fit = roleFit(roles, mentor);
+			if (!fit.mismatch) kept.push({ mentor, score: fit.score });
+		}
+	}
+	return kept
+		.sort((a, b) => b.score - a.score)
+		.slice(0, limit)
+		.map(({ mentor }) => mentor);
 }
 
 export async function publicGetMentorProfile(
@@ -258,15 +333,7 @@ async function gateCandidates(
 	why: WhyMatchContext,
 	limit: number,
 ): Promise<PublicMentor[]> {
-	const unique: Candidate[] = [];
-	const seen = new Set<string>();
-	for (const candidate of candidates) {
-		const key = candidate.slug.toLowerCase();
-		if (seen.has(key)) continue;
-		seen.add(key);
-		unique.push(candidate);
-		if (unique.length >= MAX_PUBLIC_LIMIT) break;
-	}
+	const unique = uniqueCandidates(candidates).slice(0, MAX_PUBLIC_LIMIT);
 	const checks = await Promise.all(
 		unique.map((candidate) => checkMentorVisibility(env, candidate.slug).catch(() => null)),
 	);
@@ -294,6 +361,18 @@ async function gateCandidates(
 	return mentors.slice(0, limit);
 }
 
+function uniqueCandidates(candidates: Candidate[]): Candidate[] {
+	const unique: Candidate[] = [];
+	const seen = new Set<string>();
+	for (const candidate of candidates) {
+		const key = candidate.slug.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		unique.push(candidate);
+	}
+	return unique;
+}
+
 function rowEmployer(row: SearchServiceMentor): string {
 	return textOf(row.employer) || textOf(row.company);
 }
@@ -312,24 +391,31 @@ async function employerSearch(
 	company: string,
 	searchInput: SearchMentorsInput,
 	intentUrl: string,
+	rankDepth?: number,
 ): Promise<{ rows: SearchServiceMentor[]; employers: string[] } | null> {
 	const url = new URL(buildSearchMentorsUrl(baseUrl, { intent: company, filters: searchInput.filters }));
 	url.searchParams.set("pageSize", new URL(intentUrl).searchParams.get("pageSize") ?? "9");
 	const rows = await anonymousSearch(url.toString()).catch(() => null);
 	if (!rows) return null;
 	const matching = rows.filter((row) => isCurrentEmployer(rowEmployer(row), company, textOf(row.title)));
-	return { rows: rankRows(matching, searchInput), employers: rows.map(rowEmployer) };
+	return { rows: rankRows(matching, searchInput, rankDepth), employers: rows.map(rowEmployer) };
 }
 
 // Reuse the signed-in mapper only for its filtering and ordering; the rows
-// themselves go through the public mapper.
-function rankRows(rows: SearchServiceMentor[], input: SearchMentorsInput): SearchServiceMentor[] {
+// themselves go through the public mapper. `depth` is set when a role was
+// requested: it overrides the nine-row cap and leaves role filtering to
+// gateByRole, so "product manager" keeps the "Senior PM" and "Founder" rows the
+// signed-in product-management filter would drop.
+function rankRows(rows: SearchServiceMentor[], input: SearchMentorsInput, depth?: number): SearchServiceMentor[] {
 	const bySlug = new Map<string, SearchServiceMentor>();
 	for (const row of rows) {
 		const slug = textOf(row.slug);
 		if (slug && !bySlug.has(slug)) bySlug.set(slug, row);
 	}
-	const ranked = mapSearchMentorsResponse({ results: rows }, input, false).mentors;
+	const ranked = mapSearchMentorsResponse({ results: rows }, input, false, {
+		maxRows: depth,
+		roleDecided: depth !== undefined,
+	}).mentors;
 	return ranked
 		.map((mentor) => bySlug.get(mentor.slug))
 		.filter((row): row is SearchServiceMentor => Boolean(row));
