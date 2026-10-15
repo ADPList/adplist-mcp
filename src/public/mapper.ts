@@ -103,8 +103,11 @@ export function mapPublicSearchMentor(
 	const mentor = buildMentor({
 		name: identity.name || cleanText(searchRow.name),
 		slug,
-		title: identity.title || cleanText(searchRow.title),
-		company: identity.company || cleanText(searchRow.employer) || cleanText(searchRow.company),
+		// Current employment comes from the public profile alone: the search
+		// index can be stale, and the company filter reads these two fields. No
+		// organization on the profile means no current employer.
+		title: identity.title,
+		company: identity.company,
 		expertise: identity.expertise.length > 0 ? identity.expertise : rowExpertise,
 		disciplines: identity.disciplines.length > 0 ? identity.disciplines : rowDisciplines,
 		languages: identity.languages.length > 0 ? identity.languages : rowLanguages,

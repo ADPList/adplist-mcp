@@ -244,7 +244,7 @@ export async function publicGetMentorProfile(
 	// Hidden, opted out, on break, missing, and unverifiable all look the same.
 	const visibility = await checkMentorVisibility(env, slug);
 	if (!visibility.visible) throw new PublicError("NOT_FOUND");
-	const userId = textOf(visibility.record.userId);
+	const userId = visibility.userId;
 	const stats = userId ? await fetchPublicStats(env.AUTH_SERVICE_URL, userId) : {};
 	return mapPublicProfile(visibility.slug, visibility.record, stats, source);
 }

@@ -131,32 +131,56 @@ const HIDDEN_OVERRIDES = {
 
 const MALFORMED_FLAG_SLUGS = ["stringy-break", "stringy-optout", "null-suspended", "stringy-active", "array-flags"];
 
+// Per-slug overrides of either record's top-level listing flags.
+const INTERNAL_OVERRIDES = {};
+const PUBLIC_OVERRIDES = {};
+
+// GET /internal/users/profile/mentor/{slug} (x-api-key, ADPLIST-4485): flags
+// and identifiers only, exactly the keys the live route returns. Nothing
+// displayable — no fullName, profile, experiences, preferences, country, bio.
+function internalRecord(slug) {
+	const override = HIDDEN_OVERRIDES[slug] ?? {};
+	return {
+		data: {
+			bookable: true,
+			indexable: true,
+			is: slug === "array-flags"
+				? [true, true]
+				: {
+						active: true,
+						mentor: true,
+						suspended: false,
+						onBreak: false,
+						aiSearchOptOut: false,
+						...override.is,
+					},
+			legacyId: 4242,
+			metadata: { queryID: "q-123", indexUsed: "mentors_prod" },
+			slug,
+			status: override.status ?? "active",
+			userId: `user-${FAKE_ID}`,
+			...INTERNAL_OVERRIDES[slug],
+		},
+	};
+}
+
+// GET /users/profile/mentor/{slug} (anonymous): the display record. No is.*
+// since identity-service #184; stuffed with fields that must never be public.
 function identityRecord(slug) {
 	const override = HIDDEN_OVERRIDES[slug] ?? {};
 	const company = RECORD_COMPANY[slug] ?? (slug.endsWith("google") ? "Google" : "Acme Labs");
-	if (slug === "array-flags") {
-		const record = identityRecord("alice-visible");
-		return { data: { ...record.data, slug, fullName: NAMES[slug], is: [true, true] } };
-	}
 	return {
 		data: {
 			id: FAKE_ID,
 			_id: FAKE_ID,
-			legacyId: 4242,
 			legacy_id: 4242,
-			userId: `user-${FAKE_ID}`,
 			slug,
 			fullName: NAMES[slug],
 			status: override.status ?? "active",
-			is: {
-				active: true,
-				mentor: true,
-				suspended: false,
-				onBreak: false,
-				aiSearchOptOut: false,
-				verified: true,
-				...override.is,
-			},
+			bookable: true,
+			indexable: true,
+			userType: "mentor",
+			relationshipTarget: `user-${FAKE_ID}`,
 			gender: "female",
 			timezone: "Asia/Singapore",
 			email: `${slug}@${FAKE_HOST}`,
@@ -183,6 +207,7 @@ function identityRecord(slug) {
 			reviews: [{ review: `Great mentor ${FAKE_TOKEN}`, userId: FAKE_ID }],
 			swagUrl: `https://adplist.org/swag?ref=${FAKE_ID}`,
 			referralUrl: `https://adplist.org/r/${FAKE_ID}`,
+			...PUBLIC_OVERRIDES[slug],
 		},
 	};
 }
@@ -277,10 +302,12 @@ function fakeUpstream({ search = DEFAULT_SEARCH, searchFails = false, profileFai
 				data: { reviews: { reviewsCount: 31, averageRating: 4.876 }, userId: FAKE_ID, sessions: { total: 5 } },
 			});
 		}
-		// ADPLIST-4485b: visibility uses the internal keyed route; public profile no longer has is.*.
-		const profileMatch = url.pathname.match(/^\/(?:internal\/)?users\/profile\/mentor\/(.+)$/);
+		// Visibility reads both: the keyed internal route (flags only) and the
+		// anonymous public route (display fields only).
+		const profileMatch = url.pathname.match(/^\/(internal\/)?users\/profile\/mentor\/(.+)$/);
 		if (profileMatch) {
-			const slug = decodeURIComponent(profileMatch[1]);
+			const internal = Boolean(profileMatch[1]);
+			const slug = decodeURIComponent(profileMatch[2]);
 			if (profileFails) throw new Error(`fetch failed ${FAKE_HOST} ${FAKE_TOKEN} ${FAKE_ID}`);
 			if (slug === "profile-500") {
 				return new Response(`Internal error at ${FAKE_HOST}: ${FAKE_TOKEN} ${FAKE_ID}`, { status: 500 });
@@ -294,7 +321,7 @@ function fakeUpstream({ search = DEFAULT_SEARCH, searchFails = false, profileFai
 				});
 			}
 			if (!NAMES[slug]) return Response.json({ message: `not found ${FAKE_ID}` }, { status: 404 });
-			return Response.json(identityRecord(slug));
+			return Response.json(internal ? internalRecord(slug) : identityRecord(slug));
 		}
 		return new Response("unexpected", { status: 418 });
 	};
@@ -1609,7 +1636,7 @@ test("visibility fetch uses the internal keyed URL with no query params (ADPLIST
 		internalVisibilityUrl("https://auth.test/?syncFromLegacy=true#x", "a?syncFromLegacy=true#b"),
 		"https://auth.test/internal/users/profile/mentor/a%3FsyncFromLegacy%3Dtrue%23b",
 	);
-	// Deprecated public helper still strips query/hash for callers that use it.
+	// The anonymous display read is stripped the same way.
 	assert.equal(
 		publicVisibilityUrl("https://auth.test/?syncFromLegacy=true#x", "a?syncFromLegacy=true#b"),
 		"https://auth.test/users/profile/mentor/a%3FsyncFromLegacy%3Dtrue%23b",
@@ -1683,7 +1710,214 @@ test("a redirect from the visibility endpoint fails closed and never forwards th
 	}, async () => {
 		assert.deepEqual(await checkMentorVisibility(makeEnv(), "alice-visible"), { visible: false, failed: true });
 	});
-	assert.equal(inits[0]?.redirect, "manual");
+	assert.ok(inits.length >= 1);
+	for (const init of inits) assert.equal(init?.redirect, "manual");
+});
+
+// Live (preview) symptoms after 3d8b213: the flags-only internal record was used
+// as the display record, so profiles came back nameless and every company
+// check read an absent profile.organization.
+test("get_mentor_profile takes display fields from the public profile, not the flags-only internal record", async () => {
+	NAMES["edmur-huq"] = "Edmur Huq";
+	const calls = [];
+	try {
+		await withFetch(fakeUpstream({ calls }), async () => {
+			const result = await callTool("get_mentor_profile", { mentor_slug: "edmur-huq" });
+			assertPublicOutputClean(result);
+			const mentor = result.body.result.structuredContent;
+			assert.equal(mentor.name, "Edmur Huq");
+			assert.equal(mentor.slug, "edmur-huq");
+			assert.equal(mentor.title, "Senior Product Designer");
+			assert.equal(mentor.company, "Acme Labs");
+			assert.deepEqual(mentor.expertise, ["Product Strategy", "Mobile Apps"]);
+			assert.deepEqual(mentor.disciplines, ["Product Design"]);
+			assert.deepEqual(mentor.languages, ["English"]);
+			assert.equal(mentor.country, "Singapore");
+			assert.ok(mentor.bio?.startsWith("Bio for Edmur Huq."));
+			assert.equal(mentor.total_reviews, 31);
+		});
+	} finally {
+		delete NAMES["edmur-huq"];
+	}
+	const internal = calls.filter(({ url }) => url.pathname === "/internal/users/profile/mentor/edmur-huq");
+	const anonymous = calls.filter(({ url }) => url.pathname === "/users/profile/mentor/edmur-huq");
+	assert.equal(internal.length, 1);
+	assert.equal(anonymous.length, 1);
+	assert.equal(internal[0].init.headers["x-api-key"], "test-internal-key");
+	// The key never goes to the anonymous read.
+	assert.ok(!Object.keys(anonymous[0].init.headers).some((name) => /api-key|authorization/i.test(name)));
+	assert.equal(anonymous[0].init.redirect, "manual");
+});
+
+test("company=Google search reads the current employer from the public profile", async () => {
+	const search = {
+		...PM_COMPANY_SEARCH,
+		"product manager": ["mia-meta", "paul-google", "pia-google", "nico-google", "left-google"],
+		Google: ["pia-google", "paul-google", "nico-google", "left-google"],
+	};
+	// left-google's row says Google but its profile says Other Company.
+	PM_SLUGS.add("left-google");
+	try {
+		await withFetch(fakeUpstream({ search }), async () => {
+			const result = await callTool("search_mentors", { query: "product manager", company: "Google", limit: 9 });
+			assertPublicOutputClean(result);
+			const mentors = mentorsOf(result.body);
+			assert.deepEqual(mentors.map((mentor) => mentor.slug).sort(), ["nico-google", "pia-google"]);
+			for (const mentor of mentors) {
+				assert.equal(mentor.company, "Google");
+				assert.equal(mentor.name, NAMES[mentor.slug]);
+				assert.equal(mentor.title, "Senior Product Manager");
+				assert.deepEqual(mentor.disciplines, ["Product Design"]);
+			}
+		});
+	} finally {
+		PM_SLUGS.delete("left-google");
+	}
+});
+
+test("bookable or indexable false on either record hides the mentor; non-booleans fail closed", async () => {
+	const env = makeEnv();
+	const cases = [
+		[INTERNAL_OVERRIDES, { bookable: false }, { visible: false, failed: false }],
+		[INTERNAL_OVERRIDES, { indexable: false }, { visible: false, failed: false }],
+		[PUBLIC_OVERRIDES, { bookable: false }, { visible: false, failed: false }],
+		[PUBLIC_OVERRIDES, { indexable: false }, { visible: false, failed: false }],
+		[PUBLIC_OVERRIDES, { status: "inactive" }, { visible: false, failed: false }],
+		[INTERNAL_OVERRIDES, { bookable: "false" }, { visible: false, failed: true }],
+		[INTERNAL_OVERRIDES, { indexable: null }, { visible: false, failed: true }],
+		[PUBLIC_OVERRIDES, { indexable: 0 }, { visible: false, failed: true }],
+		[PUBLIC_OVERRIDES, { bookable: "true" }, { visible: false, failed: true }],
+		// The display record must be the same mentor the flags describe.
+		[PUBLIC_OVERRIDES, { slug: "someone-else" }, { visible: false, failed: true }],
+	];
+	await withFetch(fakeUpstream(), async () => {
+		for (const [table, override, expected] of cases) {
+			table["alice-visible"] = override;
+			try {
+				assert.deepEqual(
+					await checkMentorVisibility(env, "alice-visible"),
+					expected,
+					JSON.stringify(override),
+				);
+				const profile = await callTool("get_mentor_profile", { mentor_slug: "alice-visible" });
+				assert.equal(errorCodeOf(profile.body), "NOT_FOUND", JSON.stringify(override));
+			} finally {
+				delete table["alice-visible"];
+			}
+		}
+		// Absent flags are fine on both records.
+		INTERNAL_OVERRIDES["alice-visible"] = { bookable: undefined, indexable: undefined };
+		PUBLIC_OVERRIDES["alice-visible"] = { bookable: undefined, indexable: undefined, status: undefined };
+		try {
+			const result = await checkMentorVisibility(env, "alice-visible");
+			assert.equal(result.visible, true);
+		} finally {
+			delete INTERNAL_OVERRIDES["alice-visible"];
+			delete PUBLIC_OVERRIDES["alice-visible"];
+		}
+	});
+});
+
+test("a failed or missing public profile omits an otherwise visible mentor", async () => {
+	const env = makeEnv();
+	for (const [status, expected] of [
+		[500, { visible: false, failed: true }],
+		[302, { visible: false, failed: true }],
+		[404, { visible: false, failed: false }],
+	]) {
+		const upstream = fakeUpstream();
+		await withFetch(async (input, init) => {
+			const url = new URL(String(input));
+			if (url.pathname.startsWith("/users/profile/mentor/")) {
+				return new Response(null, { status, headers: status === 302 ? { Location: "https://evil.test/" } : {} });
+			}
+			return upstream(input, init);
+		}, async () => {
+			assert.deepEqual(await checkMentorVisibility(env, "alice-visible"), expected, String(status));
+			const search = await callTool("search_mentors", { query: "mobile app design" });
+			assert.deepEqual(mentorsOf(search.body), [], String(status));
+		});
+	}
+});
+
+test("a public profile without a matching slug, a name, or an object profile fails closed", async () => {
+	const env = makeEnv();
+	for (const body of [
+		{ data: {} },
+		{ data: { slug: 42, fullName: [], profile: [] } },
+		{ data: { fullName: "Alice Visible" } },
+		{ data: { slug: "alice-visible", fullName: "  " } },
+		{ data: { slug: "alice-visible", fullName: "Alice Visible", profile: null } },
+		{ data: { slug: "alice-visible", fullName: "Alice Visible", profile: [] } },
+	]) {
+		const upstream = fakeUpstream();
+		await withFetch(async (input, init) => {
+			const url = new URL(String(input));
+			if (url.pathname.startsWith("/users/profile/mentor/")) return Response.json(body);
+			return upstream(input, init);
+		}, async () => {
+			assert.deepEqual(
+				await checkMentorVisibility(env, "alice-visible"),
+				{ visible: false, failed: true },
+				JSON.stringify(body),
+			);
+			const profile = await callTool("get_mentor_profile", { mentor_slug: "alice-visible" });
+			assert.equal(errorCodeOf(profile.body), "NOT_FOUND", JSON.stringify(body));
+			const search = await callTool("search_mentors", { query: "mobile app design" });
+			assert.deepEqual(mentorsOf(search.body), [], JSON.stringify(body));
+		});
+	}
+});
+
+test("a public profile with no profile object fails closed instead of using search-row employment", async () => {
+	const env = makeEnv();
+	// The search row for gina-google still says Google; only the public profile
+	// may confirm that, and here it has no profile object at all.
+	PUBLIC_OVERRIDES["gina-google"] = { profile: undefined };
+	try {
+		await withFetch(fakeUpstream(), async () => {
+			assert.deepEqual(await checkMentorVisibility(env, "gina-google"), { visible: false, failed: true });
+			const result = await callTool("search_mentors", { query: "design", company: "Google", limit: 9 });
+			assert.ok(!mentorsOf(result.body).some((mentor) => mentor.slug === "gina-google"));
+		});
+	} finally {
+		delete PUBLIC_OVERRIDES["gina-google"];
+	}
+});
+
+test("a public profile without an organization has no current employer, whatever the search row says", async () => {
+	PUBLIC_OVERRIDES["gina-google"] = { profile: { title: "Product Designer" } };
+	try {
+		await withFetch(fakeUpstream(), async () => {
+			const filtered = await callTool("search_mentors", { query: "design", company: "Google", limit: 9 });
+			assertPublicOutputClean(filtered);
+			assert.ok(!mentorsOf(filtered.body).some((mentor) => mentor.slug === "gina-google"));
+			const profile = await callTool("get_mentor_profile", { mentor_slug: "gina-google" });
+			assert.equal(profile.body.result.structuredContent.company, undefined);
+		});
+	} finally {
+		delete PUBLIC_OVERRIDES["gina-google"];
+	}
+});
+
+test("a missing, empty or non-string internal slug fails closed", async () => {
+	const env = makeEnv();
+	for (const slug of [undefined, "", "   ", 42, null, ["alice-visible"]]) {
+		INTERNAL_OVERRIDES["alice-visible"] = { slug };
+		try {
+			await withFetch(fakeUpstream(), async () => {
+				assert.deepEqual(
+					await checkMentorVisibility(env, "alice-visible"),
+					{ visible: false, failed: true },
+					JSON.stringify(slug),
+				);
+				const profile = await callTool("get_mentor_profile", { mentor_slug: "alice-visible" });
+				assert.equal(errorCodeOf(profile.body), "NOT_FOUND", JSON.stringify(slug));
+			});
+		} finally {
+			delete INTERNAL_OVERRIDES["alice-visible"];
+		}
+	}
 });
 
 test("profile lookup returns the same NOT_FOUND for every hidden or unverifiable mentor", async () => {
