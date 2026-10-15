@@ -520,6 +520,29 @@ export function countryIntentIn(query: string): string {
 	return codes.size === 1 ? [...codes][0] : "";
 }
 
+// True when the query refers to the requester anywhere ("I'm…", "my…", "we…"),
+// by the same rule that keeps a country out of such a query.
+export function refersToRequester(query: string): boolean {
+	return SELF_REFERENCE.test(asciiQuotes(query));
+}
+
+// The requester introducing themselves: "I'm", "I am", "Im", "My name is", up
+// to the end of the clause: a punctuation mark, "and"/"but"/"so", or a word
+// that starts the request ("I'm Alice Visible in Singapore, looking for…" →
+// "looking for…", "I'm a PM at Google and need…" → "need…").
+const SELF_INTRODUCTION =
+	/\b(?:i\s*'\s*m|i\s+am|im|my\s+name\s+is)\b[^,.;:!?]*?(?:[,.;:!?]|\s+(?:and|but|so)\b|(?=\s+(?:looking|seeking|searching|hunting|trying|hoping|wanting|want|wants|need|needs|needing|interested|who)\b)|$)/gi;
+
+// The query with every self-introduction clause dropped, so the requester's
+// own name, place or role is not searched for. The query as given when there
+// is none, or when nothing would be left.
+export function withoutSelfIntroduction(query: string): string {
+	const text = asciiQuotes(query);
+	if (text.search(SELF_INTRODUCTION) < 0) return query;
+	const rest = text.replace(SELF_INTRODUCTION, " ").replace(/\s+/g, " ").trim();
+	return /[A-Za-z]/.test(rest) ? rest : query;
+}
+
 // The companies employer text names, current or past, each normalized to
 // tokens with its past marker and connecting words stripped ("Former Google",
 // "Retired from Google", "Ex @ Google" → "google"). Each whole segment is

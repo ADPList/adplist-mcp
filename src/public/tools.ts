@@ -20,7 +20,9 @@ import {
 	employerPhrase,
 	isCurrentEmployer,
 	knownCompanyIn,
+	refersToRequester,
 	withoutPlaces,
+	withoutSelfIntroduction,
 } from "./company.ts";
 import { PublicError } from "./errors.ts";
 import {
@@ -135,7 +137,17 @@ export async function publicSearchMentors(
 	// a country filter for the descriptive search, like an explicit `country`.
 	const placeCountry = input.country ? "" : countryIntentIn(input.query);
 	const filters = placeCountry ? { ...explicitFilters, country: placeCountry } : explicitFilters;
-	const searchInput: SearchMentorsInput = { intent: input.query, filters };
+	// The plain-name check reads the query as typed, before any place is taken
+	// out: "My Nguyen", "Im Soo Jung" are names.
+	const typedName = literalNameCandidate(input.query);
+	const plainName = isPlainName(input.query, typedName);
+	// Any other query that refers to the requester ("I'm Alice Visible in
+	// Singapore, looking for a design mentor") is never a name lookup: the name
+	// may be the requester's own. Their self-introduction is dropped and the
+	// rest is searched as a request.
+	const aboutRequester = !plainName && refersToRequester(input.query);
+	const query = aboutRequester ? withoutSelfIntroduction(input.query) : input.query;
+	const searchInput: SearchMentorsInput = { intent: query, filters };
 	let intentUrl: string;
 	try {
 		// Also rejects disciplines outside the ADPList taxonomy. The country is
@@ -156,12 +168,12 @@ export async function publicSearchMentors(
 	// only orders, as before. A place is never a company: "mentors from
 	// Canada" is the country filter above, even when a mentor works at Canada
 	// Life.
-	let company = input.company ?? knownCompanyIn(input.query);
+	let company = input.company ?? knownCompanyIn(query);
 	let strictCompany = Boolean(company);
-	const phrasedCompany = company ? "" : employerPhrase(input.query);
+	const phrasedCompany = company ? "" : employerPhrase(query);
 	// The role asked for, read without the company phrase ("UX at Google" →
 	// design). Deeper pages leave room to drop other roles at that company.
-	const roles = requestedRoleFamilies(input.query, company || phrasedCompany, input.discipline);
+	const roles = requestedRoleFamilies(query, company || phrasedCompany, input.discipline);
 	if (roles.length > 0) {
 		const url = new URL(intentUrl);
 		if (Number(url.searchParams.get("pageSize") ?? 0) < ROLE_PAGE_SIZE) {
@@ -177,13 +189,10 @@ export async function publicSearchMentors(
 	// company and all. A place does not stop a name: the name is read with
 	// the place phrases taken out ("Find Alice Visible in Singapore" → "Alice
 	// Visible"), so a place ("designers in New York") is never one.
-	const inferredCompany = input.company ? knownCompanyIn(input.query) : company;
-	// The plain-name check reads the query as typed, before any place is taken
-	// out: "My Nguyen", "Im Soo Jung" are names.
-	const typedName = literalNameCandidate(input.query);
-	const plainName = isPlainName(input.query, typedName);
+	const inferredCompany = input.company ? knownCompanyIn(query) : company;
 	const literalName = plainName ? typedName : literalNameCandidate(withoutPlaces(input.query));
-	const nameCandidate = plainName || !(inferredCompany || phrasedCompany) ? literalName : "";
+	const nameCandidate =
+		!aboutRequester && (plainName || !(inferredCompany || phrasedCompany)) ? literalName : "";
 	// A name hit was filtered by the caller's `company` only, never one read
 	// from the name ("Meta Patel").
 	const meta = (count: number, byName = false): PublicSearchMeta => {
@@ -191,11 +200,11 @@ export async function publicSearchMentors(
 		return {
 			result_count: count,
 			had_company_filter: hadCompany,
-			intent_category: intentCategory(input.query, hadCompany, byName),
+			intent_category: intentCategory(query, hadCompany, byName),
 		};
 	};
 	const why: WhyMatchContext = {
-		query: input.query,
+		query,
 		discipline: input.discipline,
 		language: input.language,
 	};
@@ -248,7 +257,7 @@ export async function publicSearchMentors(
 	if (!searchCompany && intentRows === null) throw new PublicError("UNAVAILABLE");
 
 	if (!company) {
-		const confirmed = companyConfirmedByEmployers(input.query, [
+		const confirmed = companyConfirmedByEmployers(query, [
 			...(employerRows ?? []).map(rowCurrentEmployer),
 			...(intentRows ?? []).map(rowCurrentEmployer),
 		]);
@@ -261,7 +270,7 @@ export async function publicSearchMentors(
 			}
 		} else {
 			// Every match is a past employer: still a filter, never unfiltered.
-			const named = companyNamedByEmployers(input.query, [
+			const named = companyNamedByEmployers(query, [
 				...searchedEmployers,
 				...(intentRows ?? []).map(rowEmployer),
 			]);

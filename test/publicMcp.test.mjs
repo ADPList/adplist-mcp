@@ -17,6 +17,7 @@ import {
 	knownCompanyIn,
 	titleMarksEmployerPast,
 	withoutPlaces,
+	withoutSelfIntroduction,
 } from "../src/public/company.ts";
 import { requestedRoleFamilies, roleFit } from "../src/public/role.ts";
 import {
@@ -924,6 +925,8 @@ test("tool and requester mentions do not filter search results; an explicit comp
 		"I'm a PM at Google and need a design mentor": ["alice-visible", "gina-google", "fay-figma"],
 		"I’m a PM at Google and need a design mentor": ["alice-visible", "gina-google", "fay-figma"],
 		"I’m PM at Google and need a design mentor": ["alice-visible", "gina-google", "fay-figma"],
+		// The requester's self-introduction is dropped before the search.
+		"need a design mentor": ["alice-visible", "gina-google", "fay-figma"],
 		"Canva designer": ["alice-visible", "cara-canva", "bob-visible"],
 	};
 	await withFetch(fakeUpstream({ search }), async () => {
@@ -4135,4 +4138,87 @@ test("requester employment is stripped even when a capitalized title follows the
 	]) {
 		assert.deepEqual(requestedRoleFamilies(query), ["product"], query);
 	}
+});
+
+test("a self-introduction is never the literal name; the rest is searched as a role (Greptile P1, tools.ts:186)", async () => {
+	for (const [query, rest] of [
+		["I'm Yogeshree Tawde in the US, looking for a design mentor", "looking for a design mentor"],
+		["I’m Alice Visible in Singapore, looking for a design mentor", "looking for a design mentor"],
+		["I am Alice Visible and need a design mentor", "need a design mentor"],
+		["My name is Alice Visible. Looking for a design mentor", "Looking for a design mentor"],
+		["Hi, Im Alice Visible looking for a design mentor", "Hi, looking for a design mentor"],
+		// No self-introduction: unchanged, typographic apostrophes included.
+		["I don’t want mentors from USA", "I don’t want mentors from USA"],
+		["design mentors in Canada", "design mentors in Canada"],
+	]) {
+		assert.equal(withoutSelfIntroduction(query), rest, query);
+	}
+
+	const mentors = {
+		"yogeshree-tawde": ["Yogeshree Tawde", "Product", "Google", ["Product Management"], ["Product Strategy"]],
+		"dana-design": ["Dana Design", "Senior Product Designer", "Acme Labs", ["Product Design"], ["Mobile Apps"]],
+		"dev-design": ["Dev Design", "Design Lead", "Acme Labs", ["Product Design"], ["Design Systems"]],
+	};
+	const search = {
+		...DEFAULT_SEARCH,
+		"Yogeshree Tawde": ["yogeshree-tawde"],
+		"Alice Visible": ["alice-visible"],
+		"I'm Yogeshree Tawde in the US, looking for a design mentor": ["yogeshree-tawde"],
+		"I’m Alice Visible in Singapore, looking for a design mentor": ["alice-visible"],
+		"looking for a design mentor": ["dana-design", "dev-design", "yogeshree-tawde"],
+	};
+	for (const [query, requester] of [
+		["I'm Yogeshree Tawde in the US, looking for a design mentor", "yogeshree-tawde"],
+		["I’m Alice Visible in Singapore, looking for a design mentor", "alice-visible"],
+	]) {
+		const calls = [];
+		await withRoleMentors(mentors, () =>
+			withFetch(fakeUpstream({ search, calls }), async () => {
+				const result = await callTool("search_mentors", { query });
+				assertPublicOutputClean(result);
+				const slugs = mentorsOf(result.body).map((mentor) => mentor.slug);
+				assert.deepEqual(slugs, ["dana-design", "dev-design"], query);
+				assert.ok(!slugs.includes(requester), query);
+				const searches = calls.filter(({ url }) => url.pathname === "/search");
+				// No name lookup for the requester's name: only the request is searched.
+				assert.deepEqual(searches.map(({ url }) => url.searchParams.get("q")), ["looking for a design mentor"], query);
+				// The requester's place is not a mentor-country filter.
+				for (const { url } of searches) assert.equal(url.searchParams.get("countries"), null, query);
+			}),
+		);
+	}
+
+	// Name-only queries keep the literal path, self-reference words and all.
+	const names = {
+		...mentors,
+		"my-nguyen": ["My Nguyen", "Senior Product Designer", "Acme Labs", ["Product Design"], ["Mobile Apps"]],
+		"im-soo-jung": ["Im Soo Jung", "Senior Product Designer", "Acme Labs", ["Product Design"], ["Mobile Apps"]],
+	};
+	const nameSearch = { ...search, "My Nguyen": ["my-nguyen"], "Im Soo Jung": ["im-soo-jung"] };
+	for (const [query, slug] of [
+		["Yogeshree Tawde", "yogeshree-tawde"],
+		["My Nguyen", "my-nguyen"],
+		["Im Soo Jung", "im-soo-jung"],
+	]) {
+		const calls = [];
+		await withRoleMentors(names, () =>
+			withFetch(fakeUpstream({ search: nameSearch, calls }), async () => {
+				const result = await callTool("search_mentors", { query });
+				assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), [slug], query);
+				const searches = calls.filter(({ url }) => url.pathname === "/search");
+				assert.deepEqual(searches.map(({ url }) => url.searchParams.get("q")), [query], query);
+			}),
+		);
+	}
+});
+
+test("US-based product managers sends countries=US on every search (Greptile, tools.ts:143)", async () => {
+	assert.equal(countryIntentIn("US-based product managers"), "US");
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		await callTool("search_mentors", { query: "US-based product managers" });
+	});
+	const searches = calls.filter(({ url }) => url.pathname === "/search");
+	assert.ok(searches.length > 0);
+	for (const { url } of searches) assert.equal(url.searchParams.get("countries"), "US");
 });
