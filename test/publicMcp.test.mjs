@@ -5,7 +5,7 @@ import test from "node:test";
 import { handlePublicRequest, PUBLIC_TOOLS } from "../src/public/mcp.ts";
 import { PUBLIC_MENTOR_KEYS, publicPhotoUrl, publicProfileUrl } from "../src/public/mapper.ts";
 import { normalizeSource, parsePublicMcpPath, sourceFromClientName } from "../src/public/source.ts";
-import { internalVisibilityUrl, publicVisibilityUrl } from "../src/public/visibility.ts";
+import { checkMentorVisibility, internalVisibilityUrl, publicVisibilityUrl } from "../src/public/visibility.ts";
 import { PUBLIC_RATE_WINDOWS, takeRateSlot } from "../src/public/rateWindows.ts";
 import {
 	companyCandidates,
@@ -1642,6 +1642,48 @@ test("visibility fetch uses the internal keyed URL with no query params (ADPLIST
 		const key = headers["x-api-key"] || headers["X-Api-Key"];
 		assert.equal(key, "test-internal-key", url.href);
 	}
+});
+
+test("a redirect from the visibility endpoint fails closed and never forwards the key", async () => {
+	const { createServer } = await import("node:http");
+	const listen = (handler) =>
+		new Promise((resolve) => {
+			const server = createServer(handler);
+			server.listen(0, "127.0.0.1", () => resolve(server));
+		});
+	const otherOriginHits = [];
+	const other = await listen((req, res) => {
+		otherOriginHits.push(req.headers);
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(JSON.stringify({ data: { slug: "alice-visible", status: "active", is: { active: true, mentor: true } } }));
+	});
+	const otherUrl = `http://127.0.0.1:${other.address().port}/steal`;
+	const auth = await listen((req, res) => {
+		const status = Number(req.url.split("/").pop().replace("redirect-", "")) || 302;
+		res.writeHead(status, { Location: otherUrl });
+		res.end();
+	});
+	const env = makeEnv({ AUTH_SERVICE_URL: `http://127.0.0.1:${auth.address().port}` });
+	try {
+		for (const status of [301, 302, 303, 307, 308]) {
+			const result = await checkMentorVisibility(env, `redirect-${status}`);
+			assert.deepEqual(result, { visible: false, failed: true }, String(status));
+		}
+		assert.equal(otherOriginHits.length, 0, "redirect target must never be contacted");
+		assert.ok(otherOriginHits.every((headers) => !("x-api-key" in headers)));
+	} finally {
+		auth.close();
+		other.close();
+	}
+
+	const inits = [];
+	await withFetch(async (input, init) => {
+		inits.push(init);
+		return new Response(null, { status: 302, headers: { Location: "https://evil.test/" } });
+	}, async () => {
+		assert.deepEqual(await checkMentorVisibility(makeEnv(), "alice-visible"), { visible: false, failed: true });
+	});
+	assert.equal(inits[0]?.redirect, "manual");
 });
 
 test("profile lookup returns the same NOT_FOUND for every hidden or unverifiable mentor", async () => {

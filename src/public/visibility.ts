@@ -77,8 +77,11 @@ export async function checkMentorVisibility(env: Env, slug: string): Promise<Vis
 	try {
 		const response = await fetch(internalVisibilityUrl(baseUrl, requested), {
 			headers: { Accept: "application/json", "x-api-key": apiKey },
+			// Never follow redirects: a 3xx would re-send x-api-key to its target.
+			redirect: "manual",
 			signal: AbortSignal.timeout(VISIBILITY_TIMEOUT_MS),
 		});
+		if (response.status >= 300 && response.status < 400) return FAILED;
 		if (response.status === 404) return HIDDEN;
 		if (response.status === 401 || response.status === 403) return FAILED;
 		if (response.status !== 200) return FAILED;
