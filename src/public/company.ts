@@ -213,6 +213,26 @@ export function withoutRequesterEmployment(query: string): string {
 	return asciiQuotes(query).replace(SELF_EMPLOYMENT, " | ");
 }
 
+// The requester describing themselves without an employer: "I'm a software
+// engineer, …", "I am Senior Designer and…", "As a PM, …". The clause ends like
+// SELF_EMPLOYMENT's, or at a word that turns it into a request ("I'm after a
+// PM", "I'm keen on design"), so only the requester's own role is taken.
+const SELF_DESCRIPTION_STOP = String.raw`(?:${CLAUSE_STOP}|keen|eager|open|excited|curious|ready|planning|going|aiming|about|to|into)\b`;
+const SELF_DESCRIPTION = new RegExp(
+	[
+		String.raw`\b${SELF_SUBJECT}(?:\s+(?!${SELF_DESCRIPTION_STOP})${CLAUSE_WORD})*`,
+		String.raw`(?:^|[,.;:!?])\s*as\s+(?:an?|the)\b(?:\s+(?!${SELF_DESCRIPTION_STOP})${CLAUSE_WORD})*`,
+	].join("|"),
+	"gi",
+);
+
+// The query with the requester's own employment and role blanked out, for
+// reading the role asked for only: "I'm a software engineer, looking for a
+// design mentor" asks for design. Company and search text keep the full query.
+export function withoutRequesterRole(query: string): string {
+	return withoutRequesterEmployment(query).replace(SELF_DESCRIPTION, " | ");
+}
+
 const WORD = /[A-Za-z0-9][A-Za-z0-9&.'-]*/g;
 const bare = (word: string) => word.toLowerCase().replace(/[.']+$/, "");
 
@@ -526,21 +546,33 @@ export function refersToRequester(query: string): boolean {
 	return SELF_REFERENCE.test(asciiQuotes(query));
 }
 
-// The requester introducing themselves: "I'm", "I am", "Im", "My name is", up
-// to the end of the clause: a punctuation mark, "and"/"but"/"so", or a word
-// that starts the request ("I'm Alice Visible in Singapore, looking for…" →
-// "looking for…", "I'm a PM at Google and need…" → "need…").
-const SELF_INTRODUCTION =
-	/\b(?:i\s*'\s*m|i\s+am|im|my\s+name\s+is)\b[^,.;:!?]*?(?:[,.;:!?]|\s+(?:and|but|so)\b|(?=\s+(?:looking|seeking|searching|hunting|trying|hoping|wanting|want|wants|need|needs|needing|interested|who)\b)|$)/gi;
+// An explicit request to find someone: "find", "look up", "search for", "show
+// me", "is there".
+const REQUEST_VERB = /\b(?:find|look\s+up|search\s+for|show\s+me|is\s+there)\b/gi;
 
-// The query with every self-introduction clause dropped, so the requester's
-// own name, place or role is not searched for. The query as given when there
-// is none, or when nothing would be left.
-export function withoutSelfIntroduction(query: string): string {
+// In a query that refers to the requester, the words right after the first
+// explicit request verb that follows a self-reference, up to the end of that
+// clause: "I'm based in India, find Alice Visible" → "Alice Visible". "" when
+// there is no such verb ("I'm Alice Visible in Singapore, looking for a design
+// mentor"), so a name in the requester's own introduction is never read.
+export function requestedAfterSelfReference(query: string): string {
 	const text = asciiQuotes(query);
-	if (text.search(SELF_INTRODUCTION) < 0) return query;
-	const rest = text.replace(SELF_INTRODUCTION, " ").replace(/\s+/g, " ").trim();
-	return /[A-Za-z]/.test(rest) ? rest : query;
+	const self = SELF_REFERENCE.exec(text);
+	if (!self) return "";
+	const from = self.index + self[0].length;
+	for (const verb of text.matchAll(REQUEST_VERB)) {
+		if (verb.index < from) continue;
+		const rest = text.slice(verb.index + verb[0].length);
+		const end = rest.search(/[,.;:!?]/);
+		const clause = end < 0 ? rest : rest.slice(0, end);
+		// The capitalized words right after the verb are the name, verbatim,
+		// even when one is a self-reference word ("find My Nguyen", "find Im
+		// Soo Jung"). Only a later self-reference ends the clause.
+		const name = clause.match(/^\s*(?:[A-Z][\w'-]*(?:\s+|$))*/)?.[0].length ?? 0;
+		const again = clause.slice(name).search(SELF_REFERENCE);
+		return (again < 0 ? clause : clause.slice(0, name + again)).trim();
+	}
+	return "";
 }
 
 // The companies employer text names, current or past, each normalized to

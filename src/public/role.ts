@@ -1,5 +1,5 @@
 import { employerTokens } from "../searchMentors.ts";
-import { withoutRequesterEmployment } from "./company.ts";
+import { withoutRequesterRole } from "./company.ts";
 
 // Role relevance for the public search (ADPLIST-4479). A company search returns
 // the right employer but every role there ("UX at Google" brought back network
@@ -85,10 +85,11 @@ function inFamily(family: RoleFamily, value: string): boolean {
 }
 
 // Families the request asks for: the query without the requester's own
-// employment ("I'm a designer at Stripe") or the company, plus the explicit
-// discipline. Empty means no role was requested.
+// employment or role ("I'm a designer at Stripe", "I'm a software engineer")
+// or the company, plus the explicit discipline. Empty means no role was
+// requested.
 export function requestedRoleFamilies(query: string, company = "", discipline = ""): RoleFamily[] {
-	let text = normalize(withoutRequesterEmployment(query));
+	let text = normalize(withoutRequesterRole(query));
 	for (const token of employerTokens(company).split(" ").filter(Boolean)) {
 		text = text.replaceAll(` ${token} `, " ");
 	}
