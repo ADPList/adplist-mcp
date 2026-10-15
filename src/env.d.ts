@@ -1,6 +1,7 @@
 declare global {
 	interface Env {
 		AUTH_SERVICE_URL?: string;
+		IDENTITY_INTERNAL_API_KEY?: string;
 		SEARCH_SERVICE_URL?: string;
 		MEETINGS_SERVICE_URL?: string;
 		SENDGRID_API_KEY?: string;

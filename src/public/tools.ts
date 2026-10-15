@@ -351,7 +351,7 @@ async function anonymousSearch(url: string): Promise<SearchServiceMentor[]> {
 
 async function fetchPublicStats(baseUrl: string, userId: string): Promise<PublicStats> {
 	try {
-		const response = await fetch(buildMentorStatisticsUrl(baseUrl, userId), {
+		const response = await fetch(buildMentorStatisticsUrl(baseUrl, { userId }), {
 			headers: { Accept: "application/json" },
 			signal: AbortSignal.timeout(VISIBILITY_TIMEOUT_MS),
 		});

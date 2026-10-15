@@ -42,16 +42,18 @@ export function buildMentorProfileUrl(baseUrl: string, mentorSlug: string): stri
 	).toString();
 }
 
-export function buildMentorStatisticsUrl(baseUrl: string, userId: string): string {
+export function buildMentorStatisticsUrl(baseUrl: string, opts: { userId?: string; slug?: string }): string {
 	const url = new URL("/users/statistics", baseUrl);
-	url.searchParams.set("userId", userId);
+	if (opts.userId) url.searchParams.set("userId", opts.userId);
+	else if (opts.slug) url.searchParams.set("slug", opts.slug);
 	url.searchParams.set("type", "mentor");
 	return url.toString();
 }
 
-export function buildMentorReviewsUrl(baseUrl: string, userId: string): string {
+export function buildMentorReviewsUrl(baseUrl: string, opts: { userId?: string; slug?: string }): string {
 	const url = new URL("/users/review", baseUrl);
-	url.searchParams.set("userId", userId);
+	if (opts.userId) url.searchParams.set("userId", opts.userId);
+	else if (opts.slug) url.searchParams.set("slug", opts.slug);
 	url.searchParams.set("type", "mentor");
 	url.searchParams.set("target", "for");
 	url.searchParams.set("limit", String(MAX_REVIEWS));
@@ -85,10 +87,11 @@ export async function getMentorProfile(
 		throw new Error(`No ADPList mentor found for slug "${slug}".`);
 	}
 
+	// ADPLIST-4485b: public profile no longer returns userId; resolve stats by slug.
 	const userId = typeof data.userId === "string" ? data.userId : "";
 	const [stats, recentReviews] = await Promise.all([
-		userId ? fetchMentorStats(baseUrl, userId) : NO_STATS,
-		userId ? fetchMentorReviews(baseUrl, userId) : Promise.resolve([]),
+		fetchMentorStats(baseUrl, { userId: userId || undefined, slug }),
+		fetchMentorReviews(baseUrl, { userId: userId || undefined, slug }),
 	]);
 
 	const profile = asRecord(data.profile);
@@ -118,7 +121,7 @@ export async function getMentorProfile(
 		disciplines: splitLabels(labelsOf(experiences.disciplines)),
 		languages: splitLabels(labelsOf(preferences.languages)),
 		open_to: splitLabels(labelsOf(preferences.openTo ?? preferences.interests)),
-		on_break: is.onBreak === true,
+		on_break: is.onBreak === true || data.onBreakReturnDate != null,
 		experience_level: labelsOf(experiences.experienceLevel),
 		stats,
 		recent_reviews: recentReviews,
@@ -142,10 +145,11 @@ const NO_STATS = Promise.resolve({ average_rating: null, reviews_count: null });
 
 async function fetchMentorStats(
 	baseUrl: string,
-	userId: string,
+	opts: { userId?: string; slug?: string },
 ): Promise<GetMentorProfileOutput["stats"]> {
+	if (!opts.userId && !opts.slug) return { average_rating: null, reviews_count: null };
 	try {
-		const response = await fetch(buildMentorStatisticsUrl(baseUrl, userId), {
+		const response = await fetch(buildMentorStatisticsUrl(baseUrl, opts), {
 			headers: { Accept: "application/json" },
 		});
 		if (!response.ok) return { average_rating: null, reviews_count: null };
@@ -167,10 +171,11 @@ async function fetchMentorStats(
 
 async function fetchMentorReviews(
 	baseUrl: string,
-	userId: string,
+	opts: { userId?: string; slug?: string },
 ): Promise<MentorReviewSnippet[]> {
+	if (!opts.userId && !opts.slug) return [];
 	try {
-		const response = await fetch(buildMentorReviewsUrl(baseUrl, userId), {
+		const response = await fetch(buildMentorReviewsUrl(baseUrl, opts), {
 			headers: { Accept: "application/json" },
 		});
 		if (!response.ok) return [];

@@ -1,10 +1,8 @@
 import { textOf } from "../profile.ts";
 
-// Visibility gate for the public tier (ADPLIST-4479). Every public path —
-// search results, literal-name lookups, slug lookups — goes through
-// checkMentorVisibility. The identity-service mentor record is the
-// authoritative source; anything short of a well-formed, clearly visible
-// record omits the mentor (fail closed).
+// Visibility gate for the public tier (ADPLIST-4479).
+// After ADPLIST-4485b, flags live on GET /internal/users/profile/{type}/{slug}
+// (x-api-key). The anonymous public profile no longer returns is.*.
 export const VISIBILITY_TIMEOUT_MS = 3000;
 
 export type VisibilityResult =
@@ -23,9 +21,6 @@ export function optOutSlugs(env: Env): Set<string> {
 	);
 }
 
-// Exclusion flags may be absent (aiSearchOptOut is new), but when present they
-// must be real booleans: "true", 1 or null are unexpected shapes and hide the
-// mentor rather than reading as "not excluded".
 const REQUIRED_FLAGS = ["active", "mentor"] as const;
 const EXCLUSION_FLAGS = ["suspended", "onBreak", "aiSearchOptOut"] as const;
 
@@ -52,10 +47,15 @@ export function isVisibleMentorRecord(data: Record<string, unknown>): boolean {
 	);
 }
 
-// Built here, not with mentorProfile.ts's builder, so the public check is
-// always the bare record URL: no query string (e.g. syncFromLegacy, which would
-// let an anonymous read trigger a legacy sync), no fragment, and a slug that
-// cannot smuggle its own `?`, `#` or `/` in.
+/** Internal visibility URL (ADPLIST-4485b). */
+export function internalVisibilityUrl(baseUrl: string, slug: string): string {
+	const url = new URL(`/internal/users/profile/mentor/${encodeURIComponent(slug)}`, baseUrl);
+	url.search = "";
+	url.hash = "";
+	return url.toString();
+}
+
+/** @deprecated Public URL no longer carries is.* — prefer internalVisibilityUrl. */
 export function publicVisibilityUrl(baseUrl: string, slug: string): string {
 	const url = new URL(`/users/profile/mentor/${encodeURIComponent(slug)}`, baseUrl);
 	url.search = "";
@@ -70,15 +70,17 @@ export async function checkMentorVisibility(env: Env, slug: string): Promise<Vis
 	if (denied.has(requested.toLowerCase())) return HIDDEN;
 	const baseUrl = env.AUTH_SERVICE_URL;
 	if (!baseUrl) return FAILED;
+	const apiKey = env.IDENTITY_INTERNAL_API_KEY;
+	if (!apiKey) return FAILED;
 
 	let data: Record<string, unknown>;
 	try {
-		// Anonymous on purpose: no Authorization header on any public path.
-		const response = await fetch(publicVisibilityUrl(baseUrl, requested), {
-			headers: { Accept: "application/json" },
+		const response = await fetch(internalVisibilityUrl(baseUrl, requested), {
+			headers: { Accept: "application/json", "x-api-key": apiKey },
 			signal: AbortSignal.timeout(VISIBILITY_TIMEOUT_MS),
 		});
 		if (response.status === 404) return HIDDEN;
+		if (response.status === 401 || response.status === 403) return FAILED;
 		if (response.status !== 200) return FAILED;
 		const body = (await response.json()) as unknown;
 		if (!body || typeof body !== "object" || Array.isArray(body)) return FAILED;
@@ -93,8 +95,6 @@ export async function checkMentorVisibility(env: Env, slug: string): Promise<Vis
 	if (typeof data.status !== "string" || !is || !hasWellFormedFlags(is)) return FAILED;
 	if (!isVisibleMentorRecord(data)) return HIDDEN;
 
-	// The record's own slug wins over the one asked for, and is checked against
-	// the kill list too, so a case or alias variant cannot slip past it.
 	const canonical = textOf(data.slug) || requested;
 	if (denied.has(canonical.toLowerCase())) return HIDDEN;
 	return { visible: true, slug: canonical, record: data };

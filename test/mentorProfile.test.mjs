@@ -24,11 +24,11 @@ test("URL builders target the public api.adplist.org endpoints", () => {
 		buildMentorProfileUrl("https://auth.example", "felix lee"),
 		"https://auth.example/users/profile/mentor/felix%20lee",
 	);
-	const stats = new URL(buildMentorStatisticsUrl("https://auth.example", "u1"));
+	const stats = new URL(buildMentorStatisticsUrl("https://auth.example", { userId: "u1" }));
 	assert.equal(stats.pathname, "/users/statistics");
 	assert.equal(stats.searchParams.get("userId"), "u1");
 	assert.equal(stats.searchParams.get("type"), "mentor");
-	const reviews = new URL(buildMentorReviewsUrl("https://auth.example", "u1"));
+	const reviews = new URL(buildMentorReviewsUrl("https://auth.example", { userId: "u1" }));
 	assert.equal(reviews.pathname, "/users/review");
 	assert.equal(reviews.searchParams.get("target"), "for");
 	assert.equal(reviews.searchParams.get("limit"), "5");

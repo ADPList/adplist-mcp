@@ -5,7 +5,7 @@ import test from "node:test";
 import { handlePublicRequest, PUBLIC_TOOLS } from "../src/public/mcp.ts";
 import { PUBLIC_MENTOR_KEYS, publicPhotoUrl, publicProfileUrl } from "../src/public/mapper.ts";
 import { normalizeSource, parsePublicMcpPath, sourceFromClientName } from "../src/public/source.ts";
-import { publicVisibilityUrl } from "../src/public/visibility.ts";
+import { internalVisibilityUrl, publicVisibilityUrl } from "../src/public/visibility.ts";
 import { PUBLIC_RATE_WINDOWS, takeRateSlot } from "../src/public/rateWindows.ts";
 import {
 	companyCandidates,
@@ -277,7 +277,8 @@ function fakeUpstream({ search = DEFAULT_SEARCH, searchFails = false, profileFai
 				data: { reviews: { reviewsCount: 31, averageRating: 4.876 }, userId: FAKE_ID, sessions: { total: 5 } },
 			});
 		}
-		const profileMatch = url.pathname.match(/^\/users\/profile\/mentor\/(.+)$/);
+		// ADPLIST-4485b: visibility uses the internal keyed route; public profile no longer has is.*.
+		const profileMatch = url.pathname.match(/^\/(?:internal\/)?users\/profile\/mentor\/(.+)$/);
 		if (profileMatch) {
 			const slug = decodeURIComponent(profileMatch[1]);
 			if (profileFails) throw new Error(`fetch failed ${FAKE_HOST} ${FAKE_TOKEN} ${FAKE_ID}`);
@@ -304,6 +305,7 @@ function makeEnv(overrides = {}) {
 	return {
 		AUTH_SERVICE_URL: "https://auth.test",
 		SEARCH_SERVICE_URL: "https://search.test",
+		IDENTITY_INTERNAL_API_KEY: "test-internal-key",
 		PUBLIC_OPT_OUT_SLUGS: " Denied-Mentor , other-slug",
 		PUBLIC_RATE_LIMITER: {
 			keys,
@@ -1602,7 +1604,12 @@ test("malformed visibility flags fail closed on the slug path with the usual NOT
 	});
 });
 
-test("visibility fetch is always the bare record URL, never with query params", async () => {
+test("visibility fetch uses the internal keyed URL with no query params (ADPLIST-4485b)", async () => {
+	assert.equal(
+		internalVisibilityUrl("https://auth.test/?syncFromLegacy=true#x", "a?syncFromLegacy=true#b"),
+		"https://auth.test/internal/users/profile/mentor/a%3FsyncFromLegacy%3Dtrue%23b",
+	);
+	// Deprecated public helper still strips query/hash for callers that use it.
 	assert.equal(
 		publicVisibilityUrl("https://auth.test/?syncFromLegacy=true#x", "a?syncFromLegacy=true#b"),
 		"https://auth.test/users/profile/mentor/a%3FsyncFromLegacy%3Dtrue%23b",
@@ -1623,12 +1630,17 @@ test("visibility fetch is always the bare record URL, never with query params", 
 		);
 		assert.equal(profile.body.result.structuredContent.slug, "alice-visible");
 	});
-	const profileCalls = calls.filter(({ url }) => url.pathname.startsWith("/users/profile/mentor/"));
+	const profileCalls = calls.filter(({ url }) =>
+		url.pathname.startsWith("/internal/users/profile/mentor/"),
+	);
 	assert.ok(profileCalls.length >= 4);
-	for (const { url } of profileCalls) {
+	for (const { url, init } of profileCalls) {
 		assert.equal(url.search, "", url.href);
 		assert.equal(url.hash, "", url.href);
 		assert.ok(!url.href.includes("syncFromLegacy=true"), url.href);
+		const headers = init?.headers || {};
+		const key = headers["x-api-key"] || headers["X-Api-Key"];
+		assert.equal(key, "test-internal-key", url.href);
 	}
 });
 
