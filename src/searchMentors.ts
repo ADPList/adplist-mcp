@@ -20,7 +20,7 @@ export type SearchMentorsInput = {
 	filters?: SearchMentorsFilters;
 };
 
-type SearchServiceMentor = {
+export type SearchServiceMentor = {
 	name?: string;
 	slug?: string;
 	title?: string;
@@ -68,7 +68,7 @@ type SearchServiceMentor = {
 	position?: number;
 };
 
-type SearchServiceResponse = {
+export type SearchServiceResponse = {
 	results?: SearchServiceMentor[];
 	queryID?: string;
 	indexUsed?: string;
@@ -380,9 +380,18 @@ export function normalizeMaxResults(value: number | undefined): number {
 	return Math.max(MIN_RESULTS, Math.floor(clamped / ROW_SIZE) * ROW_SIZE);
 }
 
-export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput): string {
+// `inferFilters: false` sends only the filters given, nothing read from the
+// intent: a literal-name lookup for "Usa Tanaka" is not a US search.
+// `inferCountry: false` still infers the rest but takes the country only from
+// `filters`: the public search parses places itself. Signed-in callers pass
+// no options.
+export function buildSearchMentorsUrl(
+	baseUrl: string,
+	input: SearchMentorsInput,
+	{ inferFilters = true, inferCountry = true }: { inferFilters?: boolean; inferCountry?: boolean } = {},
+): string {
 	validateDisciplineFilter(input);
-	input = withInferredFilters(input);
+	if (inferFilters) input = withInferredFilters(input, inferCountry);
 	const url = new URL("/search", baseUrl);
 	const filters = input.filters ?? {};
 	const expandedIntent = expandIntentForSearch(input);
@@ -444,7 +453,7 @@ function stripResultCountLanguage(intent: string): string {
 		.trim();
 }
 
-function shouldUseDisciplineFilter(discipline: string): boolean {
+export function shouldUseDisciplineFilter(discipline: string): boolean {
 	const normalized = normalizeDiscipline(discipline);
 	return !BROAD_DISCIPLINE_TERMS.some((term) => normalized.includes(term));
 }
@@ -519,13 +528,20 @@ export function mapSearchMentorsResponse(
 	response: SearchServiceResponse,
 	input: SearchMentorsInput,
 	trimToRows = true,
+	// The public search ranks deeper pages (`maxRows` overrides the
+	// max_results cap) and, with `roleDecided`, applies its own role policy, so
+	// the product-management fit here only orders, never drops. The domain fit
+	// still drops either way: a specialty request ("growth marketing") keeps
+	// excluding generalists. With `inferCountry: false` the country comes only
+	// from `filters`. Signed-in callers pass no options.
+	options: { maxRows?: number; roleDecided?: boolean; inferCountry?: boolean } = {},
 ): SearchMentorsOutput {
-	input = withInferredFilters(input);
+	input = withInferredFilters(input, options.inferCountry ?? true);
 	const domainRule = domainFitRuleFor(input);
-	const resultCount = resultMaxResults(input, domainRule);
+	const resultCount = options.maxRows ?? resultMaxResults(input, domainRule);
 	const candidates = (response.results ?? [])
 		.filter((mentor) => matchesRequestedCountry(mentor, input.filters?.country))
-		.filter((mentor) => matchesProductManagementFit(mentor, input))
+		.filter((mentor) => options.roleDecided || matchesProductManagementFit(mentor, input))
 		.filter((mentor) => matchesDomainFit(mentor, domainRule, input));
 	const mentors = rankMentorCandidates(candidates, domainRule, input)
 		.slice(0, resultCount)
@@ -1159,7 +1175,7 @@ export function employerCandidate(intent: string): string {
 // not Databricks. "and" and legal suffixes are noise ("Johnson & Johnson",
 // "Google LLC"). Top-ups cover the near misses.
 const EMPLOYER_NOISE_TOKENS = new Set(["and", "inc", "llc", "ltd", "limited", "co", "corp", "corporation", "plc", "gmbh"]);
-function employerTokens(value: string): string {
+export function employerTokens(value: string): string {
 	return slugifyLiteralName(value)
 		.split("-")
 		.filter((word) => word && !EMPLOYER_NOISE_TOKENS.has(word))
@@ -1285,7 +1301,7 @@ async function searchLiteralNameViaExplore(
 // "Leeman", never "ann" inside "Joanne"). Two adjacent requested words may also
 // match one token together, because names get typed split where the profile
 // stores them joined ("Ria Santika" for "Riasantika").
-function nameContainsEveryWord(name: string, candidateName: string): boolean {
+export function nameContainsEveryWord(name: string, candidateName: string): boolean {
 	const nameTokens = slugifyLiteralName(name).split("-").filter(Boolean);
 	const words = slugifyLiteralName(candidateName).split("-").filter(Boolean);
 	if (nameTokens.length === 0 || words.length === 0) return false;
@@ -1300,7 +1316,7 @@ function nameContainsEveryWord(name: string, candidateName: string): boolean {
 	return true;
 }
 
-function literalNameCandidate(intent: string): string {
+export function literalNameCandidate(intent: string): string {
 	const requestIntent = currentRequestIntent(intent)
 		.replace(/[“”]/g, '"')
 		.replace(/[’]/g, "'")
@@ -1353,7 +1369,7 @@ function stripLiteralNameFiller(value: string): string {
 	return words.filter((word) => !LITERAL_NAME_STOP_WORDS.has(word.toLowerCase())).join(" ");
 }
 
-function slugifyLiteralName(value: string): string {
+export function slugifyLiteralName(value: string): string {
 	return value
 		.normalize("NFKD")
 		.replace(/[\u0300-\u036f]/g, "")
@@ -1531,8 +1547,9 @@ function mergeSearchMentorOutputs(
 	};
 }
 
-function withInferredFilters(input: SearchMentorsInput): SearchMentorsInput {
-	const inferredCountry = input.filters?.country ?? inferCountryFromIntent(input.intent);
+function withInferredFilters(input: SearchMentorsInput, inferCountry = true): SearchMentorsInput {
+	const inferredCountry =
+		input.filters?.country ?? (inferCountry ? inferCountryFromIntent(input.intent) : undefined);
 	const inferredExperienceLevel =
 		input.filters?.experience_level ?? inferExperienceLevelFromIntent(input.intent);
 	if (!inferredCountry && !inferredExperienceLevel) return input;

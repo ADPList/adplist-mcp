@@ -199,6 +199,51 @@ Configured in `wrangler.jsonc`:
 - `PROFILE_DB` — D1 database for MCP career context
 - `MCP_OBJECT` — Durable Object binding for MCP SSE sessions
 - `routes` — custom-domain binding for `mcp.adplist.org`
+- `PUBLIC_RATE_LIMITER` — Workers Rate Limiting binding for the public tier (30 `tools/call` per minute per IP), a cheap first gate
+- `PUBLIC_RATE_LIMIT_DO` — `PublicRateLimiter` Durable Object (SQLite, migration `v2`): the strict per-IP public limit, 10 calls / 10 s and 30 calls / 60 s
+- `PUBLIC_OPT_OUT_SLUGS` — comma-separated mentor slugs hidden from the public tier
+- `AMPLITUDE_API_KEY` (secret, optional) — sends public-tier events to Amplitude
+- `IDENTITY_INTERNAL_API_KEY` (secret, **required** for the public tier) — `x-api-key` for identity-service's keyed `/internal/users/profile/mentor/{slug}`, the source of the visibility flags. Without it every visibility check fails closed: searches return no mentors and every profile is `NOT_FOUND`. Set it on production with `npx wrangler secret put IDENTITY_INTERNAL_API_KEY` (and on preview as below), pasting the value from AWS Secrets Manager `adplist/internalApiKey`. Never print, log, or commit it.
+
+### Public no-login tier
+
+`/public/mcp` and `/public/{chatgpt|claude|mcp|api}/mcp` serve a stateless, read-only MCP endpoint with two tools (`search_mentors`, `get_mentor_profile`) and no sign-in. It runs before the OAuth provider and never touches KV, D1, or the MCP session Durable Object; its only Durable Object is the per-IP `PublicRateLimiter`. Allowlist, visibility rules, errors, reporting, and the WAF plan: [`docs/public-mcp.md`](docs/public-mcp.md).
+
+### Public tier preview
+
+`wrangler.preview.jsonc` deploys a separate Worker, `adplist-mcp-public-preview`, on `*.workers.dev` only: no routes or custom domain, its own rate-limit namespace, and placeholder KV/D1 IDs. KV, D1, and the `MyMCP` Durable Object are only there because `src/index.ts` exports the OAuth tier at module load; the public route never uses them. The `PublicRateLimiter` Durable Object (migration `preview-v2`) is used: without it every public tool call returns `UNAVAILABLE`.
+
+One-time setup, with preview-only resources (never the production IDs):
+
+```bash
+npx wrangler login
+npx wrangler kv namespace create adplist-mcp-public-preview-oauth   # → id
+npx wrangler d1 create adplist-mcp-profile-preview                    # → database_id
+# replace __PREVIEW_KV_ID__ and __PREVIEW_D1_ID__ in wrangler.preview.jsonc
+# required: without it every mentor is hidden. Paste the value from AWS Secrets
+# Manager adplist/internalApiKey at the prompt; never echo it or put it in a file.
+npx wrangler secret put IDENTITY_INTERNAL_API_KEY -c wrangler.preview.jsonc
+```
+
+Production needs the same secret once, from the same source:
+
+```bash
+npx wrangler secret put IDENTITY_INTERNAL_API_KEY   # default config = production Worker
+```
+
+Deploy and smoke test:
+
+```bash
+git checkout <branch> && git status            # clean tree; you are shipping what you see
+npx wrangler deploy -c wrangler.preview.jsonc   # bypasses scripts/deploy.mjs on purpose: preview only
+curl -s -X POST https://adplist-mcp-public-preview.<account>.workers.dev/public/claude/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+node scripts/verify-public-fields.mjs \
+  --endpoint https://adplist-mcp-public-preview.<account>.workers.dev/public/mcp
+```
+
+Never run `wrangler deploy` without `-c wrangler.preview.jsonc` from this flow; the default config targets production.
 
 ### Development
 

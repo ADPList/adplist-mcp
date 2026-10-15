@@ -1,0 +1,83 @@
+{
+	// Preview of the public no-login tier (ADPLIST-4479) on workers.dev only.
+	// Deploy with: npx wrangler deploy -c wrangler.preview.jsonc
+	// No route or custom-domain entries: this must never answer on the
+	// production hostname.
+	// Replace the __PREVIEW_*__ placeholders with preview-only resources
+	// (see README "Public tier preview"); never the production IDs.
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "adplist-mcp-public-preview",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-03-10",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"workers_dev": true,
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS"
+	},
+	"vars": {
+		"AUTH_SERVICE_URL": "https://api.adplist.org",
+		"SEARCH_SERVICE_URL": "https://api.adplist.org",
+		"MEETINGS_SERVICE_URL": "https://api.adplist.org",
+		"WELCOME_EMAIL_FROM_EMAIL": "felix@adplist.org",
+		"WELCOME_EMAIL_FROM_NAME": "Felix Lee",
+		"PUBLIC_OPT_OUT_SLUGS": ""
+	},
+	"ratelimits": [
+		{
+			"name": "PUBLIC_RATE_LIMITER",
+			"namespace_id": "4480",
+			"simple": {
+				"limit": 30,
+				"period": 60
+			}
+		}
+	],
+	// The bindings below are only here because src/index.ts exports MyMCP and
+	// the OAuth handler at module load; /public/* never touches them.
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "MyMCP",
+				"name": "MCP_OBJECT"
+			},
+			// Strict per-IP limit for public tools/call; this one IS used by /public/*.
+			{
+				"class_name": "PublicRateLimiter",
+				"name": "PUBLIC_RATE_LIMIT_DO"
+			}
+		]
+	},
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "__PREVIEW_KV_ID__"
+		}
+	],
+	"d1_databases": [
+		{
+			"binding": "PROFILE_DB",
+			"database_name": "adplist-mcp-profile-preview",
+			"database_id": "__PREVIEW_D1_ID__"
+		}
+	],
+	"observability": {
+		"enabled": true
+	},
+	"migrations": [
+		{
+			"tag": "preview-v1",
+			"new_sqlite_classes": [
+				"MyMCP"
+			]
+		},
+		{
+			"tag": "preview-v2",
+			"new_sqlite_classes": [
+				"PublicRateLimiter"
+			]
+		}
+	]
+}
