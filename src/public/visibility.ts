@@ -120,8 +120,11 @@ export async function checkMentorVisibility(env: Env, slug: string): Promise<Vis
 	if (denied.has(requested.toLowerCase())) return HIDDEN;
 	const baseUrl = env.AUTH_SERVICE_URL;
 	if (!baseUrl) return FAILED;
-	// Required Worker secret (README: public tier setup; docs/public-mcp.md).
-	// Unset, every mentor fails closed.
+	// Required Worker secret for the keyed internal record below. Unset, every
+	// mentor fails closed: searches come back empty, every profile NOT_FOUND.
+	// Setup, preview and production: README.md "Required Worker configuration"
+	// and "Public tier preview" (`wrangler secret put IDENTITY_INTERNAL_API_KEY`);
+	// the endpoint and the rules: docs/public-mcp.md "Visibility".
 	const apiKey = env.IDENTITY_INTERNAL_API_KEY;
 	if (!apiKey) return FAILED;
 

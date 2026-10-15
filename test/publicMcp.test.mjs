@@ -16,9 +16,15 @@ import {
 	isCurrentEmployer,
 	knownCompanyIn,
 	titleMarksEmployerPast,
+	withoutPlaces,
 } from "../src/public/company.ts";
 import { requestedRoleFamilies, roleFit } from "../src/public/role.ts";
-import { buildSearchMentorsUrl, employerCandidate, mapSearchMentorsResponse } from "../src/searchMentors.ts";
+import {
+	buildSearchMentorsUrl,
+	employerCandidate,
+	literalNameCandidate,
+	mapSearchMentorsResponse,
+} from "../src/searchMentors.ts";
 import { checkField, FIELDS, pageTexts, verifyMentor } from "../scripts/verify-public-fields.mjs";
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
@@ -3301,7 +3307,7 @@ test("a place followed by more of a name is an employer, not a country (Canada L
 		assert.equal(countryIntentIn(query), "", query);
 	}
 	// A real place later in the query still counts; the employer prefix does not.
-	assert.equal(countryIntentIn("designers from Canada Life in Singapore"), "SG");
+	assert.equal(countryIntentIn("designers from Canada Life in Singapore"), "");
 	// A clause word or punctuation after the place still ends it.
 	assert.equal(countryIntentIn("mentors from Canada who work at Google"), "CA");
 	assert.equal(countryIntentIn("mentors from Canada, ideally designers"), "CA");
@@ -3363,8 +3369,8 @@ test("a negated place is never an inclusion filter (Codex repro)", () => {
 	]) {
 		assert.equal(countryIntentIn(query), "", query);
 	}
-	// A negation in an earlier clause does not reach a later place.
-	assert.equal(countryIntentIn("not a PM, mentors from Canada"), "CA");
+	// Any negation anywhere means no country, even in an earlier clause.
+	assert.equal(countryIntentIn("not a PM, mentors from Canada"), "");
 });
 
 const NEGATED_PLACE_QUERIES = [
@@ -3389,9 +3395,10 @@ test("a negated place, contracted or typographic, is never an inclusion filter (
 	for (const query of NEGATED_PLACE_QUERIES) {
 		assert.equal(countryIntentIn(query), "", query);
 	}
-	// Words that merely contain a negation still allow the place.
+	// Words that merely contain a negation still allow the place; any real
+	// negation, wherever it is, does not.
 	assert.equal(countryIntentIn("knowledgeable mentors from Canada"), "CA");
-	assert.equal(countryIntentIn("mentors who can’t wait, from Canada"), "CA");
+	assert.equal(countryIntentIn("mentors who can’t wait, from Canada"), "");
 });
 
 test("search_mentors sends no country filter for a negated place (aren’t, Codex repro)", async () => {
@@ -3407,7 +3414,7 @@ test("search_mentors sends no country filter for a negated place (aren’t, Code
 		}
 		// The unnegated query still filters, so the assertion above is not vacuous.
 		calls.length = 0;
-		await callTool("search_mentors", { query: "mentors who are based in Canada", limit: 9 });
+		await callTool("search_mentors", { query: "mentors based in Canada", limit: 9 });
 		const searches = calls.filter(({ url }) => url.pathname === "/search");
 		assert.ok(searches.some(({ url }) => url.searchParams.get("countries") === "CA"));
 	});
@@ -3462,4 +3469,670 @@ test("search_mentors ranking keeps non-US mentors for a negated US place (Codex 
 	const input = { intent: NEGATED_US_QUERIES[1] };
 	assert.equal(mapSearchMentorsResponse(rows, input, false).mentors.length, 0);
 	assert.equal(mapSearchMentorsResponse(rows, input, false, { inferCountry: false }).mentors.length, 1);
+});
+
+test("plain two-word person names take the literal-name path (Yogeshree Tawde, Edmur Huq regression)", async () => {
+	// The live shapes: title "Product", company "Google", the search row and
+	// display record both "Yogeshree Tawde".
+	const mentors = {
+		"yogeshree-tawde": ["Yogeshree Tawde", "Product", "Google", ["Product Management"], ["Product Strategy"]],
+		"edmur-huq": ["Edmur Huq", "Senior Product Designer", "Acme Labs", ["Product Design"], ["Mobile Apps"]],
+		// A name that opens with a well-known company still reads as a name.
+		"meta-patel": ["Meta Patel", "Senior Product Designer", "Acme Labs", ["Product Design"], ["Mobile Apps"]],
+		// Names that open with a self-description subject ("my", "im") are names.
+		"my-nguyen": ["My Nguyen", "Senior Product Designer", "Acme Labs", ["Product Design"], ["Mobile Apps"]],
+		"my-le": ["My Le", "Senior Product Designer", "Acme Labs", ["Product Design"], ["Mobile Apps"]],
+		"im-soo-jung": ["Im Soo Jung", "Senior Product Designer", "Acme Labs", ["Product Design"], ["Mobile Apps"]],
+	};
+	const search = {
+		...DEFAULT_SEARCH,
+		"Yogeshree Tawde": ["yogeshree-tawde"],
+		Yogeshree: ["yogeshree-tawde"],
+		"Edmur Huq": ["edmur-huq"],
+		"Meta Patel": ["meta-patel"],
+		"My Nguyen": ["my-nguyen"],
+		"My Le": ["my-le"],
+		"Im Soo Jung": ["im-soo-jung"],
+	};
+	for (const [query, slug] of [
+		["Yogeshree Tawde", "yogeshree-tawde"],
+		["Yogeshree", "yogeshree-tawde"],
+		["Edmur Huq", "edmur-huq"],
+		["Meta Patel", "meta-patel"],
+		["My Nguyen", "my-nguyen"],
+		["My Le", "my-le"],
+		["Im Soo Jung", "im-soo-jung"],
+	]) {
+		const calls = [];
+		await withRoleMentors(mentors, () =>
+			withFetch(fakeUpstream({ search, calls }), async () => {
+				const result = await callTool("search_mentors", { query });
+				assertPublicOutputClean(result);
+				assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), [slug], query);
+				const searches = calls.filter(({ url }) => url.pathname === "/search");
+				// Two-word names are looked up by name alone, with nothing inferred.
+				if (query.includes(" ")) {
+					assert.deepEqual(searches.map(({ url }) => url.searchParams.get("q")), [query], query);
+					assert.equal(searches[0].url.searchParams.get("countries"), null, query);
+				}
+			}),
+		);
+	}
+	// A name that opens with a self-description subject survives place
+	// blanking; any self-reference still means no inferred country.
+	assert.match(withoutPlaces("My Nguyen in Canada"), /My Nguyen/);
+	assert.match(withoutPlaces("Im Soo Jung from the UK"), /Im Soo Jung/);
+	assert.doesNotMatch(withoutPlaces("Im based in India, find Alice Visible"), /India/);
+	assert.doesNotMatch(withoutPlaces("My team is in Singapore, find Alice Visible"), /Singapore/);
+	assert.equal(countryIntentIn("My Le in Canada"), "");
+	assert.equal(countryIntentIn("My team is in India"), "");
+	assert.equal(countryIntentIn("I'm American"), "");
+	// A role is not a plain name: "Google PM" stays a company search, never a
+	// literal-name lookup (which would guess the slug google-pm).
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		await callTool("search_mentors", { query: "Google PM" });
+		assert.ok(!calls.some(({ url }) => url.pathname.endsWith("/mentor/google-pm")));
+	});
+});
+
+test("the requester's own location is never the mentor-country filter (Greptile, company.ts:450)", async () => {
+	for (const [query, iso] of [
+		["I am based in India and want a design mentor in Canada", ""],
+		["I’m based in India, want a mentor in Canada", ""],
+		["I'm in India, looking for mentors from Canada", ""],
+		["I'm a designer in London looking for a PM in the US", ""],
+		["We live in Singapore and need mentors in the UK", ""],
+		// No first-person subject: "PM mentor in Canada" is stated directly.
+		["Based in India, need a PM mentor in Canada", "CA"],
+		// Any self-reference means no country, wherever the place is.
+		["mentors in Canada, I'm in India", ""],
+		["I'm keen on PMs in Canada", ""],
+		["I'm looking for mentors in Canada", ""],
+		["I am based in India and want a design mentor", ""],
+		["I live in India, need a PM mentor", ""],
+		["I'm from Canada looking for a design mentor", ""],
+		["I'm a PM at Stripe in Canada and need a design mentor", ""],
+	]) {
+		assert.equal(countryIntentIn(query), iso, query);
+	}
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		await callTool("search_mentors", { query: "I am based in India and want a design mentor in Canada" });
+		const searches = calls.filter(({ url }) => url.pathname === "/search");
+		assert.ok(searches.length > 0);
+		for (const { url } of searches) assert.equal(url.searchParams.get("countries"), null);
+	});
+});
+
+test("the requester's location clause ends at its place, never consuming the mentor request (Codex, company.ts:434)", () => {
+	for (const [query, iso] of [
+		["I am based in India searching for product managers in Canada", ""],
+		["I am based in India hunting for a design mentor in Canada", ""],
+		["I'm in India seeking mentors from Canada", ""],
+		["I live in India looking for PMs in the UK", ""],
+		["I'm based in India want a mentor in Canada", ""],
+		["I'm based in India need a mentor in Canada", ""],
+		["I'm based in the UK; mentors in Canada", ""],
+		["I'm based in New York searching for designers in Canada", ""],
+		["Based in India, searching for mentors in Canada", "CA"],
+		["I am based in India searching for product managers", ""],
+		["I'm searching for designers in Canada", ""],
+		["I'm based in India product managers in Canada", ""],
+		["I am based in India searching for product managers at Google in Canada", ""],
+		["I'm hunting for PMs in the UK", ""],
+		["I'm after a PM in Canada", ""],
+	]) {
+		assert.equal(countryIntentIn(query), iso, query);
+	}
+	for (const query of [
+		"I am based in India searching for Alice Visible",
+		"I'm in India hunting Alice Visible",
+		"I live in New York, find Alice Visible",
+	]) {
+		// The name read for the lookup is the mentor's, never the place.
+		assert.equal(literalNameCandidate(withoutPlaces(query)), "Alice Visible", query);
+	}
+	assert.deepEqual(companyCandidates("I am based in India searching for product managers at Google"), ["Google"]);
+	assert.deepEqual(companyCandidates("I am at Stripe hunting for PMs at Google"), ["Google"]);
+});
+
+test("a place does not disable the literal-name lookup; the mentor country filters it (Greptile, tools.ts:176)", async () => {
+	assert.match(withoutPlaces("Find Alice Visible in Singapore"), /Alice Visible/);
+	assert.doesNotMatch(withoutPlaces("Find Alice Visible in Singapore"), /Singapore/);
+	assert.doesNotMatch(withoutPlaces("Product designers in New York"), /New York/);
+	assert.doesNotMatch(withoutPlaces("Jordan Lee from Hong Kong"), /Hong Kong/);
+	assert.doesNotMatch(withoutPlaces("I'm based in India, find Alice Visible"), /India/);
+
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		// The name lookup uses only explicit filters: a place read from the
+		// query never filters it.
+		for (const query of ["Find Alice Visible in Singapore", "Find Alice Visible in Canada"]) {
+			calls.length = 0;
+			const found = await callTool("search_mentors", { query });
+			assertPublicOutputClean(found);
+			assert.deepEqual(mentorsOf(found.body).map((mentor) => mentor.slug), ["alice-visible"], query);
+			const nameSearch = calls.find(({ url }) => url.pathname === "/search");
+			assert.equal(nameSearch.url.searchParams.get("q"), "Alice Visible", query);
+			assert.equal(nameSearch.url.searchParams.get("countries"), null, query);
+		}
+
+		// An explicit `country` still filters it, slug guess included.
+		calls.length = 0;
+		const elsewhere = await callTool("search_mentors", { query: "Find Alice Visible", country: "CA" });
+		assert.ok(!mentorsOf(elsewhere.body).some((mentor) => mentor.slug === "alice-visible"));
+		const searches = calls.filter(({ url }) => url.pathname === "/search");
+		assert.equal(searches[0].url.searchParams.get("q"), "Alice Visible");
+		assert.equal(searches[0].url.searchParams.get("countries"), "CA");
+		assert.ok(!calls.some(({ url }) => url.pathname.endsWith("/mentor/alice-visible")));
+
+		// A place alone is still never a name.
+		calls.length = 0;
+		await callTool("search_mentors", { query: "Product designers in New York" });
+		assert.ok(!calls.some(({ url }) => url.searchParams.get("q") === "New York"));
+		assert.ok(!calls.some(({ url }) => url.pathname.endsWith("/mentor/new-york")));
+	});
+});
+
+test("US phrases without a preposition keep the US filter only as PLACE-based, negations excluded (Greptile, tools.ts:143)", async () => {
+	for (const query of [
+		"US-based product managers",
+		"USA based designers",
+		"usa-based designers",
+		"U.S.-based mentors",
+		"United States based PMs",
+	]) {
+		assert.equal(countryIntentIn(query), "US", query);
+	}
+	for (const query of [
+		// Not stated directly as "US-based mentors" or "mentors in the US".
+		"US product managers",
+		"American mentors",
+		"American product designers",
+		"mentors who are US-based",
+		"non-US product managers",
+		"mentors who are not US-based",
+		"not US-based designers",
+		"Latin American mentors",
+		"North American designers",
+		"help us find designers",
+		"mentors at US Bank",
+		"American Express designers",
+		"I'm US-based, looking for PMs",
+	]) {
+		assert.equal(countryIntentIn(query), "", query);
+	}
+	// A preposition place still wins over a US phrase.
+	assert.equal(countryIntentIn("US-based company, mentors in Canada"), "CA");
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		for (const [query, iso] of [
+			["US-based product managers", "US"],
+			["non-US product managers", null],
+		]) {
+			calls.length = 0;
+			await callTool("search_mentors", { query });
+			const searches = calls.filter(({ url }) => url.pathname === "/search");
+			assert.ok(searches.length > 0, query);
+			for (const { url } of searches) assert.equal(url.searchParams.get("countries"), iso, query);
+		}
+	});
+});
+
+// An inferred country filters the full search (the last one) and no search
+// carries any other; a name lookup before it uses explicit filters only, so it
+// may carry none. "" or null: no search carries a country.
+function assertInferredCountry(searches, expected, query) {
+	const iso = expected || null;
+	for (const { url } of searches) assert.ok([iso, null].includes(url.searchParams.get("countries")), query);
+	assert.equal(searches[searches.length - 1].url.searchParams.get("countries"), iso, query);
+}
+
+test("US phrases need PLACE-based; a city never hides them; any requester clause means no country (Codex P2s)", async () => {
+	for (const [query, iso] of [
+		// A bare "US"/"American" before the role is not stated directly.
+		["US software engineers", ""],
+		["US data scientists", ""],
+		["US senior product managers", ""],
+		["US Senior Product Managers", ""],
+		["American senior software engineers", ""],
+		// A city or region resolves to no country, so the US phrase still holds.
+		["US-based product managers in New York", "US"],
+		["US data scientists in Silicon Valley", ""],
+		// "US-based company" names no sought noun; "mentors in Canada" does.
+		["US-based company, mentors in Canada", "CA"],
+		// Any first-person clause: no country.
+		["I am a senior product designer currently based in India and want a mentor in Canada", ""],
+		["I'm a mid level product designer working remotely from India, need a mentor in Canada", ""],
+		["I am a senior product designer currently based in India and want a design mentor", ""],
+		// Employers and clause words never become a US filter.
+		["mentors at US Bank", ""],
+		["American Express designers", ""],
+		["American Express senior designers", ""],
+		["US and Canada mentors", ""],
+		["non-US senior product managers", ""],
+		["product managers in New York", ""],
+	]) {
+		assert.equal(countryIntentIn(query), iso, query);
+	}
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		for (const [query, iso] of [
+			["US senior product managers", ""],
+			["US-based product managers in New York", "US"],
+			["I am a senior product designer currently based in India and want a mentor in Canada", ""],
+		]) {
+			calls.length = 0;
+			await callTool("search_mentors", { query });
+			const searches = calls.filter(({ url }) => url.pathname === "/search");
+			assert.ok(searches.length > 0, query);
+			assertInferredCountry(searches, iso, query);
+		}
+	});
+});
+
+test("US-named employers in any case, a requester who is a mentor, and spaced places (Codex P2s)", async () => {
+	for (const [query, iso] of [
+		// Employers holding a US name are never a US filter, whatever the case.
+		["american express designers", ""],
+		["AMERICAN EXPRESS designers", ""],
+		["US bank designers", ""],
+		["U.S. Bank product managers", ""],
+		["Bank of America designers", ""],
+		["bank of america designers", ""],
+		["USAA engineers", ""],
+		// A US phrase beside such an employer still counts.
+		["US-based designers at American Express", "US"],
+		// …unless the query holds any negation.
+		["American designers, not at Bank of America", ""],
+		// Any first-person self-reference: no country, even with a wanted place.
+		["I am a mentor in India and want a mentor in Canada", ""],
+		["I'm a design mentor based in India, looking for mentors in the UK", ""],
+		["I am a mentor in India and want a design mentor", ""],
+		["I'm looking for mentors in Canada", ""],
+		["I'm keen on mentors in Canada", ""],
+	]) {
+		assert.equal(countryIntentIn(query), iso, query);
+	}
+
+	// Place spans cover the place as written, extra spaces included.
+	assert.equal(withoutPlaces("Find Alice Visible in New   York"), "Find Alice Visible  | ");
+	assert.equal(withoutPlaces("Alice Visible in New   York who designs"), "Alice Visible  |  who designs");
+	assert.equal(withoutPlaces("designers from  the   UK, please"), "designers  | , please");
+	assert.equal(withoutPlaces("Jordan Lee from Hong\tKong who designs"), "Jordan Lee  |  who designs");
+
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		for (const [query, iso] of [
+			["american express designers", null],
+			["I am a mentor in India and want a mentor in Canada", ""],
+		]) {
+			calls.length = 0;
+			await callTool("search_mentors", { query });
+			const searches = calls.filter(({ url }) => url.pathname === "/search");
+			assert.ok(searches.length > 0, query);
+			assertInferredCountry(searches, iso, query);
+		}
+	});
+});
+
+test("verify-public-fields: statistics never match unrelated page numbers; secret docs are cited (Greptile P2s)", () => {
+	// reviewStats says 30 reviews at 4.6; the bio's 31 projects and 4.9 GPA
+	// must not approve total_reviews: 31 or average_rating: 4.9.
+	const nextData = { props: { pageProps: { mentor: { reviewStats: { avg: 4.6, count: 30 } } } } };
+	const page = pageTexts(`<p>Led 31 projects. 4.9 GPA.</p>
+<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(nextData)}</script>`);
+	assert.equal(checkField("total_reviews", 31, page), "missing");
+	assert.equal(checkField("average_rating", 4.9, page), "missing");
+	assert.equal(checkField("total_reviews", 30, page), "embedded");
+	assert.equal(checkField("average_rating", 4.6, page), "embedded");
+
+	// The code that needs IDENTITY_INTERNAL_API_KEY points at setup sections that exist.
+	const visibilitySource = readFileSync(new URL("../src/public/visibility.ts", import.meta.url), "utf8");
+	for (const heading of ["Required Worker configuration", "Public tier preview"]) {
+		assert.ok(visibilitySource.includes(`"${heading}"`), heading);
+		assert.match(readmeSource, new RegExp(`^### ${heading}$`, "m"), heading);
+	}
+	assert.match(visibilitySource, /docs\/public-mcp\.md "Visibility"/);
+	assert.match(publicDocsSource, /^## Visibility$/m);
+	assert.match(readmeSource, /### Required Worker configuration[\s\S]*IDENTITY_INTERNAL_API_KEY[\s\S]*### Public no-login tier/);
+});
+
+test("dotted abbreviations (U.S., U.S.A., U.K.) read like US/USA/UK in requester clauses and US phrases (Codex)", async () => {
+	for (const [query, iso] of [
+		// The requester's own location, dotted, is never the mentor country.
+		["I'm U.S.-based, looking for PMs", ""],
+		["I'm U.S. based, looking for PMs", ""],
+		["I am U.S.A.-based and want a design mentor", ""],
+		["I'm based in the U.S. and want a design mentor", ""],
+		["Based in the U.S., need a PM mentor", ""],
+		["I'm from U.S. looking for a design mentor", ""],
+		["I'm a PM at Stripe in the U.S. and need a design mentor", ""],
+		// Any first-person self-reference: no country, even with a wanted place.
+		// Without a subject, "PM mentor in Canada" is stated directly.
+		["I'm based in the U.S. and want a mentor in Canada", ""],
+		["I'm based in the U.S., want a mentor in Canada", ""],
+		["Based in the U.S., need a PM mentor in Canada", "CA"],
+		["I live in the U.K. and need mentors in Canada", ""],
+		["I'm in the U.S.A. looking for mentors in the U.K.", ""],
+		["I'm U.S.-based and want a mentor in the U.K.", ""],
+		// A dotted place after a preposition is a country.
+		["mentors in the U.S.", "US"],
+		["mentors in the U.K.", "GB"],
+		["mentors in U.K.", "GB"],
+		["PMs based in the U.S.A.", "US"],
+		["designers from the U.K. who design", "GB"],
+		// Dotted US phrases (PLACE-based only), employers and negations.
+		["U.S. product managers", ""],
+		["U.S.A. based designers", "US"],
+		["U.S.A.-based designers", "US"],
+		["non-U.S. product managers", ""],
+		["not U.S.-based designers", ""],
+		["U.S. Bank product managers", ""],
+		// An abbreviation's dots end no negated clause.
+		["not U.K. or U.S. based mentors", ""],
+		["mentors not in the U.K. or U.S.", ""],
+	]) {
+		assert.equal(countryIntentIn(query), iso, query);
+	}
+	// A dotted requester employer stays the requester's.
+	assert.deepEqual(companyCandidates("I worked at U.S. Bank, looking for PMs at Google"), ["Google"]);
+	// The requester's dotted location never becomes the name looked up.
+	const text = withoutPlaces("I'm based in the U.S. searching for Alice Visible");
+	assert.equal(literalNameCandidate(text), "Alice Visible");
+	assert.doesNotMatch(text, /U\.S/);
+
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		for (const [query, iso] of [
+			["I'm U.S.-based, looking for PMs", null],
+			["I'm based in the U.S. and want a mentor in Canada", ""],
+			["mentors in the U.K.", "GB"],
+		]) {
+			calls.length = 0;
+			await callTool("search_mentors", { query });
+			const searches = calls.filter(({ url }) => url.pathname === "/search");
+			assert.ok(searches.length > 0, query);
+			assertInferredCountry(searches, iso, query);
+		}
+	});
+});
+
+test("country inference: any self-reference or negation is none; otherwise only a directly stated country (Codex, general rule)", async () => {
+	// [query, mentor country]. Every case from prior rounds, under the current policy.
+	const cases = [
+		// Prior rounds: prepositional places.
+		["I am based in India and want a design mentor in Canada", ""],
+		["I’m based in India, want a mentor in Canada", ""],
+		["I'm in India, looking for mentors from Canada", ""],
+		["I'm a designer in London looking for a PM in the US", ""],
+		["We live in Singapore and need mentors in the UK", ""],
+		["Based in India, need a PM mentor in Canada", "CA"],
+		["mentors in Canada, I'm in India", ""],
+		["I'm looking for mentors in Canada", ""],
+		["I'm keen on PMs in Canada", ""],
+		["I am based in India and want a design mentor", ""],
+		["I live in India, need a PM mentor", ""],
+		["I'm from Canada looking for a design mentor", ""],
+		["I'm a PM at Stripe in Canada and need a design mentor", ""],
+		["I am based in India searching for product managers in Canada", ""],
+		["I am based in India hunting for a design mentor in Canada", ""],
+		["I'm in India seeking mentors from Canada", ""],
+		["I live in India looking for PMs in the UK", ""],
+		["I'm based in India want a mentor in Canada", ""],
+		["I'm based in India need a mentor in Canada", ""],
+		["I'm based in the UK; mentors in Canada", ""],
+		["I'm based in New York searching for designers in Canada", ""],
+		["I'm based in India product managers in Canada", ""],
+		["Based in India, searching for mentors in Canada", "CA"],
+		["I am based in India searching for product managers", ""],
+		["I am based in India searching for product managers at Google in Canada", ""],
+		["I'm searching for designers in Canada", ""],
+		["I'm hunting for PMs in the UK", ""],
+		["I'm after a PM in Canada", ""],
+		["I am a senior product designer currently based in India and want a mentor in Canada", ""],
+		["I'm a mid level product designer working remotely from India, need a mentor in Canada", ""],
+		["I am a senior product designer currently based in India and want a design mentor", ""],
+		["I am a mentor in India and want a mentor in Canada", ""],
+		["I'm a design mentor based in India, looking for mentors in the UK", ""],
+		["I am a mentor in India and want a design mentor", ""],
+		["I'm keen on mentors in Canada", ""],
+		// Prior rounds: US phrases and dotted abbreviations.
+		["I'm US-based, looking for PMs", ""],
+		["I'm U.S.-based, looking for PMs", ""],
+		["I'm U.S. based, looking for PMs", ""],
+		["I am U.S.A.-based and want a design mentor", ""],
+		["I'm based in the U.S. and want a design mentor", ""],
+		["Based in the U.S., need a PM mentor", ""],
+		["I'm from U.S. looking for a design mentor", ""],
+		["I'm a PM at Stripe in the U.S. and need a design mentor", ""],
+		["I'm based in the U.S. and want a mentor in Canada", ""],
+		["I'm based in the U.S., want a mentor in Canada", ""],
+		["Based in the U.S., need a PM mentor in Canada", "CA"],
+		["I live in the U.K. and need mentors in Canada", ""],
+		["I'm in the U.S.A. looking for mentors in the U.K.", ""],
+		["I'm U.S.-based and want a mentor in the U.K.", ""],
+		// Demonyms and bare US phrases.
+		["I'm American and want a mentor in Canada", ""],
+		["I'm an American designer looking for mentors", ""],
+		["Im an American PM, need a design mentor", ""],
+		["I'm a US product manager looking for a mentor", ""],
+		["I'm currently a U.S. based designer, want a mentor in the U.K.", ""],
+		["my company is American, looking for PMs", ""],
+		// Other subjects, boundaries and abbreviation sentence ends.
+		["I work in Germany and need mentors in Canada", ""],
+		["I work remotely from India, need a mentor", ""],
+		["I'm currently based in Germany — mentors in Canada", ""],
+		["I'm in Germany - mentors in Canada", ""],
+		["I live in the U.K. I need mentors in Canada", ""],
+		["I live in the U.K. Mentors in Canada", ""],
+		["I'm in India to find a mentor in Canada", ""],
+		["I'm based in India for a mentor in Canada", ""],
+		["I'm based in India, who can mentor me from Canada", ""],
+		["I am a designer in India but want a mentor in Japan", ""],
+		["I'm in India at a startup in Berlin, need a mentor", ""],
+		["I'm based in India senior PMs in Canada", ""],
+		["We're in Brazil, seeking mentors in Mexico", ""],
+		["I moved to Canada from India and need a mentor", ""],
+		["I'm from the U.S.A., want mentors in Japan", ""],
+		["Currently based in India, need a mentor", ""],
+		// "my"/"our" is a self-reference, even about the mentor sought.
+		["My home is in India; mentors in Canada", ""],
+		["my team is in Singapore and needs PMs in the UK", ""],
+		["mentors in Japan for my team in India", ""],
+		["My ideal mentor is in Canada", ""],
+		// "Based in Canada" before a role is not "Canada-based designers".
+		["Based in Canada product designers", ""],
+		// Prior rounds: plain places, employers named after places, and codes.
+		["mentors from Canada", "CA"],
+		["designers in India", "IN"],
+		["PM based in UK", "GB"],
+		["mentors in the UK", "GB"],
+		["mentors from Canada who work at Google", "CA"],
+		["mentors from Canada, ideally designers", "CA"],
+		["mentors in the UK at Google", "GB"],
+		["designers from Canada Life in Singapore", ""],
+		["knowledgeable mentors from Canada", "CA"],
+		["designers in UK.", "GB"],
+		["mentors from New York", ""],
+		["mentors from Canada Life", ""],
+		["mentors at Canada Life", ""],
+		["mentors in IT", ""],
+		["mentors in IT.", ""],
+		["mentors in HR.", ""],
+		["mentors in IT, please", ""],
+		["PM from AI startups", ""],
+		["mentors near us", ""],
+		["help us find designers", ""],
+		// Prior rounds: US phrases.
+		["US-based product managers", "US"],
+		["USA based designers", "US"],
+		["usa-based designers", "US"],
+		["U.S.-based mentors", "US"],
+		["United States based PMs", "US"],
+		["US product managers", ""],
+		["American mentors", ""],
+		["mentors who are US-based", ""],
+		["US senior product managers", ""],
+		["US-based product managers in New York", "US"],
+		["US-based company, mentors in Canada", "CA"],
+		["US-based designers at American Express", "US"],
+		["U.S. product managers", ""],
+		["U.S.A.-based designers", "US"],
+		["mentors in the U.S.", "US"],
+		["designers from the U.K. who design", "GB"],
+		["Latin American mentors", ""],
+		["North American designers", ""],
+		["US and Canada mentors", ""],
+		["American Express designers", ""],
+		["bank of america designers", ""],
+		["U.S. Bank product managers", ""],
+		// Prior rounds: negations.
+		["mentors not based in US", ""],
+		["mentors not based in the UK", ""],
+		["designers anywhere except in Canada", ""],
+		["PMs, excluding those from India", ""],
+		["mentors who are not from Canada", ""],
+		...NEGATED_PLACE_QUERIES.map((query) => [query, ""]),
+		...NEGATED_US_QUERIES.map((query) => [query, ""]),
+		["non-US product managers", ""],
+		["mentors who are not US-based", ""],
+		["not US-based designers", ""],
+		["non-U.S. product managers", ""],
+		["not U.S.-based designers", ""],
+		["not U.K. or U.S. based mentors", ""],
+		["mentors not in the U.K. or U.S.", ""],
+		["non-US senior product managers", ""],
+		// Any negation anywhere means no country, whatever it governs.
+		["I am not looking for mentors in Canada", ""],
+		["I am not looking for US-based mentors", ""],
+		["I'm not in Canada, looking for mentors in Canada", ""],
+		["not a PM, mentors from Canada", ""],
+		["mentors who can’t wait, from Canada", ""],
+		["American designers, not at Bank of America", ""],
+		["I never want mentors from Canada", ""],
+		["mentors in Canada without a PhD", ""],
+		["mentors from Canada, no recruiters", ""],
+		["I'd like anyone other than mentors in Canada", ""],
+		["designers outside Google in Canada", ""],
+		["mentors in Canada except at Shopify", ""],
+		["I cannot find mentors in Canada", ""],
+		["non-technical mentors in Canada", ""],
+		// Any first-person pronoun anywhere means no country, "I want"/"I need" included.
+		["I need mentors; I'm a mentor in India", ""],
+		["I want a mentor, I'm a designer in India", ""],
+		["I need a mentor and I work with PMs in India", ""],
+		["I am a mentor in India", ""],
+		["I want mentors and I'm a PM in Canada", ""],
+		["I want a mentor in Canada for my team in India", ""],
+		["I want a mentor in Canada like me", ""],
+		["I want US-based product managers", ""],
+		["I'm in India, need U.S.-based designers", ""],
+		["I'm looking for PMs from the U.K.", ""],
+		["I'm looking for someone located in Canada", ""],
+		["I'm looking for a mentor based in Canada", ""],
+		["I'm looking for a mentor who lives in Canada", ""],
+		["I'm looking for mentors living in Canada", ""],
+		["I'm looking for American mentors", ""],
+		["I want mentors in Canada or PMs in the UK", ""],
+		["I'm looking for a coach in New York", ""],
+		// "me"/"us" as an object is no self-reference.
+		["help me find mentors in Canada", "CA"],
+		["Find me mentors in Canada", "CA"],
+		["Find me US-based product managers", "US"],
+		["Show me designers from the UK", "GB"],
+		["Get me PMs in Canada", "CA"],
+		["I want US product managers", ""],
+		["I need mentors in Canada", ""],
+		["I'm looking for US product managers", ""],
+		["I am searching for designers in the UK", ""],
+		["We want mentors in Canada", ""],
+		// A self-reference anywhere: no country.
+		["I'm a designer, find me mentors in Canada", ""],
+		["I'm in India, find me US product managers", ""],
+		["I live in India, show me PMs in Canada", ""],
+		["my team wants US product managers", ""],
+		["I'm a designer looking for mentors in Canada", ""],
+	];
+	for (const [query, iso] of cases) assert.equal(countryIntentIn(query), iso, query);
+
+	// The requester's place never becomes the name looked up either.
+	for (const query of [
+		"I am based in India searching for Alice Visible",
+		"I'm in India hunting Alice Visible",
+		"I live in New York, find Alice Visible",
+		"I'm based in the U.S. searching for Alice Visible",
+		"I work in Germany, find Alice Visible",
+	]) {
+		assert.equal(literalNameCandidate(withoutPlaces(query)), "Alice Visible", query);
+	}
+
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		for (const [query, iso] of [
+			["I'm an American designer looking for mentors", null],
+			["I'm American and want a mentor in Canada", ""],
+			["I work in Germany and need mentors in Canada", ""],
+			["I am not looking for mentors in Canada", null],
+			["I am not looking for US-based mentors", null],
+			// Controls: a directly stated country still filters the search.
+			["mentors in Canada", "CA"],
+			["Find me US-based product managers", "US"],
+		]) {
+			calls.length = 0;
+			await callTool("search_mentors", { query });
+			const searches = calls.filter(({ url }) => url.pathname === "/search");
+			assert.ok(searches.length > 0, query);
+			assertInferredCountry(searches, iso, query);
+		}
+	});
+});
+
+test("country inference: any first-person pronoun anywhere means no country; 'me' does not (Codex P1, company.ts:485)", () => {
+	const cases = [
+		["I was a mentor in Canada, looking for designers", ""],
+		["I moved to India, looking for mentors in Canada", ""],
+		["I've lived in India; need mentors in Canada", ""],
+		["I'd like mentors in Canada", ""],
+		["I'll take mentors in Canada", ""],
+		["Mentors in Canada for myself", ""],
+		["mentors in Canada please, my background is design", ""],
+		["i need mentors in Canada", ""],
+		["Im after mentors in Canada", ""],
+		["find me mentors in Canada", "CA"],
+		["mentors in Canada", "CA"],
+	];
+	for (const [query, country] of cases) assert.equal(countryIntentIn(query), country, query);
+});
+
+test("country inference: 'mine', 'we', 'our(s)', lowercase 'us', and nobody/none/neither/avoid mean no country; the country US still reads (Codex)", () => {
+	const cases = [
+		["mentors in Canada with a background like mine", ""],
+		["we need mentors in Canada", ""],
+		["we're hiring, mentors in Canada", ""],
+		["mentors in Canada for our team", ""],
+		["mentors in Canada with a path like ours", ""],
+		["help us find mentors in Canada", ""],
+		["mentors in Canada, nobody from Google", ""],
+		["mentors in Canada, none at startups", ""],
+		["mentors in Canada, nothing junior", ""],
+		["mentors in Canada, neither PMs nor engineers", ""],
+		["mentors in Canada, avoid Google", ""],
+		["mentors in Canada, Google excluded", ""],
+		["US-based mentors", "US"],
+		["mentors in the US", "US"],
+		["mentors from US", "US"],
+	];
+	for (const [query, country] of cases) assert.equal(countryIntentIn(query), country, query);
+});
+
+test("requester employment is stripped even when a capitalized title follows the subject (Codex P1, company.ts:213)", () => {
+	for (const query of [
+		"I am Senior Designer at Google, looking for a PM",
+		"I'm Senior Designer at Google, looking for a PM",
+		"I'm Designer at Google, looking for a PM",
+	]) {
+		assert.deepEqual(requestedRoleFamilies(query), ["product"], query);
+	}
 });

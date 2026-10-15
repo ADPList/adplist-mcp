@@ -75,8 +75,10 @@ export const FIELDS = [
 ];
 const LIST_FIELDS = new Set(["expertise", "disciplines", "languages"]);
 // Rendered client-side by the page; an embedded-data match is not a failure.
-const EMBEDDED_FIELDS = new Set(["average_rating", "total_reviews", "country", "languages"]);
+// Rating and review count are not here: STAT_FIELDS never reach the text match.
+const EMBEDDED_FIELDS = new Set(["country", "languages"]);
 // Compared with reviewStats or a labelled number, never any number on the page.
+// checkField returns checkStat's answer before any free-text match.
 const STAT_FIELDS = new Set(["average_rating", "total_reviews"]);
 const SOURCES = ["search", "profile"];
 const STATUSES = ["ok", "embedded", "absent", "missing", "script-only"];
@@ -211,6 +213,8 @@ export function checkField(field, value, page) {
 		if (forms.some((form) => page.rawScripts.includes(form))) return "script-only";
 		return "missing";
 	}
+	// Statistics first and only: reviewStats or a labelled number decides, so a
+	// bio's "31 projects" can never pass total_reviews: 31.
 	if (STAT_FIELDS.has(field)) return checkStat(field, value, page);
 	const items = LIST_FIELDS.has(field) ? value : [value];
 	const statuses = items.map((item) => {

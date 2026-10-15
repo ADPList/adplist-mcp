@@ -20,7 +20,7 @@ import {
 	employerPhrase,
 	isCurrentEmployer,
 	knownCompanyIn,
-	placeIn,
+	withoutPlaces,
 } from "./company.ts";
 import { PublicError } from "./errors.ts";
 import {
@@ -169,16 +169,31 @@ export async function publicSearchMentors(
 		}
 		intentUrl = url.toString();
 	}
-	// A company or place read from the query means it is not a name. An
-	// explicit `company` alone does not: it filters the name lookup instead.
+	// A company read from the query means it is not a name. An explicit
+	// `company` alone does not: it filters the name lookup instead. A query
+	// that is only a person's name ("Yogeshree Tawde", "Meta Patel") is always
+	// tried as one first: with no at/from/in phrasing a company word in it is
+	// more likely a name, and a miss falls through to the search below,
+	// company and all. A place does not stop a name: the name is read with
+	// the place phrases taken out ("Find Alice Visible in Singapore" → "Alice
+	// Visible"), so a place ("designers in New York") is never one.
 	const inferredCompany = input.company ? knownCompanyIn(input.query) : company;
-	const nameCandidate =
-		inferredCompany || phrasedCompany || placeIn(input.query) ? "" : literalNameCandidate(input.query);
-	const meta = (count: number, byName = false): PublicSearchMeta => ({
-		result_count: count,
-		had_company_filter: Boolean(company),
-		intent_category: intentCategory(input.query, Boolean(company), byName),
-	});
+	// The plain-name check reads the query as typed, before any place is taken
+	// out: "My Nguyen", "Im Soo Jung" are names.
+	const typedName = literalNameCandidate(input.query);
+	const plainName = isPlainName(input.query, typedName);
+	const literalName = plainName ? typedName : literalNameCandidate(withoutPlaces(input.query));
+	const nameCandidate = plainName || !(inferredCompany || phrasedCompany) ? literalName : "";
+	// A name hit was filtered by the caller's `company` only, never one read
+	// from the name ("Meta Patel").
+	const meta = (count: number, byName = false): PublicSearchMeta => {
+		const hadCompany = byName ? Boolean(input.company) : Boolean(company);
+		return {
+			result_count: count,
+			had_company_filter: hadCompany,
+			intent_category: intentCategory(input.query, hadCompany, byName),
+		};
+	};
 	const why: WhyMatchContext = {
 		query: input.query,
 		discipline: input.discipline,
@@ -188,10 +203,12 @@ export async function publicSearchMentors(
 	const matchesFilters: KeepCard = (mentor, record, row) => matchesCardFilters(filterInput, mentor, record, row);
 
 	if (nameCandidate) {
-		// Only the caller's own filters, and only against fields the card has:
-		// the name search already applied them upstream, and nothing parsed
-		// from the name text ever filters a name lookup. An explicit `company`
-		// needs a current employer that matches: missing or past-only is out.
+		// Only the caller's own explicit filters, and only against fields the
+		// card has: the name search already applied them upstream. Nothing read
+		// from the query (a place, a company in the name) filters a name
+		// lookup; inferred filters apply to the fallback search below. An
+		// explicit `company` needs a current employer that matches: missing or
+		// past-only is out.
 		const matchesNamedFilters: KeepCard = (mentor, record, row) =>
 			matchesCardFilters(input, mentor, record, row, { allowMissing: true }) &&
 			(!input.company || isCurrentEmployer(mentor.company ?? "", input.company, mentor.title ?? ""));
@@ -443,6 +460,16 @@ function regionName(iso: string): string {
 	} catch {
 		return "";
 	}
+}
+
+// True when the query is nothing but the literal name read from it, and names
+// no role: "Yogeshree Tawde", "Meta Patel", "yogeshree tawde". Not "Find
+// Yogeshree Tawde at Google" (more than the name) or "Google PM" (a role).
+function isPlainName(query: string, literalName: string): boolean {
+	if (!literalName) return false;
+	const words = (value: string) => (value.match(/[A-Za-z][A-Za-z'-]*/g) ?? []).join(" ").toLowerCase();
+	const rest = query.replace(/[A-Za-z][A-Za-z'-]*|[\s.,"'“”‘’]/g, "");
+	return !rest && words(query) === words(literalName) && requestedRoleFamilies(query, "", undefined).length === 0;
 }
 
 function uniqueCandidates(candidates: Candidate[]): Candidate[] {

@@ -162,8 +162,11 @@ const TOOL_WORDS = new Set(
 // "I was at Google", "I used to work at Google", "I worked at Google", "I'm a
 // designer, previously at Google", or a query that opens "Previously at
 // Google, …" — the requester's history, never a mentor-employer filter.
-const CLAUSE_STOP = String.raw`(?:and|but|so|need|needs|looking|seeking|want|wants|hoping|trying|interested|find|finding|talk|speak|connect|meet|reach|who|that|which|mentor|mentors|someone|anyone|people)\b`;
-const CLAUSE_WORD = String.raw`[A-Za-z0-9&'-]+(?:\.[A-Za-z0-9&'-]+)*`;
+const CLAUSE_STOP = String.raw`(?:and|but|so|need|needs|looking|seeking|searching|hunting|after|want|wants|hoping|trying|interested|find|finding|talk|speak|connect|meet|reach|who|that|which|mentor|mentors|someone|anyone|people)\b`;
+// A dotted abbreviation ("U.S.", "U.S.A.", "U.K.") is one word, final dot
+// included, so a clause runs through it rather than stopping at its dot.
+const DOTTED_ABBREVIATION = String.raw`(?:[A-Za-z]\.){2,}`;
+const CLAUSE_WORD = String.raw`(?:${DOTTED_ABBREVIATION}(?![A-Za-z0-9])|[A-Za-z0-9&'-]+(?:\.[A-Za-z0-9&'-]+)*)`;
 const CLAUSE_WORDS = String.raw`(?:\s+(?!${CLAUSE_STOP})${CLAUSE_WORD})`;
 const SELF_ADVERB = String.raw`(?:\s+(?:currently|now|previously|formerly|once|recently|also))?`;
 const SELF_SUBJECT = String.raw`(?:i\s*'\s*m|i\s+am|im|we\s*'\s*re|we\s+are|(?:my|our)\s+team\s+is|(?:i|we)(?:\s*'\s*ve|\s+have)?(?:\s+been)?${SELF_ADVERB}\s+(?:work|works|working|worked|employed)|(?:i|we)${SELF_ADVERB}\s+(?:was|were|used\s+to(?:\s+(?:work|be))?))`;
@@ -343,6 +346,7 @@ const LOCATION_NAMES = new Set(
 const COUNTRY_ALIASES: [string, string][] = [
 	["uk", "GB"], ["britain", "GB"], ["great britain", "GB"], ["england", "GB"], ["scotland", "GB"],
 	["wales", "GB"], ["us", "US"], ["usa", "US"], ["america", "US"], ["united states of america", "US"],
+	["u.s.", "US"], ["u.s.a.", "US"], ["u.k.", "GB"],
 	["uae", "AE"], ["korea", "KR"], ["south korea", "KR"], ["turkey", "TR"], ["russia", "RU"],
 	["vietnam", "VN"], ["czech republic", "CZ"], ["holland", "NL"], ["ivory coast", "CI"], ["macau", "MO"],
 ];
@@ -411,16 +415,12 @@ export function isPlacePhrase(phrase: string): boolean {
 // by anything else it starts an employer ("from Canada Life") and is no place.
 const PLACE_PREPOSITION =
 	/\b(?:from|in|based\s+(?:in|out\s+of)|located\s+in|living\s+in|out\s+of)\s+(?=((?:the\s+)?[A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,3}))/gi;
-// A negation shortly before the place, within its clause: "not based in US",
-// "who aren't in Canada", "anywhere but in the UK", "excluding those from
-// Canada". Read after apostrophes are made ASCII, so "aren’t" is "aren't".
-const PLACE_NEGATION =
-	/(?:\b(?:not|no|never|without|outside|except|excluding|exclude|non|other\s+than|anywhere\s+but)\b|[a-z]n't\b)[^,.;:!?]{0,40}$/i;
+type PlaceMatch = { place: string; start: number; end: number };
 
-function placeMatches(rawQuery: string): { place: string; negated: boolean }[] {
-	const query = asciiQuotes(rawQuery);
-	const places: { place: string; negated: boolean }[] = [];
-	for (const match of query.matchAll(PLACE_PREPOSITION)) {
+// `text` is already ASCII-quoted. `start`–`end` spans the preposition and place.
+function scanPlaces(text: string): PlaceMatch[] {
+	const places: PlaceMatch[] = [];
+	for (const match of text.matchAll(PLACE_PREPOSITION)) {
 		const words = match[1].split(/\s+/);
 		for (let n = words.length; n >= 1; n -= 1) {
 			const phrase = words.slice(0, n).join(" ");
@@ -428,8 +428,12 @@ function placeMatches(rawQuery: string): { place: string; negated: boolean }[] {
 			const next = words[n];
 			const ends = next === undefined || /\.$/.test(words[n - 1]) || NON_COMPANY_WORDS.has(bare(next));
 			if (ends) {
-				const negated = PLACE_NEGATION.test(query.slice(0, match.index));
-				places.push({ place: phrase.replace(/^the\s+/i, ""), negated });
+				// Measured on `text` as written, so runs of spaces inside the
+				// place ("New   York") are covered whole.
+				const start = match.index ?? 0;
+				const last = [...match[1].matchAll(/\S+/g)][n - 1];
+				const end = start + match[0].length + (last.index ?? 0) + last[0].length;
+				places.push({ place: phrase.replace(/^the\s+/i, ""), start, end });
 			}
 			break;
 		}
@@ -437,17 +441,83 @@ function placeMatches(rawQuery: string): { place: string; negated: boolean }[] {
 	return places;
 }
 
-// The first place the query names after a place preposition, negated or not.
-export function placeIn(query: string): string {
-	return placeMatches(query)[0]?.place ?? "";
+// The query with every place phrase blanked out: "Find Alice Visible in
+// Singapore" → "Find Alice Visible |", so a name is read from what is left
+// and a place ("New York") is never a name.
+export function withoutPlaces(query: string): string {
+	const text = asciiQuotes(query);
+	let out = "";
+	let from = 0;
+	for (const { start, end } of scanPlaces(text)) {
+		out += `${text.slice(from, start)} | `;
+		from = end;
+	}
+	return out + text.slice(from);
 }
 
-// The ISO country code of the place the query asks for ("mentors from Canada"
-// → "CA", "PM based in UK" → "GB"), or "" when there is none, the place is a
-// region or city, or the query excludes it ("mentors not based in US").
+// Missing a country filter only widens the results; a wrong one hides every
+// right mentor. So countryIntentIn reads a country only where the query states
+// it directly, and returns "" whenever it might be wrong.
+
+// Any negation anywhere: "mentors not in Canada", "non-US", "aren't based in",
+// "mentors in Canada, nobody from Google".
+const ANY_NEGATION =
+	/\b(?:not|no|non|never|nobody|none|nothing|neither|nor|cannot|without|outside|except|excluding|exclude|excluded|avoid|avoiding|other\s+than|anywhere\s+but)\b|[a-z]n't\b/i;
+// Any first-person pronoun anywhere: "I", "I'm", "Im", "I've", "I'd", "I'll",
+// "my", "mine", "myself", and the plural "we", "we're", "our", "ours",
+// "ourselves". A place anywhere in such a query may be the requester's ("I was
+// a mentor in Canada", "a background like mine"). Not "me" ("find me mentors
+// in Canada").
+const SELF_REFERENCE =
+	/\b(?:i(?:\s*'\s*(?:m|ve|d|ll))?|im|my|mine|myself|we(?:\s*'\s*(?:re|ve|d|ll))?|our|ours|ourselves)\b/i;
+// "us" the pronoun, never the country: lowercase only, and not "the us" or
+// "us-based" / "us based".
+const US_PRONOUN = /(?<!\bthe\s+)\bus\b(?!\s*-?\s*based\b)/;
+// Who is sought: "mentors in Canada", "PMs from the UK".
+const SOUGHT_NOUNS = new Set([
+	..."mentor mentors coach coaches advisor advisors".split(/\s+/),
+	...[...ROLE_WORDS].filter((word) => !["product", "design", "engineering", "ux", "ui", "uxr"].includes(word)),
+]);
+// Words allowed between "PLACE-based" and the sought noun: "US-based senior
+// product managers".
+const SOUGHT_MODIFIERS = new Set(
+	"senior junior lead staff principal mid level entry experienced seasoned product design ux ui data software".split(
+		/\s+/,
+	),
+);
+const MENTOR_PREPOSITION = /^(?:in|from|based\s+in|located\s+in)\s/i;
+
+// The ISO country code the query states directly for the mentors it asks for:
+// a sought noun right before in/from/based in/located in PLACE ("mentors from
+// Canada" → "CA", "PM based in UK" → "GB"), or PLACE-based right before one
+// ("US-based product managers" → "US"). "" for anything less certain: any
+// negation, any self-reference ("I'm in India, need mentors in Canada"), a
+// city or region, an ambiguous code ("mentors in IT"), or two countries.
 export function countryIntentIn(query: string): string {
-	const place = placeMatches(query).find((match) => !match.negated)?.place;
-	return place ? countryCodeOf(employerTokens(place)) : "";
+	const text = asciiQuotes(query);
+	if (ANY_NEGATION.test(text) || SELF_REFERENCE.test(text) || US_PRONOUN.test(text)) return "";
+	const codes = new Set<string>();
+	for (const { place, start } of scanPlaces(text)) {
+		if (!MENTOR_PREPOSITION.test(text.slice(start))) continue;
+		const before = text.slice(0, start).match(WORD) ?? [];
+		if (!SOUGHT_NOUNS.has(bare(before[before.length - 1] ?? ""))) continue;
+		codes.add(countryCodeOf(employerTokens(place)));
+	}
+	for (const match of text.matchAll(/(?:\s*-\s*|\s+)based\s+([A-Za-z]+(?:\s+[A-Za-z]+){0,3})/gi)) {
+		const after = match[1].split(/\s+/).map((word) => word.toLowerCase());
+		const noun = after.findIndex((word) => !SOUGHT_MODIFIERS.has(word));
+		if (noun < 0 || !SOUGHT_NOUNS.has(after[noun])) continue;
+		const before = text.slice(0, match.index).split(/\s+/).filter(Boolean);
+		for (let n = Math.min(4, before.length); n >= 1; n -= 1) {
+			const phrase = before.slice(-n).join(" ");
+			if (!isPlacePhrase(phrase)) continue;
+			const place = phrase.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9.]+$/g, "").replace(/^the\s+/i, "");
+			codes.add(countryCodeOf(employerTokens(place)));
+			break;
+		}
+	}
+	codes.delete("");
+	return codes.size === 1 ? [...codes][0] : "";
 }
 
 // The companies employer text names, current or past, each normalized to
