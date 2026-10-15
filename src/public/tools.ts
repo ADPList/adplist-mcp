@@ -16,9 +16,11 @@ import {
 	companyConfirmedByEmployers,
 	companyNamedByEmployers,
 	currentEmployerGivenTitle,
+	countryIntentIn,
 	employerPhrase,
 	isCurrentEmployer,
 	knownCompanyIn,
+	placeIn,
 } from "./company.ts";
 import { PublicError } from "./errors.ts";
 import {
@@ -122,17 +124,23 @@ export async function publicSearchMentors(
 	if (!baseUrl || !env.AUTH_SERVICE_URL) throw new PublicError("UNAVAILABLE");
 
 	const limit = input.limit ?? DEFAULT_PUBLIC_LIMIT;
-	const filters = {
+	// The filters the caller passed. A literal-name lookup applies only these.
+	const explicitFilters = {
 		...(input.discipline ? { discipline: input.discipline } : {}),
 		...(input.country ? { country: input.country.toUpperCase() } : {}),
 		...(input.language ? { language: input.language } : {}),
 		max_results: MAX_PUBLIC_LIMIT,
 	};
+	// A country the query asks for ("mentors from Canada", "PM based in UK") is
+	// a country filter for the descriptive search, like an explicit `country`.
+	const placeCountry = input.country ? "" : countryIntentIn(input.query);
+	const filters = placeCountry ? { ...explicitFilters, country: placeCountry } : explicitFilters;
 	const searchInput: SearchMentorsInput = { intent: input.query, filters };
 	let intentUrl: string;
 	try {
-		// Also rejects disciplines outside the ADPList taxonomy.
-		intentUrl = buildSearchMentorsUrl(baseUrl, searchInput);
+		// Also rejects disciplines outside the ADPList taxonomy. The country is
+		// only ours: "mentors not based in US" must not become countries=US.
+		intentUrl = buildSearchMentorsUrl(baseUrl, searchInput, { inferCountry: false });
 	} catch {
 		throw new PublicError("INVALID_INPUT");
 	}
@@ -145,7 +153,9 @@ export async function publicSearchMentors(
 	// once a returned mentor's current employer confirms it, or stays one with
 	// no current employees when returned mentors name X only as a past
 	// employer. A "mentors from X" phrase no row names as an employer at all
-	// ("mentors from Canada") only orders, as before.
+	// only orders, as before. A place is never a company: "mentors from
+	// Canada" is the country filter above, even when a mentor works at Canada
+	// Life.
 	let company = input.company ?? knownCompanyIn(input.query);
 	let strictCompany = Boolean(company);
 	const phrasedCompany = company ? "" : employerPhrase(input.query);
@@ -159,7 +169,11 @@ export async function publicSearchMentors(
 		}
 		intentUrl = url.toString();
 	}
-	const nameCandidate = company || phrasedCompany ? "" : literalNameCandidate(input.query);
+	// A company or place read from the query means it is not a name. An
+	// explicit `company` alone does not: it filters the name lookup instead.
+	const inferredCompany = input.company ? knownCompanyIn(input.query) : company;
+	const nameCandidate =
+		inferredCompany || phrasedCompany || placeIn(input.query) ? "" : literalNameCandidate(input.query);
 	const meta = (count: number, byName = false): PublicSearchMeta => ({
 		result_count: count,
 		had_company_filter: Boolean(company),
@@ -170,23 +184,31 @@ export async function publicSearchMentors(
 		discipline: input.discipline,
 		language: input.language,
 	};
-	const matchesFilters: KeepCard = (mentor, record, row) => matchesCardFilters(input, mentor, record, row);
+	const filterInput = placeCountry ? { ...input, country: placeCountry } : input;
+	const matchesFilters: KeepCard = (mentor, record, row) => matchesCardFilters(filterInput, mentor, record, row);
 
 	if (nameCandidate) {
+		// Only the caller's own filters, and only against fields the card has:
+		// the name search already applied them upstream, and nothing parsed
+		// from the name text ever filters a name lookup. An explicit `company`
+		// needs a current employer that matches: missing or past-only is out.
+		const matchesNamedFilters: KeepCard = (mentor, record, row) =>
+			matchesCardFilters(input, mentor, record, row, { allowMissing: true }) &&
+			(!input.company || isCurrentEmployer(mentor.company ?? "", input.company, mentor.title ?? ""));
 		const nameCandidates: Candidate[] = [];
 		if (!input.discipline && !input.country && !input.language) {
 			const guess = slugifyLiteralName(nameCandidate);
 			if (guess) nameCandidates.push({ slug: guess, row: null, nameMatch: true, requireName: nameCandidate });
 		}
 		const nameRows = await anonymousSearch(
-			buildSearchMentorsUrl(baseUrl, { intent: nameCandidate, filters }),
+			buildSearchMentorsUrl(baseUrl, { intent: nameCandidate, filters: explicitFilters }, { inferFilters: false }),
 		).catch(() => null);
 		for (const row of nameRows ?? []) {
 			if (textOf(row.slug) && nameContainsEveryWord(textOf(row.name), nameCandidate)) {
 				nameCandidates.push({ slug: textOf(row.slug), row, nameMatch: true });
 			}
 		}
-		const named = await gateCandidates(env, nameCandidates, source, why, limit, matchesFilters);
+		const named = await gateCandidates(env, nameCandidates, source, why, limit, matchesNamedFilters);
 		if (named.length > 0) return { output: { mentors: named }, meta: meta(named.length, true) };
 	}
 
@@ -376,25 +398,35 @@ async function gateCandidates(
 // the search row matched them upstream, but the card takes these fields from
 // the identity record, which may have changed since the index was built.
 // Country compares the ISO code of whichever source the card's country came
-// from (the record, else the row), else the card's country name.
+// from (the record, else the row), else the card's country name. With
+// `allowMissing`, a field the card lacks passes: only a value that contradicts
+// the filter drops the card.
 function matchesCardFilters(
-	input: PublicSearchInput,
+	input: Pick<PublicSearchInput, "discipline" | "language" | "country">,
 	mentor: PublicMentor,
 	record: Record<string, unknown>,
 	row: SearchServiceMentor | null,
+	{ allowMissing = false } = {},
 ): boolean {
 	const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 	const { discipline, language, country } = input;
 	if (
 		discipline &&
 		shouldUseDisciplineFilter(discipline) &&
+		!(allowMissing && mentor.disciplines.length === 0) &&
 		!mentor.disciplines.some((item) => same(item, discipline))
 	) {
 		return false;
 	}
-	if (language && !mentor.languages.some((item) => same(item, language))) return false;
+	if (
+		language &&
+		!(allowMissing && mentor.languages.length === 0) &&
+		!mentor.languages.some((item) => same(item, language))
+	) {
+		return false;
+	}
 	if (country) {
-		if (!mentor.country) return false;
+		if (!mentor.country) return allowMissing;
 		const recordCountry = asRecord(record.country);
 		const searchRow = asRecord(row);
 		const iso = textOf(recordCountry.countryName) || textOf(recordCountry.iso)
@@ -445,7 +477,9 @@ async function employerSearch(
 	intentUrl: string,
 	rankDepth?: number,
 ): Promise<{ rows: SearchServiceMentor[]; employers: string[] } | null> {
-	const url = new URL(buildSearchMentorsUrl(baseUrl, { intent: company, filters: searchInput.filters }));
+	const url = new URL(
+		buildSearchMentorsUrl(baseUrl, { intent: company, filters: searchInput.filters }, { inferCountry: false }),
+	);
 	url.searchParams.set("pageSize", new URL(intentUrl).searchParams.get("pageSize") ?? "9");
 	const rows = await anonymousSearch(url.toString()).catch(() => null);
 	if (!rows) return null;
@@ -465,6 +499,7 @@ function rankRows(rows: SearchServiceMentor[], input: SearchMentorsInput, depth?
 		if (slug && !bySlug.has(slug)) bySlug.set(slug, row);
 	}
 	const ranked = mapSearchMentorsResponse({ results: rows }, input, false, {
+		inferCountry: false,
 		maxRows: depth,
 		roleDecided: depth !== undefined,
 	}).mentors;

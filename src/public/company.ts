@@ -194,8 +194,10 @@ const EMPLOYEE_WORDS = new Set(
 
 // The signed-in search's employer phrase ("mentors at Acme"), cut before a
 // tool clause: "mentors at Acme using Figma" → "Acme", not "Acme using Figma".
+// A place is never one: "mentors from Canada" → "".
 export function employerPhrase(query: string): string {
-	return employerCandidate(query).split(/(?:^|\s+)(?:using|via)\b/i)[0].trim();
+	const phrase = employerCandidate(query).split(/(?:^|\s+)(?:using|via)\b/i)[0].trim();
+	return isPlacePhrase(phrase) ? "" : phrase;
 }
 
 // Typographic apostrophes and quotes to ASCII, so "I’m a PM at Google" reads
@@ -241,6 +243,9 @@ function companyPhrases(query: string): { explicit: string[]; implied: string[] 
 		if (words.some((word) => NON_COMPANY_WORDS.has(bare(word)))) return false;
 		if (!allowTools && words.some((word) => TOOL_WORDS.has(bare(word)))) return false;
 		const phrase = words.join(" ");
+		// A place is where the mentor is, never who employs them; it also ends
+		// the shrinking, so "from New York" never yields "New".
+		if (isPlacePhrase(phrase)) return true;
 		if (!seen.some((existing) => employerTokens(existing) === employerTokens(phrase))) {
 			seen.push(phrase);
 			into.push(phrase);
@@ -334,28 +339,115 @@ const LOCATION_NAMES = new Set(
 		"bogota", "buenos aires",
 	].map(employerTokens),
 );
-let regionNames: Set<string> | undefined;
-function isLocationName(tokens: string): boolean {
-	if (!regionNames) {
-		regionNames = new Set();
+// Everyday country names ICU spells differently or not at all, as ISO codes.
+const COUNTRY_ALIASES: [string, string][] = [
+	["uk", "GB"], ["britain", "GB"], ["great britain", "GB"], ["england", "GB"], ["scotland", "GB"],
+	["wales", "GB"], ["us", "US"], ["usa", "US"], ["america", "US"], ["united states of america", "US"],
+	["uae", "AE"], ["korea", "KR"], ["south korea", "KR"], ["turkey", "TR"], ["russia", "RU"],
+	["vietnam", "VN"], ["czech republic", "CZ"], ["holland", "NL"], ["ivory coast", "CI"], ["macau", "MO"],
+];
+// Region codes ICU names that are not countries.
+const NON_COUNTRY_CODES = new Set(["EU", "EZ", "UN", "QO", "XA", "XB", "ZZ"]);
+let countryCodes: Map<string, string> | undefined;
+
+// The ISO code for a country name, code or alias in employerTokens form
+// ("canada", "ca", "united kingdom", "uk" → "GB"), else "".
+function countryCodeOf(tokens: string): string {
+	if (!countryCodes) {
+		countryCodes = new Map();
 		const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 		let displayNames: Intl.DisplayNames | undefined;
 		try {
 			displayNames = new Intl.DisplayNames(["en"], { type: "region" });
 		} catch {
-			// No ICU region names: the fixed list above still applies.
+			// No ICU region names: the aliases and fixed list still apply.
 		}
 		for (const a of letters) {
 			for (const b of letters) {
-				const name = displayNames?.of(`${a}${b}`);
-				if (name && name !== `${a}${b}`) {
-					regionNames.add(employerTokens(`${a}${b}`));
-					regionNames.add(employerTokens(name));
+				const code = `${a}${b}`;
+				const name = displayNames?.of(code);
+				if (!name || name === code || NON_COUNTRY_CODES.has(code)) continue;
+				for (const key of [employerTokens(code), employerTokens(name)]) {
+					if (key && !countryCodes.has(key)) countryCodes.set(key, code);
 				}
 			}
 		}
+		for (const [alias, code] of COUNTRY_ALIASES) countryCodes.set(employerTokens(alias), code);
 	}
-	return LOCATION_NAMES.has(tokens) || regionNames.has(tokens);
+	return countryCodes.get(tokens) ?? "";
+}
+
+function isLocationName(tokens: string): boolean {
+	return LOCATION_NAMES.has(tokens) || Boolean(countryCodeOf(tokens));
+}
+
+// Two-letter codes that are more often a field than a country in a query
+// ("mentors in IT", "PM from AI startups"). Lowercase two-letter words ("in",
+// "us", "me") are never codes; "uk" is the one exception.
+const AMBIGUOUS_CODES = new Set(["ai", "ar", "bi", "hr", "id", "it", "ml", "pm", "qa"]);
+
+// True when a query phrase, as written, is only a place: a country name, code
+// or alias, a region, or an office city ("Canada", "the UK", "New York").
+export function isPlacePhrase(phrase: string): boolean {
+	// Punctuation is stripped first, so "IT." meets the same guards as "IT".
+	const text = phrase
+		.trim()
+		.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "")
+		.replace(/^the\s+/i, "");
+	const tokens = employerTokens(text);
+	if (!tokens || !isLocationName(tokens)) return false;
+	if (/^[A-Za-z]{2}$/.test(text)) {
+		return tokens === "uk" || (text === text.toUpperCase() && !AMBIGUOUS_CODES.has(tokens));
+	}
+	return true;
+}
+
+// A place the query asks mentors to be in: "from", "in", "based in", "located
+// in", "living in" or "out of" followed by a country, region or city. Returns
+// the place as written, longest match first ("from New York" → "New York").
+// The words are read in a lookahead, so "from Google in London" still reaches
+// "in London". The place must end the phrase: followed by punctuation, the
+// end, or a clause word ("from Canada who…", "in the UK at Google"). Followed
+// by anything else it starts an employer ("from Canada Life") and is no place.
+const PLACE_PREPOSITION =
+	/\b(?:from|in|based\s+(?:in|out\s+of)|located\s+in|living\s+in|out\s+of)\s+(?=((?:the\s+)?[A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,3}))/gi;
+// A negation shortly before the place, within its clause: "not based in US",
+// "who aren't in Canada", "anywhere but in the UK", "excluding those from
+// Canada". Read after apostrophes are made ASCII, so "aren’t" is "aren't".
+const PLACE_NEGATION =
+	/(?:\b(?:not|no|never|without|outside|except|excluding|exclude|non|other\s+than|anywhere\s+but)\b|[a-z]n't\b)[^,.;:!?]{0,40}$/i;
+
+function placeMatches(rawQuery: string): { place: string; negated: boolean }[] {
+	const query = asciiQuotes(rawQuery);
+	const places: { place: string; negated: boolean }[] = [];
+	for (const match of query.matchAll(PLACE_PREPOSITION)) {
+		const words = match[1].split(/\s+/);
+		for (let n = words.length; n >= 1; n -= 1) {
+			const phrase = words.slice(0, n).join(" ");
+			if (!isPlacePhrase(phrase)) continue;
+			const next = words[n];
+			const ends = next === undefined || /\.$/.test(words[n - 1]) || NON_COMPANY_WORDS.has(bare(next));
+			if (ends) {
+				const negated = PLACE_NEGATION.test(query.slice(0, match.index));
+				places.push({ place: phrase.replace(/^the\s+/i, ""), negated });
+			}
+			break;
+		}
+	}
+	return places;
+}
+
+// The first place the query names after a place preposition, negated or not.
+export function placeIn(query: string): string {
+	return placeMatches(query)[0]?.place ?? "";
+}
+
+// The ISO country code of the place the query asks for ("mentors from Canada"
+// → "CA", "PM based in UK" → "GB"), or "" when there is none, the place is a
+// region or city, or the query excludes it ("mentors not based in US").
+export function countryIntentIn(query: string): string {
+	const place = placeMatches(query).find((match) => !match.negated)?.place;
+	return place ? countryCodeOf(employerTokens(place)) : "";
 }
 
 // The companies employer text names, current or past, each normalized to

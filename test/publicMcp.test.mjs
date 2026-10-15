@@ -11,13 +11,14 @@ import {
 	companyCandidates,
 	companyConfirmedByEmployers,
 	companyNamedByEmployers,
+	countryIntentIn,
 	currentEmployer,
 	isCurrentEmployer,
 	knownCompanyIn,
 	titleMarksEmployerPast,
 } from "../src/public/company.ts";
 import { requestedRoleFamilies, roleFit } from "../src/public/role.ts";
-import { employerCandidate, mapSearchMentorsResponse } from "../src/searchMentors.ts";
+import { buildSearchMentorsUrl, employerCandidate, mapSearchMentorsResponse } from "../src/searchMentors.ts";
 import { checkField, FIELDS, pageTexts, verifyMentor } from "../scripts/verify-public-fields.mjs";
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
@@ -145,6 +146,8 @@ const MALFORMED_FLAG_SLUGS = ["stringy-break", "stringy-optout", "null-suspended
 // Per-slug overrides of either record's top-level listing flags.
 const INTERNAL_OVERRIDES = {};
 const PUBLIC_OVERRIDES = {};
+// Per-slug search-row fields (e.g. country), merged over the defaults.
+const ROW_OVERRIDES = {};
 
 // GET /internal/users/profile/mentor/{slug} (x-api-key, ADPLIST-4485): flags
 // and identifiers only, exactly the keys the live route returns. Nothing
@@ -251,6 +254,7 @@ function searchRow(slug, position) {
 		verified: true,
 		profile: { image: `https://${FAKE_HOST}/photo.jpg` },
 		bio: `Internal note ${FAKE_TOKEN}`,
+		...ROW_OVERRIDES[slug],
 	};
 }
 
@@ -299,8 +303,12 @@ function fakeUpstream({ search = DEFAULT_SEARCH, searchFails = false, profileFai
 				});
 			}
 			const slugs = search[url.searchParams.get("q")] ?? [];
+			// The search service applies the country filter, like the live one.
+			const countries = url.searchParams.get("countries");
 			return Response.json({
-				results: slugs.map((slug, index) => searchRow(slug, index + 1)),
+				results: slugs
+					.map((slug, index) => searchRow(slug, index + 1))
+					.filter((row) => !countries || row.country.iso === countries),
 				queryID: "q-123",
 				indexUsed: "mentors_prod",
 			});
@@ -2892,8 +2900,11 @@ test("search cards are checked against the filters after the identity record rep
 		withPublicOverrides({ "alice-visible": { country: { iso: "US", countryName: "United States" } } }, async () => {
 			const byName = await callTool("search_mentors", { query: "Alice Visible", country: "SG" });
 			assert.deepEqual(mentorsOf(byName.body), []);
-			const unfiltered = await callTool("search_mentors", { query: "Alice Visible", country: "US" });
-			assert.deepEqual(mentorsOf(unfiltered.body).map((mentor) => mentor.slug), ["alice-visible"]);
+			// The search service filters on country, so the index must agree here.
+			await withRowOverrides({ "alice-visible": { country: { iso: "US", name: "United States" } } }, async () => {
+				const unfiltered = await callTool("search_mentors", { query: "Alice Visible", country: "US" });
+				assert.deepEqual(mentorsOf(unfiltered.body).map((mentor) => mentor.slug), ["alice-visible"]);
+			});
 		}),
 	);
 });
@@ -2983,12 +2994,17 @@ test("a place in an employer's office fragment never becomes a company filter", 
 
 	const mentors = { "cam-acme": ["Cam Acme", "Product Designer", "Acme (Canada)", ["Product Design"], []] };
 	const search = { ...DEFAULT_SEARCH, Canada: ["cam-acme"], "mentors from Canada": ["cam-acme", "alice-visible"] };
+	const inCanada = { country: { iso: "CA", name: "Canada" } };
 	await withRoleMentors(mentors, () =>
-		withFetch(fakeUpstream({ search }), async () => {
-			const result = await callTool("search_mentors", { query: "mentors from Canada", limit: 9 });
-			assertPublicOutputClean(result);
-			assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), ["cam-acme", "alice-visible"]);
-		}),
+		withRowOverrides({ "cam-acme": inCanada, "alice-visible": inCanada }, () =>
+			withPublicOverrides({ "cam-acme": { country: { iso: "CA" } }, "alice-visible": { country: { iso: "CA" } } }, () =>
+				withFetch(fakeUpstream({ search }), async () => {
+					const result = await callTool("search_mentors", { query: "mentors from Canada", limit: 9 });
+					assertPublicOutputClean(result);
+					assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), ["cam-acme", "alice-visible"]);
+				}),
+			),
+		),
 	);
 });
 
@@ -3116,4 +3132,334 @@ test("setup docs require IDENTITY_INTERNAL_API_KEY on preview and production", (
 		internalVisibilityUrl("https://auth.test", "alice"),
 		"https://auth.test/internal/users/profile/mentor/alice",
 	);
+});
+
+// ---------------------------------------------------------------------------
+// Preview regressions after the Greptile fixes (ADPLIST-4479)
+// ---------------------------------------------------------------------------
+
+async function withRowOverrides(overrides, run) {
+	Object.assign(ROW_OVERRIDES, overrides);
+	try {
+		return await run();
+	} finally {
+		for (const slug of Object.keys(overrides)) delete ROW_OVERRIDES[slug];
+	}
+}
+
+test("a literal-name lookup applies only the caller's filters, never ones read from the name", async () => {
+	// The live shape: title "Product", company "Google", country present, visible.
+	const slug = "yogeshree-tawde";
+	const mentors = { [slug]: ["Yogeshree Tawde", "Product", "Google", ["Product Management"], []] };
+	const search = { ...DEFAULT_SEARCH, "Yogeshree Tawde": [slug, "gina-google"] };
+	const india = { country: { iso: "IN", name: "India" } };
+	await withRoleMentors(mentors, () =>
+		withRowOverrides({ [slug]: india }, () =>
+			withPublicOverrides({ [slug]: { country: { iso: "IN", countryName: "India" } } }, () =>
+				withFetch(fakeUpstream({ search }), async () => {
+					const result = await callTool("search_mentors", { query: "Yogeshree Tawde" });
+					assertPublicOutputClean(result);
+					const cards = mentorsOf(result.body);
+					assert.deepEqual(cards.map((mentor) => mentor.slug), [slug]);
+					assert.equal(cards[0].title, "Product");
+					assert.equal(cards[0].company, "Google");
+					assert.equal(cards[0].country, "India");
+					assert.equal(cards[0].why_match, "Name matches your search.");
+
+					// The caller's own filters still apply to the name lookup.
+					const lookup = async (args) =>
+						mentorsOf((await callTool("search_mentors", { query: "Yogeshree Tawde", ...args })).body).map(
+							(mentor) => mentor.slug,
+						);
+					assert.deepEqual(await lookup({ country: "IN" }), [slug]);
+					assert.deepEqual(await lookup({ company: "Google" }), [slug]);
+					assert.deepEqual(await lookup({ language: "English" }), [slug]);
+					assert.deepEqual(await lookup({ company: "Meta" }), []);
+				}),
+			),
+		),
+	);
+	// A field the card lacks never drops it: the name search applied the filter.
+	await withRoleMentors(mentors, () =>
+		withRowOverrides({ [slug]: { ...india, languages: [] } }, () =>
+			withPublicOverrides({ [slug]: { preferences: { languages: [] } } }, () =>
+				withFetch(fakeUpstream({ search }), async () => {
+					const result = await callTool("search_mentors", { query: "Yogeshree Tawde", language: "Hindi" });
+					assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), [slug]);
+				}),
+			),
+		),
+	);
+});
+
+test("a place after from/in/based in is a country, never a company candidate", () => {
+	for (const [query, iso] of [
+		["mentors from Canada", "CA"],
+		["designers in India", "IN"],
+		["PM based in UK", "GB"],
+		["mentors in the UK", "GB"],
+		["mentors from Canada who work at Google", "CA"],
+	]) {
+		assert.equal(countryIntentIn(query), iso, query);
+		assert.ok(!companyCandidates(query).some((candidate) => /canada|india|uk/i.test(candidate)), query);
+	}
+	// "Canada Life" never confirms the place "Canada" as a company.
+	assert.equal(companyConfirmedByEmployers("mentors from Canada", ["Canada Life"]), "");
+	assert.equal(companyNamedByEmployers("mentors from Canada", ["Canada Life"]), "");
+	// Cities and regions are places too, just not a country filter.
+	assert.equal(countryIntentIn("mentors from New York"), "");
+	assert.deepEqual(companyCandidates("mentors from New York"), []);
+	// Fields and pronouns are not countries, and an employer named after a
+	// place stays an employer.
+	for (const query of ["mentors in IT", "PM from AI startups", "mentors near us"]) {
+		assert.equal(countryIntentIn(query), "", query);
+	}
+	assert.equal(companyConfirmedByEmployers("mentors at Canada Life", ["Canada Life"]), "Canada Life");
+	assert.equal(knownCompanyIn("mentors from Canada who work at Google"), "Google");
+});
+
+test("place queries return mentors in that country, not at an employer named after it", async () => {
+	const mentors = {
+		"cal-canlife": ["Cal Life", "Senior Product Designer", "Canada Life", ["Product Design"], []],
+		"cam-north": ["Cam North", "Senior Product Designer", "Acme Labs", ["Product Design"], []],
+		"ina-design": ["Ina Design", "Senior Product Designer", "Acme Labs", ["Product Design"], []],
+		"uma-pm": ["Uma Pm", "Senior Product Manager", "Acme Labs", ["Product Management"], []],
+	};
+	const rows = {
+		"cal-canlife": { country: { iso: "SG", name: "Singapore" } },
+		"cam-north": { country: { iso: "CA", name: "Canada" } },
+		"ina-design": { country: { iso: "IN", name: "India" } },
+		"uma-pm": { country: { iso: "GB", name: "United Kingdom" } },
+	};
+	const records = {
+		"cam-north": { country: { iso: "CA", countryName: "Canada" } },
+		"ina-design": { country: { iso: "IN", countryName: "India" } },
+		"uma-pm": { country: { iso: "GB", countryName: "United Kingdom" } },
+	};
+	const search = {
+		...DEFAULT_SEARCH,
+		Canada: ["cal-canlife"],
+		"mentors from Canada": ["cal-canlife", "cam-north", "alice-visible"],
+		"designers in India": ["ina-design", "alice-visible"],
+		"PM based in UK": ["uma-pm", "bob-visible"],
+	};
+	const calls = [];
+	await withRoleMentors(mentors, () =>
+		withRowOverrides(rows, () =>
+			withPublicOverrides(records, () =>
+				withFetch(fakeUpstream({ search, calls }), async () => {
+					for (const [query, iso, country, expected] of [
+						["mentors from Canada", "CA", "Canada", ["cam-north"]],
+						["designers in India", "IN", "India", ["ina-design"]],
+						["PM based in UK", "GB", "United Kingdom", ["uma-pm"]],
+					]) {
+						calls.length = 0;
+						const result = await callTool("search_mentors", { query, limit: 9 });
+						assertPublicOutputClean(result);
+						const cards = mentorsOf(result.body);
+						assert.deepEqual(cards.map((mentor) => mentor.slug), expected, query);
+						for (const card of cards) assert.equal(card.country, country, query);
+						const searches = calls.filter(({ url }) => url.pathname === "/search");
+						assert.ok(searches.length > 0, query);
+						for (const { url } of searches) {
+							assert.equal(url.searchParams.get("countries"), iso, query);
+							assert.notEqual(url.searchParams.get("q"), country, query);
+						}
+					}
+				}),
+			),
+		),
+	);
+});
+
+test("a literal-name lookup sends only the caller's filters, never ones inferred from the name (Codex repro)", async () => {
+	const slug = "usa-tanaka";
+	const mentors = { [slug]: ["Usa Tanaka", "Product Designer", "Acme Labs", ["Product Design"], ["English"]] };
+	const search = { ...DEFAULT_SEARCH, "Usa Tanaka": [slug] };
+	const calls = [];
+	await withRoleMentors(mentors, () =>
+		withRowOverrides({ [slug]: { country: { iso: "SG", name: "Singapore" } } }, () =>
+			withPublicOverrides({ [slug]: { country: { iso: "SG", countryName: "Singapore" } } }, () =>
+				withFetch(fakeUpstream({ search, calls }), async () => {
+					const result = await callTool("search_mentors", { query: "Usa Tanaka", language: "English" });
+					assertPublicOutputClean(result);
+					assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), [slug]);
+					const nameSearch = calls.find(
+						({ url }) => url.pathname === "/search" && url.searchParams.get("q") === "Usa Tanaka",
+					);
+					assert.ok(nameSearch);
+					assert.equal(nameSearch.url.searchParams.get("countries"), null);
+					assert.equal(nameSearch.url.searchParams.get("languages"), "english");
+				}),
+			),
+		),
+	);
+});
+
+test("a place followed by more of a name is an employer, not a country (Canada Life, Codex repro)", async () => {
+	for (const query of ["mentors from Canada Life", "mentors at Canada Life"]) {
+		assert.equal(countryIntentIn(query), "", query);
+	}
+	// A real place later in the query still counts; the employer prefix does not.
+	assert.equal(countryIntentIn("designers from Canada Life in Singapore"), "SG");
+	// A clause word or punctuation after the place still ends it.
+	assert.equal(countryIntentIn("mentors from Canada who work at Google"), "CA");
+	assert.equal(countryIntentIn("mentors from Canada, ideally designers"), "CA");
+	assert.equal(countryIntentIn("mentors in the UK at Google"), "GB");
+
+	const mentors = { "cal-canlife": ["Cal Life", "Senior Product Designer", "Canada Life", ["Product Design"], []] };
+	const search = {
+		...DEFAULT_SEARCH,
+		"Canada Life": ["cal-canlife"],
+		"mentors from Canada Life": ["cal-canlife"],
+	};
+	const calls = [];
+	await withRoleMentors(mentors, () =>
+		withRowOverrides({ "cal-canlife": { country: { iso: "SG", name: "Singapore" } } }, () =>
+			withPublicOverrides({ "cal-canlife": { country: { iso: "SG", countryName: "Singapore" } } }, () =>
+				withFetch(fakeUpstream({ search, calls }), async () => {
+					const result = await callTool("search_mentors", { query: "mentors from Canada Life", limit: 9 });
+					assertPublicOutputClean(result);
+					assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), ["cal-canlife"]);
+					for (const { url } of calls.filter(({ url }) => url.pathname === "/search")) {
+						assert.equal(url.searchParams.get("countries"), null);
+					}
+				}),
+			),
+		),
+	);
+});
+
+test("an explicit company on a literal-name lookup needs a current employer; missing or former-only is out (Codex repro)", async () => {
+	for (const organization of [undefined, "", "Former Google"]) {
+		const profile = { title: "Product Designer", ...(organization === undefined ? {} : { organization }) };
+		await withPublicOverrides({ "alice-visible": { profile } }, () =>
+			withFetch(fakeUpstream(), async () => {
+				const result = await callTool("search_mentors", { query: "Alice Visible", company: "Google" });
+				assertPublicOutputClean(result);
+				assert.ok(
+					!mentorsOf(result.body).some((mentor) => mentor.slug === "alice-visible"),
+					JSON.stringify(organization),
+				);
+			}),
+		);
+	}
+	// A current employer that matches still passes the name lookup.
+	await withPublicOverrides({ "alice-visible": { profile: { title: "Product Designer", organization: "Google" } } }, () =>
+		withFetch(fakeUpstream(), async () => {
+			const result = await callTool("search_mentors", { query: "Alice Visible", company: "Google" });
+			assert.ok(mentorsOf(result.body).some((mentor) => mentor.slug === "alice-visible"));
+		}),
+	);
+});
+
+test("a negated place is never an inclusion filter (Codex repro)", () => {
+	for (const query of [
+		"mentors not based in US",
+		"mentors not based in the UK",
+		"designers anywhere except in Canada",
+		"PMs, excluding those from India",
+		"mentors who are not from Canada",
+	]) {
+		assert.equal(countryIntentIn(query), "", query);
+	}
+	// A negation in an earlier clause does not reach a later place.
+	assert.equal(countryIntentIn("not a PM, mentors from Canada"), "CA");
+});
+
+const NEGATED_PLACE_QUERIES = [
+	"mentors who aren't based in Canada",
+	"mentors who aren’t based in Canada",
+	"designers who isn't from India",
+	"I don’t want mentors from Canada",
+	"mentors who doesn't live in the UK, anyone else",
+	"mentors who won't be in Canada",
+	"mentors who wasn't based in India",
+	"no mentors from Canada",
+	"never anyone from India",
+	"designers without anyone from Canada",
+	"designers outside of the UK",
+	"mentors except those from Canada",
+	"mentors excluding those based in India",
+	"mentors other than in Canada",
+	"mentors anywhere but in the UK",
+];
+
+test("a negated place, contracted or typographic, is never an inclusion filter (Codex repro)", () => {
+	for (const query of NEGATED_PLACE_QUERIES) {
+		assert.equal(countryIntentIn(query), "", query);
+	}
+	// Words that merely contain a negation still allow the place.
+	assert.equal(countryIntentIn("knowledgeable mentors from Canada"), "CA");
+	assert.equal(countryIntentIn("mentors who can’t wait, from Canada"), "CA");
+});
+
+test("search_mentors sends no country filter for a negated place (aren’t, Codex repro)", async () => {
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		for (const query of NEGATED_PLACE_QUERIES) {
+			calls.length = 0;
+			const result = await callTool("search_mentors", { query, limit: 9 });
+			assertPublicOutputClean(result);
+			const searches = calls.filter(({ url }) => url.pathname === "/search");
+			assert.ok(searches.length > 0, query);
+			for (const { url } of searches) assert.equal(url.searchParams.get("countries"), null, query);
+		}
+		// The unnegated query still filters, so the assertion above is not vacuous.
+		calls.length = 0;
+		await callTool("search_mentors", { query: "mentors who are based in Canada", limit: 9 });
+		const searches = calls.filter(({ url }) => url.pathname === "/search");
+		assert.ok(searches.some(({ url }) => url.searchParams.get("countries") === "CA"));
+	});
+});
+
+const NEGATED_US_QUERIES = ["mentors who aren’t based in US", "I don’t want mentors from USA"];
+
+test("search_mentors sends no US filter for a negated US place; the shared builder does not re-infer it (Codex repro)", async () => {
+	const calls = [];
+	await withFetch(fakeUpstream({ calls }), async () => {
+		for (const query of NEGATED_US_QUERIES) {
+			assert.equal(countryIntentIn(query), "", query);
+			calls.length = 0;
+			const result = await callTool("search_mentors", { query, limit: 9 });
+			assertPublicOutputClean(result);
+			const searches = calls.filter(({ url }) => url.pathname === "/search");
+			assert.ok(searches.length > 0, query);
+			for (const { url } of searches) assert.equal(url.searchParams.get("countries"), null, query);
+		}
+	});
+	// Signed-in search keeps inferring US by default.
+	const signedIn = new URL(buildSearchMentorsUrl("https://search.test", { intent: "product managers in the USA" }));
+	assert.equal(signedIn.searchParams.get("countries"), "US");
+});
+
+test("countryIntentIn: punctuation does not bypass the ambiguous-code guard (Codex repro)", () => {
+	for (const query of ["mentors in IT.", "mentors in HR.", "mentors in IT, please"]) {
+		assert.equal(countryIntentIn(query), "", query);
+	}
+	assert.equal(countryIntentIn("designers in UK."), "GB");
+});
+
+test("search_mentors ranking keeps non-US mentors for a negated US place (Codex repro)", async () => {
+	const slug = "sam-sg";
+	const mentors = { [slug]: ["Sam Sg", "Senior Product Designer", "Acme Labs", ["Product Design"], []] };
+	const search = Object.fromEntries(NEGATED_US_QUERIES.map((query) => [query, [slug]]));
+	await withRoleMentors(mentors, () =>
+		withRowOverrides({ [slug]: { country: { iso: "SG", name: "Singapore" } } }, () =>
+			withPublicOverrides({ [slug]: { country: { iso: "SG", countryName: "Singapore" } } }, () =>
+				withFetch(fakeUpstream({ search: { ...DEFAULT_SEARCH, ...search } }), async () => {
+					for (const query of NEGATED_US_QUERIES) {
+						const result = await callTool("search_mentors", { query, limit: 9 });
+						assertPublicOutputClean(result);
+						assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), [slug], query);
+					}
+				}),
+			),
+		),
+	);
+	// The opt-out is what keeps it: the shared ranker's default still infers US.
+	const rows = { results: [{ slug, name: "Sam Sg", countryISO: "SG" }] };
+	const input = { intent: NEGATED_US_QUERIES[1] };
+	assert.equal(mapSearchMentorsResponse(rows, input, false).mentors.length, 0);
+	assert.equal(mapSearchMentorsResponse(rows, input, false, { inferCountry: false }).mentors.length, 1);
 });

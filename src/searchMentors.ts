@@ -380,9 +380,18 @@ export function normalizeMaxResults(value: number | undefined): number {
 	return Math.max(MIN_RESULTS, Math.floor(clamped / ROW_SIZE) * ROW_SIZE);
 }
 
-export function buildSearchMentorsUrl(baseUrl: string, input: SearchMentorsInput): string {
+// `inferFilters: false` sends only the filters given, nothing read from the
+// intent: a literal-name lookup for "Usa Tanaka" is not a US search.
+// `inferCountry: false` still infers the rest but takes the country only from
+// `filters`: the public search parses places itself. Signed-in callers pass
+// no options.
+export function buildSearchMentorsUrl(
+	baseUrl: string,
+	input: SearchMentorsInput,
+	{ inferFilters = true, inferCountry = true }: { inferFilters?: boolean; inferCountry?: boolean } = {},
+): string {
 	validateDisciplineFilter(input);
-	input = withInferredFilters(input);
+	if (inferFilters) input = withInferredFilters(input, inferCountry);
 	const url = new URL("/search", baseUrl);
 	const filters = input.filters ?? {};
 	const expandedIntent = expandIntentForSearch(input);
@@ -523,10 +532,11 @@ export function mapSearchMentorsResponse(
 	// max_results cap) and, with `roleDecided`, applies its own role policy, so
 	// the product-management fit here only orders, never drops. The domain fit
 	// still drops either way: a specialty request ("growth marketing") keeps
-	// excluding generalists. Signed-in callers pass no options.
-	options: { maxRows?: number; roleDecided?: boolean } = {},
+	// excluding generalists. With `inferCountry: false` the country comes only
+	// from `filters`. Signed-in callers pass no options.
+	options: { maxRows?: number; roleDecided?: boolean; inferCountry?: boolean } = {},
 ): SearchMentorsOutput {
-	input = withInferredFilters(input);
+	input = withInferredFilters(input, options.inferCountry ?? true);
 	const domainRule = domainFitRuleFor(input);
 	const resultCount = options.maxRows ?? resultMaxResults(input, domainRule);
 	const candidates = (response.results ?? [])
@@ -1537,8 +1547,9 @@ function mergeSearchMentorOutputs(
 	};
 }
 
-function withInferredFilters(input: SearchMentorsInput): SearchMentorsInput {
-	const inferredCountry = input.filters?.country ?? inferCountryFromIntent(input.intent);
+function withInferredFilters(input: SearchMentorsInput, inferCountry = true): SearchMentorsInput {
+	const inferredCountry =
+		input.filters?.country ?? (inferCountry ? inferCountryFromIntent(input.intent) : undefined);
 	const inferredExperienceLevel =
 		input.filters?.experience_level ?? inferExperienceLevelFromIntent(input.intent);
 	if (!inferredCountry && !inferredExperienceLevel) return input;
