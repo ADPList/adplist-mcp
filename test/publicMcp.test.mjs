@@ -10,9 +10,11 @@ import { PUBLIC_RATE_WINDOWS, takeRateSlot } from "../src/public/rateWindows.ts"
 import {
 	companyCandidates,
 	companyConfirmedByEmployers,
+	companyNamedByEmployers,
 	currentEmployer,
 	isCurrentEmployer,
 	knownCompanyIn,
+	titleMarksEmployerPast,
 } from "../src/public/company.ts";
 import { checkField, FIELDS, pageTexts, verifyMentor } from "../scripts/verify-public-fields.mjs";
 
@@ -78,6 +80,10 @@ const NAMES = {
 	"rita-reality": "Rita Reality",
 	"fay-figma": "Fay Figma",
 	"cara-canva": "Cara Canva",
+	"chris-google": "Chris Former",
+	"dora-google": "Dora Director",
+	"ezra-google": "Ezra Expm",
+	"ada-google": "Ada Advisor",
 };
 
 // Search rows say Google for every *-google slug unless overridden here.
@@ -94,7 +100,15 @@ const ROW_EMPLOYER = {
 	"cara-canva": "Canva",
 };
 const PM_SLUGS = new Set(["pia-google", "nico-google", "paul-google", "mia-meta"]);
-const titleOf = (slug) => (PM_SLUGS.has(slug) ? "Senior Product Manager" : "Senior Product Designer");
+// Company field Google; the title says whether that is current (ADPLIST-4479).
+const TITLE_OVERRIDES = {
+	"chris-google": "Former Director of UX",
+	"dora-google": "Director of UX",
+	"ezra-google": "Ex-Google PM",
+	"ada-google": "Advisor | Former Director at Google",
+};
+const titleOf = (slug) =>
+	TITLE_OVERRIDES[slug] ?? (PM_SLUGS.has(slug) ? "Senior Product Manager" : "Senior Product Designer");
 // Identity records; left-google disagrees with its search row.
 const RECORD_COMPANY = { ...ROW_EMPLOYER, "left-google": "Other Company" };
 
@@ -1109,6 +1123,287 @@ test("an explicit company filter matches the current employer only", async () =>
 		const meta = await callTool("search_mentors", { query: "design", company: "Meta", limit: 9 });
 		assert.deepEqual(mentorsOf(meta.body), []);
 	});
+});
+
+test("a title starting Former/Ex-/Previously marks the company field as past", () => {
+	for (const title of [
+		"Former Director of UX",
+		"former director of ux",
+		"  - Former Director of UX",
+		"Ex-Google PM",
+		"Ex Google PM",
+		"ex–Google PM",
+		"Previously Head of Design",
+		"Formerly Staff Designer",
+		"Past President",
+		"Retired VP of Product",
+		"(Former) Design Lead",
+		"Advisor | Former Director at Google",
+		"Advisor, ex-Google",
+		"Coach (Ex-Google)",
+	]) {
+		assert.ok(titleMarksEmployerPast(title, "Google"), title);
+		assert.ok(!isCurrentEmployer("Google", "Google", title), title);
+	}
+	for (const title of [
+		"Director of UX",
+		"Executive Director",
+		"Pastry Chef",
+		"Expert Product Designer",
+		"Design Lead | Ex-Meta",
+		"Product Designer (ex-Spotify)",
+		"",
+	]) {
+		assert.ok(!titleMarksEmployerPast(title, "Google"), title);
+		assert.ok(isCurrentEmployer("Google", "Google", title), title);
+	}
+	// Company text that itself opens as past.
+	for (const company of [
+		"Former Google",
+		"Ex-Google",
+		"Ex Google",
+		"Previously Google",
+		"- formerly Google",
+		"Past Google",
+		"Retired Google",
+		"Retired, Google",
+		"Retired from Google",
+		"Formerly at Google",
+		"Ex @ Google",
+	]) {
+		assert.equal(currentEmployer(company), "", company);
+		assert.ok(!isCurrentEmployer(company, "Google"), company);
+	}
+	// A past tail, including a punctuated bare "Ex ".
+	for (const company of ["Stripe | Past Google", "Stripe, retired from Google", "Stripe | Ex Google", "Stripe (Ex Google)"]) {
+		assert.equal(currentEmployer(company), "Stripe", company);
+	}
+	assert.equal(currentEmployer("Pastel Labs"), "Pastel Labs");
+	assert.equal(currentEmployer("Exness"), "Exness");
+	assert.equal(currentEmployer("Design Ex Machina"), "Design Ex Machina");
+});
+
+const PAST_TITLE_SEARCH = {
+	...DEFAULT_SEARCH,
+	Google: ["chris-google", "dora-google", "ezra-google", "ada-google"],
+	"UX at Google": ["chris-google", "dora-google", "ezra-google"],
+	"director of ux": ["chris-google", "dora-google"],
+};
+
+test("a Former/Ex- title at the company is excluded from company searches, kept elsewhere", async () => {
+	await withFetch(fakeUpstream({ search: PAST_TITLE_SEARCH }), async () => {
+		const explicit = await callTool("search_mentors", { query: "design", company: "Google", limit: 9 });
+		assertPublicOutputClean(explicit);
+		assert.deepEqual(
+			mentorsOf(explicit.body).map((mentor) => mentor.slug),
+			["dora-google"],
+		);
+
+		const phrased = await callTool("search_mentors", { query: "UX at Google", limit: 9 });
+		assertPublicOutputClean(phrased);
+		assert.deepEqual(
+			mentorsOf(phrased.body).map((mentor) => mentor.slug),
+			["dora-google"],
+		);
+
+		// No company in the query: the former director still shows up.
+		const open = await callTool("search_mentors", { query: "director of ux", limit: 9 });
+		assert.deepEqual(
+			mentorsOf(open.body).map((mentor) => mentor.slug).sort(),
+			["chris-google", "dora-google"],
+		);
+	});
+});
+
+test("a parsed company outside the known list stays a filter when every match is past (Initech)", async () => {
+	ROW_EMPLOYER["fred-initech"] = "Initech";
+	RECORD_COMPANY["fred-initech"] = "Initech";
+	TITLE_OVERRIDES["fred-initech"] = "Former Director of UX";
+	NAMES["fred-initech"] = "Fred Former";
+	const search = {
+		...DEFAULT_SEARCH,
+		Initech: ["fred-initech"],
+		"mentors at Initech": ["fred-initech", "alice-visible", "bob-visible"],
+	};
+	try {
+		await withFetch(fakeUpstream({ search }), async () => {
+			assert.equal(knownCompanyIn("mentors at Initech"), "");
+			const phrased = await callTool("search_mentors", { query: "mentors at Initech", limit: 9 });
+			assertPublicOutputClean(phrased);
+			assert.deepEqual(mentorsOf(phrased.body), [], "no former employee, and no unfiltered fallback");
+
+			const explicit = await callTool("search_mentors", { query: "mentors", company: "Initech", limit: 9 });
+			assert.deepEqual(mentorsOf(explicit.body), []);
+		});
+	} finally {
+		for (const table of [ROW_EMPLOYER, RECORD_COMPANY, TITLE_OVERRIDES, NAMES]) delete table["fred-initech"];
+	}
+});
+
+// Codex repro: only the employer search sees the former employee; the intent
+// search returns unrelated mentors. The past row still confirms Initech.
+test("a past employee seen only by the employer search keeps the parsed company strict", async () => {
+	const cases = [
+		{ company: "Initech", title: "Former Director of UX" },
+		{ company: "Retired Initech", title: "Senior Product Designer" },
+		{ company: "Past Initech", title: "Senior Product Designer" },
+		{ company: "Ex Initech", title: "Senior Product Designer" },
+		// Connecting words after the marker (Codex repro: "Retired from").
+		{ company: "Retired from Initech", title: "Senior Product Designer" },
+		{ company: "Formerly at Initech", title: "Senior Product Designer" },
+		{ company: "Ex @ Initech", title: "Senior Product Designer" },
+		{ company: "Former: Initech", title: "Senior Product Designer" },
+		{ company: "Previously with Initech", title: "Senior Product Designer" },
+		{ company: "Past - Initech", title: "Senior Product Designer" },
+		{ company: "Stripe | Retired from Initech", title: "Senior Product Designer" },
+	];
+	NAMES["fred-initech"] = "Fred Former";
+	try {
+		for (const { company, title } of cases) {
+			ROW_EMPLOYER["fred-initech"] = company;
+			RECORD_COMPANY["fred-initech"] = company;
+			TITLE_OVERRIDES["fred-initech"] = title;
+			const search = {
+				...DEFAULT_SEARCH,
+				Initech: ["fred-initech"],
+				"mentors at Initech": ["alice-visible", "bob-visible"],
+			};
+			await withFetch(fakeUpstream({ search }), async () => {
+				const phrased = await callTool("search_mentors", { query: "mentors at Initech", limit: 9 });
+				assertPublicOutputClean(phrased);
+				assert.deepEqual(mentorsOf(phrased.body), [], `${company} / ${title}`);
+			});
+		}
+	} finally {
+		for (const table of [ROW_EMPLOYER, RECORD_COMPANY, TITLE_OVERRIDES, NAMES]) delete table["fred-initech"];
+	}
+});
+
+// Codex repro: splitting on a bare "at" turned "AT&T" into "&T", so a
+// past-only AT&T match no longer kept the filter strict.
+test("company names that start with 'at' survive past-marker parsing (AT&T)", async () => {
+	assert.equal(companyNamedByEmployers("mentors at AT&T", ["AT&T"]), "AT&T");
+	assert.equal(companyNamedByEmployers("mentors at AT&T", ["Former AT&T"]), "AT&T");
+	assert.equal(companyNamedByEmployers("mentors at AT&T", ["Stripe | Formerly at AT&T"]), "AT&T");
+	assert.equal(companyNamedByEmployers("mentors at Home", ["At Home"]), "", "At Home is not split into Home");
+	assert.equal(companyNamedByEmployers("mentors at Atlassian", ["Retired from Atlassian"]), "Atlassian");
+	assert.equal(companyNamedByEmployers("mentors at Initech", ["Designer at Initech"]), "Initech");
+
+	ROW_EMPLOYER["fred-att"] = "AT&T";
+	RECORD_COMPANY["fred-att"] = "AT&T";
+	TITLE_OVERRIDES["fred-att"] = "Former Director of UX";
+	NAMES["fred-att"] = "Fred Former";
+	const search = {
+		...DEFAULT_SEARCH,
+		"AT&T": ["fred-att"],
+		"mentors at AT&T": ["fred-att", "ina-initech"],
+	};
+	try {
+		await withFetch(fakeUpstream({ search }), async () => {
+			const phrased = await callTool("search_mentors", { query: "mentors at AT&T", limit: 9 });
+			assertPublicOutputClean(phrased);
+			assert.deepEqual(mentorsOf(phrased.body), [], "no former AT&T director, no current Initech employee");
+		});
+	} finally {
+		for (const table of [ROW_EMPLOYER, RECORD_COMPANY, TITLE_OVERRIDES, NAMES]) delete table["fred-att"];
+	}
+});
+
+// Codex repro: splitting "Acme (Europe)" on its parentheses lost the full
+// name, so a past-only match on it fell back to unfiltered intent results.
+test("punctuated company names survive past-marker parsing (Acme (Europe))", async () => {
+	assert.equal(companyNamedByEmployers("mentors at Acme Europe", ["Acme (Europe)"]), "Acme Europe");
+	assert.equal(companyNamedByEmployers("mentors at Acme Europe", ["Former Acme (Europe)"]), "Acme Europe");
+	assert.equal(companyNamedByEmployers("mentors at Acme", ["Acme (Europe)"]), "Acme");
+
+	ROW_EMPLOYER["fred-acme"] = "Acme (Europe)";
+	RECORD_COMPANY["fred-acme"] = "Acme (Europe)";
+	TITLE_OVERRIDES["fred-acme"] = "Former Director of UX";
+	NAMES["fred-acme"] = "Fred Former";
+	const search = {
+		...DEFAULT_SEARCH,
+		"Acme Europe": ["fred-acme"],
+		"mentors at Acme Europe": ["fred-acme", "ina-initech"],
+	};
+	try {
+		await withFetch(fakeUpstream({ search }), async () => {
+			const phrased = await callTool("search_mentors", { query: "mentors at Acme Europe", limit: 9 });
+			assertPublicOutputClean(phrased);
+			assert.deepEqual(mentorsOf(phrased.body), [], "no former Acme (Europe) director, no current Initech employee");
+		});
+	} finally {
+		for (const table of [ROW_EMPLOYER, RECORD_COMPANY, TITLE_OVERRIDES, NAMES]) delete table["fred-acme"];
+	}
+});
+
+// Codex repro: in "Stripe | Former Acme (Europe)" the parentheses split Acme
+// from Europe and the whole text started with Stripe, so nothing named "Acme
+// Europe" and unrelated Acme Labs intent rows came back.
+test("punctuated company names survive inside a past-employer segment", async () => {
+	assert.equal(companyNamedByEmployers("mentors at Acme Europe", ["Stripe | Former Acme (Europe)"]), "Acme Europe");
+
+	ROW_EMPLOYER["fred-acme"] = "Stripe | Former Acme (Europe)";
+	RECORD_COMPANY["fred-acme"] = "Stripe | Former Acme (Europe)";
+	NAMES["fred-acme"] = "Fred Former";
+	const search = {
+		...DEFAULT_SEARCH,
+		"Acme Europe": ["fred-acme"],
+		"mentors at Acme Europe": ["alice-visible", "bob-visible"],
+	};
+	try {
+		await withFetch(fakeUpstream({ search }), async () => {
+			const phrased = await callTool("search_mentors", { query: "mentors at Acme Europe", limit: 9 });
+			assertPublicOutputClean(phrased);
+			assert.deepEqual(mentorsOf(phrased.body), [], "no former Acme (Europe) employee, no Acme Labs mentors");
+		});
+	} finally {
+		for (const table of [ROW_EMPLOYER, RECORD_COMPANY, NAMES]) delete table["fred-acme"];
+	}
+});
+
+test("companyNamedByEmployers across mixed employer strings", () => {
+	const cases = [
+		["mentors at Acme Europe", "Stripe | Former Acme (Europe)", "Acme Europe"],
+		["mentors at Acme Europe", "Stripe, previously at Acme (Europe)", "Acme Europe"],
+		["mentors at Acme Europe", "Stripe; Ex-Acme [Europe]", "Acme Europe"],
+		["mentors at Acme Europe", "Stripe / Retired from Acme (Europe)", "Acme Europe"],
+		["mentors at Acme Europe", "Stripe - Formerly at Acme (Europe)", "Acme Europe"],
+		["mentors at Acme Europe", "Stripe previously Acme (Europe)", "Acme Europe"],
+		["mentors at Google", "Stripe · Past: Google", "Google"],
+		["mentors at Google", "Stripe • Ex @ Google", "Google"],
+		["mentors at Google", "Designer at Google (Mountain View)", "Google"],
+		["mentors at Google DeepMind", "Meta | ex-Google (DeepMind)", "Google DeepMind"],
+		["mentors at AT&T", "Stripe | Formerly at AT&T", "AT&T"],
+		["mentors at Atlassian", "Retired from Atlassian", "Atlassian"],
+		["mentors at Machina", "Design Ex Machina", ""],
+		["mentors at Home", "Stripe | At Home", ""],
+		["mentors at Acme Europe", "Acme Labs | Europe", ""],
+		["mentors at Initech", "Stripe | Former Acme (Europe)", ""],
+	];
+	for (const [query, employer, expected] of cases) {
+		assert.equal(companyNamedByEmployers(query, [employer]), expected, `${query} / ${employer}`);
+	}
+});
+
+test("Retired/Past/Ex company text is past when intent results include the employee too", async () => {
+	NAMES["fred-initech"] = "Fred Former";
+	try {
+		for (const company of ["Retired Initech", "Past Initech", "Ex Initech", "Retired from Initech", "Formerly at Initech", "Ex @ Initech"]) {
+			ROW_EMPLOYER["fred-initech"] = company;
+			RECORD_COMPANY["fred-initech"] = company;
+			const search = {
+				...DEFAULT_SEARCH,
+				Initech: ["fred-initech"],
+				"mentors at Initech": ["fred-initech", "alice-visible"],
+			};
+			await withFetch(fakeUpstream({ search }), async () => {
+				const phrased = await callTool("search_mentors", { query: "mentors at Initech", limit: 9 });
+				assert.deepEqual(mentorsOf(phrased.body), [], company);
+			});
+		}
+	} finally {
+		for (const table of [ROW_EMPLOYER, RECORD_COMPANY, NAMES]) delete table["fred-initech"];
+	}
 });
 
 test("search_mentors description says company is the current employer", () => {

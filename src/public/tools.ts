@@ -12,7 +12,13 @@ import {
 	type SearchMentorsInput,
 	type SearchServiceMentor,
 } from "../searchMentors.ts";
-import { companyConfirmedByEmployers, isCurrentEmployer, knownCompanyIn } from "./company.ts";
+import {
+	companyConfirmedByEmployers,
+	companyNamedByEmployers,
+	currentEmployerGivenTitle,
+	isCurrentEmployer,
+	knownCompanyIn,
+} from "./company.ts";
 import { PublicError } from "./errors.ts";
 import {
 	mapPublicProfile,
@@ -129,8 +135,10 @@ export async function publicSearchMentors(
 	// "product manager Google", "google pm") is a filter; tools ("help with
 	// Figma") and the requester's own employer ("I work at Google") are not. A
 	// query phrase like "mentors at X" or a role-adjacent word becomes one too
-	// once a returned mentor's current employer confirms it; an unconfirmed
-	// "mentors at X" phrase only orders, as before.
+	// once a returned mentor's current employer confirms it, or stays one with
+	// no current employees when returned mentors name X only as a past
+	// employer. A "mentors from X" phrase no row names as an employer at all
+	// ("mentors from Canada") only orders, as before.
 	let company = input.company ?? knownCompanyIn(input.query);
 	let strictCompany = Boolean(company);
 	const phrasedCompany = company ? "" : employerCandidate(input.query);
@@ -165,29 +173,42 @@ export async function publicSearchMentors(
 	}
 
 	const searchCompany = company || phrasedCompany;
-	const [firstEmployerRows, intentRows] = await Promise.all([
-		searchCompany ? employerSearch(baseUrl, searchCompany, searchInput, intentUrl) : Promise.resolve([]),
+	const [firstEmployerSearch, intentRows] = await Promise.all([
+		searchCompany ? employerSearch(baseUrl, searchCompany, searchInput, intentUrl) : Promise.resolve(null),
 		anonymousSearch(intentUrl)
 			.then((rows) => rankRows(rows, searchInput))
 			.catch(() => null),
 	]);
-	let employerRows = firstEmployerRows;
+	let employerRows = searchCompany ? (firstEmployerSearch?.rows ?? null) : [];
+	// Every employer the employer search saw, past ones included: evidence that
+	// the query names a company even when no row is a current employee.
+	const searchedEmployers = firstEmployerSearch?.employers ?? [];
 	if (employerRows === null && intentRows === null) throw new PublicError("UNAVAILABLE");
 	if (!searchCompany && intentRows === null) throw new PublicError("UNAVAILABLE");
 
 	if (!company) {
 		const confirmed = companyConfirmedByEmployers(input.query, [
-			...(employerRows ?? []).map(rowEmployer),
-			...(intentRows ?? []).map(rowEmployer),
+			...(employerRows ?? []).map(rowCurrentEmployer),
+			...(intentRows ?? []).map(rowCurrentEmployer),
 		]);
 		if (confirmed) {
 			company = confirmed;
 			strictCompany = true;
 			if (employerTokens(confirmed) !== employerTokens(phrasedCompany)) {
-				employerRows = await employerSearch(baseUrl, confirmed, searchInput, intentUrl);
+				employerRows = (await employerSearch(baseUrl, confirmed, searchInput, intentUrl))?.rows ?? null;
 			}
-		} else if (phrasedCompany) {
-			company = phrasedCompany;
+		} else {
+			// Every match is a past employer: still a filter, never unfiltered.
+			const named = companyNamedByEmployers(input.query, [
+				...searchedEmployers,
+				...(intentRows ?? []).map(rowEmployer),
+			]);
+			if (named) {
+				company = named;
+				strictCompany = true;
+			} else if (phrasedCompany) {
+				company = phrasedCompany;
+			}
 		}
 	}
 	why.company = company || undefined;
@@ -195,14 +216,16 @@ export async function publicSearchMentors(
 	// A company filter, not a hint: rows at other current employers are
 	// dropped before gating (so they cannot take the ≤9 slots), and every
 	// mapped card is checked again after the identity record has had its say
-	// on the company. Past employers never count.
-	const atRequiredCompany = (value: string) => !strictCompany || isCurrentEmployer(value, company);
+	// on the company. Past employers never count, including a company field
+	// the title marks as past ("Former Director of UX" at Google).
+	const atRequiredCompany = (value: string, title: string) =>
+		!strictCompany || isCurrentEmployer(value, company, title);
 	const candidates: Candidate[] = [...(employerRows ?? []), ...(intentRows ?? [])]
-		.filter((row) => atRequiredCompany(rowEmployer(row)))
+		.filter((row) => atRequiredCompany(rowEmployer(row), textOf(row.title)))
 		.filter((row) => textOf(row.slug))
 		.map((row) => ({ slug: textOf(row.slug), row }));
 	const mentors = (await gateCandidates(env, candidates, source, why, MAX_PUBLIC_LIMIT))
-		.filter((mentor) => atRequiredCompany(mentor.company ?? ""))
+		.filter((mentor) => atRequiredCompany(mentor.company ?? "", mentor.title ?? ""))
 		.slice(0, limit);
 	return { output: { mentors }, meta: meta(mentors.length) };
 }
@@ -275,21 +298,27 @@ function rowEmployer(row: SearchServiceMentor): string {
 	return textOf(row.employer) || textOf(row.company);
 }
 
+// The row's employer, or "" when its title marks that employer as past.
+function rowCurrentEmployer(row: SearchServiceMentor): string {
+	return currentEmployerGivenTitle(rowEmployer(row), textOf(row.title));
+}
+
 // Bare company query, keep rows whose current employer carries every company
 // token — the signed-in search's rule, minus any "previously …" tail — then
-// apply its domain ranking.
+// apply its domain ranking. `employers` is every returned row's employer text,
+// past-marked ones included, for confirming the company itself.
 async function employerSearch(
 	baseUrl: string,
 	company: string,
 	searchInput: SearchMentorsInput,
 	intentUrl: string,
-): Promise<SearchServiceMentor[] | null> {
+): Promise<{ rows: SearchServiceMentor[]; employers: string[] } | null> {
 	const url = new URL(buildSearchMentorsUrl(baseUrl, { intent: company, filters: searchInput.filters }));
 	url.searchParams.set("pageSize", new URL(intentUrl).searchParams.get("pageSize") ?? "9");
 	const rows = await anonymousSearch(url.toString()).catch(() => null);
 	if (!rows) return null;
-	const matching = rows.filter((row) => isCurrentEmployer(rowEmployer(row), company));
-	return rankRows(matching, searchInput);
+	const matching = rows.filter((row) => isCurrentEmployer(rowEmployer(row), company, textOf(row.title)));
+	return { rows: rankRows(matching, searchInput), employers: rows.map(rowEmployer) };
 }
 
 // Reuse the signed-in mapper only for its filtering and ordering; the rows

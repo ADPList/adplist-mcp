@@ -5,25 +5,59 @@ import { employerCandidate, employerTokens } from "../searchMentors.ts";
 // record's profile.organization, cut before any "previously"/"formerly"/"ex-"
 // tail. Work history and bio never count.
 
-// A separator (or the start) followed by a past-employer marker.
+// A separator (or the start) followed by a past-employer marker. A bare "Ex "
+// needs punctuation before it, so "Design Ex Machina" stays whole.
 const PAST_EMPLOYER_MARKER =
-	/(?:^|[\s|,;/·•([–—-])\s*(?:previously|formerly|former\b|prev\b\.?|ex[-–])/i;
+	/(?:^|[\s|,;/·•([–—-])\s*(?:previously|formerly|former\b|prev\b\.?|past\b|retired\b|ex[-–])|[|,;/·•([–—-]\s*ex\s/i;
 
-// "Google | previously at Meta" → "Google"; "ex-Databricks" → "".
+// Text that opens as past: "Former Director of UX", "Ex Google PM", "- Retired
+// VP". Checked only at the start of a title, company, or title segment, so
+// "Executive", "Pastry" and "Design Ex Machina" never match. The match takes
+// any connecting words after the marker ("Retired from", "Formerly at", "Ex @")
+// so stripping it leaves just the company.
+const PAST_START =
+	/^[\s\p{P}\p{S}]*(?:(?:former(?:ly)?|previously|prev|past|retired)\b|ex(?=[\s.\-–—]))(?:\s*(?:(?:from|at|of|with)(?=\s)|[@:\-–—]))*/iu;
+
+// Title segments: "Advisor | Former Director at Google", "PM (Ex-Google)".
+const TITLE_SEGMENT = /[|,;/·•()[\]]|\s[–—-]\s/;
+
+// "Google | previously at Meta" → "Google"; "ex-Databricks" → ""; "Former
+// Google" → "".
 export function currentEmployer(value: string): string {
+	if (PAST_START.test(value)) return "";
 	const cut = value.search(PAST_EMPLOYER_MARKER);
 	const head = cut >= 0 ? value.slice(0, cut) : value;
 	return head.replace(/[\s|,;/·•([–—-]+$/, "").trim();
 }
 
+// True when the title says the company field is a past employer: the title
+// opens as past ("Former Director of UX", "Ex-Google PM"), or a later segment
+// does and names that company ("Advisor | Former Director at Google"). A past
+// segment about another company ("Design Lead | Ex-Meta") leaves the company
+// field current.
+export function titleMarksEmployerPast(title: string, companyText: string): boolean {
+	if (PAST_START.test(title)) return true;
+	const employer = employerTokens(currentEmployer(companyText));
+	if (!employer) return false;
+	return title
+		.split(TITLE_SEGMENT)
+		.some((segment) => PAST_START.test(segment) && ` ${employerTokens(segment)} `.includes(` ${employer} `));
+}
+
+// The company field as a current employer, or "" when the title marks it past.
+export function currentEmployerGivenTitle(companyText: string, title: string): string {
+	return titleMarksEmployerPast(title, companyText) ? "" : currentEmployer(companyText);
+}
+
 // Current-employer match on whole tokens, with the signed-in search's token
 // rule: the employer must start with every company token. "Google" matches
 // "Google DeepMind"; "Google DeepMind" matches neither "Google" nor
-// "Google Cloud"; "Snap" never matches "Snapchat".
-export function isCurrentEmployer(companyText: string, company: string): boolean {
+// "Google Cloud"; "Snap" never matches "Snapchat". A past-marked title
+// ("Former Director of UX") means the company field is not current.
+export function isCurrentEmployer(companyText: string, company: string, title = ""): boolean {
 	const wanted = employerTokens(company);
 	if (!wanted) return false;
-	const have = employerTokens(currentEmployer(companyText));
+	const have = employerTokens(currentEmployerGivenTitle(companyText, title));
 	return have === wanted || have.startsWith(`${wanted} `);
 }
 
@@ -223,6 +257,42 @@ export function companyConfirmedByEmployers(query: string, employers: string[]):
 		const exact = current.find((employer) => employerTokens(employer) === wanted);
 		if (exact) return exact;
 		if (current.some((employer) => isCurrentEmployer(employer, candidate))) return candidate;
+	}
+	return "";
+}
+
+// Employer text splits in two levels. Segments are whole entries: "Stripe |
+// Former Acme (Europe)" → "Stripe", "Former Acme (Europe)"; a past marker also
+// opens a new segment ("Stripe previously at Google"). Fragments split a
+// segment further on brackets and a standalone "at": "Designer at Initech" →
+// "Designer", "Initech". Connecting words count only as standalone tokens, so
+// "AT&T", "At Home" and "Atlassian" stay whole; a bare "ex" mid-segment never
+// splits, so "Design Ex Machina" does too.
+const EMPLOYER_SEGMENTS = /[|,;/·•]|\s[–—-]\s|(?=\b(?:previously|formerly|former|prev|past|retired)\b|\bex[-–])/i;
+const EMPLOYER_FRAGMENTS = /[()[\]]|\sat\s/i;
+
+// The companies employer text names, current or past, each normalized to
+// tokens with its past marker and connecting words stripped ("Former Google",
+// "Retired from Google", "Ex @ Google" → "google"). Each whole segment is
+// kept, so "Former Acme (Europe)" still names "acme europe", then its
+// fragments. The whole text is kept too, for names with separators in them.
+function employerNames(employer: string): string[] {
+	const normalize = (part: string) => employerTokens(part.replace(PAST_START, ""));
+	const segments = employer.split(EMPLOYER_SEGMENTS).map((segment) => segment.replace(PAST_START, "").trim());
+	return [employer, ...segments, ...segments.flatMap((segment) => segment.split(EMPLOYER_FRAGMENTS))]
+		.map(normalize)
+		.filter(Boolean);
+}
+
+// A candidate that some returned row names as an employer at all, past
+// included. When every match is past-marked ("Former Director of UX" at
+// Initech) the query is still about that company, so it stays a strict filter
+// with no current employees rather than falling back to unfiltered results.
+export function companyNamedByEmployers(query: string, employers: string[]): string {
+	const named = employers.flatMap(employerNames);
+	for (const candidate of companyCandidates(query)) {
+		const wanted = employerTokens(candidate);
+		if (wanted && named.some((have) => have === wanted || have.startsWith(`${wanted} `))) return candidate;
 	}
 	return "";
 }
