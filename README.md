@@ -203,6 +203,7 @@ Configured in `wrangler.jsonc`:
 - `PUBLIC_RATE_LIMIT_DO` — `PublicRateLimiter` Durable Object (SQLite, migration `v2`): the strict per-IP public limit, 10 calls / 10 s and 30 calls / 60 s
 - `PUBLIC_OPT_OUT_SLUGS` — comma-separated mentor slugs hidden from the public tier
 - `AMPLITUDE_API_KEY` (secret, optional) — sends public-tier events to Amplitude
+- `IDENTITY_INTERNAL_API_KEY` (secret, **required** for the public tier) — `x-api-key` for identity-service's keyed `/internal/users/profile/mentor/{slug}`, the source of the visibility flags. Without it every visibility check fails closed: searches return no mentors and every profile is `NOT_FOUND`. Set it on production with `npx wrangler secret put IDENTITY_INTERNAL_API_KEY` (and on preview as below), pasting the value from AWS Secrets Manager `adplist/internalApiKey`. Never print, log, or commit it.
 
 ### Public no-login tier
 
@@ -219,6 +220,15 @@ npx wrangler login
 npx wrangler kv namespace create adplist-mcp-public-preview-oauth   # → id
 npx wrangler d1 create adplist-mcp-profile-preview                    # → database_id
 # replace __PREVIEW_KV_ID__ and __PREVIEW_D1_ID__ in wrangler.preview.jsonc
+# required: without it every mentor is hidden. Paste the value from AWS Secrets
+# Manager adplist/internalApiKey at the prompt; never echo it or put it in a file.
+npx wrangler secret put IDENTITY_INTERNAL_API_KEY -c wrangler.preview.jsonc
+```
+
+Production needs the same secret once, from the same source:
+
+```bash
+npx wrangler secret put IDENTITY_INTERNAL_API_KEY   # default config = production Worker
 ```
 
 Deploy and smoke test:

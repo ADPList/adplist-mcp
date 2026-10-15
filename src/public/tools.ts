@@ -3,11 +3,11 @@ import { buildMentorStatisticsUrl, mentorSlugFromInput } from "../mentorProfile.
 import { asRecord, textOf } from "../profile.ts";
 import {
 	buildSearchMentorsUrl,
-	employerCandidate,
 	employerTokens,
 	literalNameCandidate,
 	mapSearchMentorsResponse,
 	nameContainsEveryWord,
+	shouldUseDisciplineFilter,
 	slugifyLiteralName,
 	type SearchMentorsInput,
 	type SearchServiceMentor,
@@ -16,6 +16,7 @@ import {
 	companyConfirmedByEmployers,
 	companyNamedByEmployers,
 	currentEmployerGivenTitle,
+	employerPhrase,
 	isCurrentEmployer,
 	knownCompanyIn,
 } from "./company.ts";
@@ -147,7 +148,7 @@ export async function publicSearchMentors(
 	// ("mentors from Canada") only orders, as before.
 	let company = input.company ?? knownCompanyIn(input.query);
 	let strictCompany = Boolean(company);
-	const phrasedCompany = company ? "" : employerCandidate(input.query);
+	const phrasedCompany = company ? "" : employerPhrase(input.query);
 	// The role asked for, read without the company phrase ("UX at Google" →
 	// design). Deeper pages leave room to drop other roles at that company.
 	const roles = requestedRoleFamilies(input.query, company || phrasedCompany, input.discipline);
@@ -169,6 +170,7 @@ export async function publicSearchMentors(
 		discipline: input.discipline,
 		language: input.language,
 	};
+	const matchesFilters: KeepCard = (mentor, record, row) => matchesCardFilters(input, mentor, record, row);
 
 	if (nameCandidate) {
 		const nameCandidates: Candidate[] = [];
@@ -184,7 +186,7 @@ export async function publicSearchMentors(
 				nameCandidates.push({ slug: textOf(row.slug), row, nameMatch: true });
 			}
 		}
-		const named = await gateCandidates(env, nameCandidates, source, why, limit);
+		const named = await gateCandidates(env, nameCandidates, source, why, limit, matchesFilters);
 		if (named.length > 0) return { output: { mentors: named }, meta: meta(named.length, true) };
 	}
 
@@ -237,23 +239,22 @@ export async function publicSearchMentors(
 	// A company filter, not a hint: rows at other current employers are
 	// dropped before gating (so they cannot take the ≤9 slots), and every
 	// mapped card is checked again after the identity record has had its say
-	// on the company. Past employers never count, including a company field
-	// the title marks as past ("Former Director of UX" at Google).
+	// on the company, along with the discipline, country and language filters.
+	// Past employers never count, including a company field the title marks as
+	// past ("Former Director of UX" at Google).
 	const atRequiredCompany = (value: string, title: string) =>
 		!strictCompany || isCurrentEmployer(value, company, title);
+	const keep: KeepCard = (mentor, record, row) =>
+		matchesFilters(mentor, record, row) && atRequiredCompany(mentor.company ?? "", mentor.title ?? "");
 	const candidates: Candidate[] = [...(employerRows ?? []), ...(intentRows ?? [])]
 		.filter((row) => atRequiredCompany(rowEmployer(row), textOf(row.title)))
 		.filter((row) => textOf(row.slug))
 		.map((row) => ({ slug: textOf(row.slug), row }));
 	if (roles.length > 0) {
-		const mentors = await gateByRole(env, candidates, source, why, limit, roles, (mentor) =>
-			atRequiredCompany(mentor.company ?? "", mentor.title ?? ""),
-		);
+		const mentors = await gateByRole(env, candidates, source, why, limit, roles, keep);
 		return { output: { mentors }, meta: meta(mentors.length) };
 	}
-	const mentors = (await gateCandidates(env, candidates, source, why, MAX_PUBLIC_LIMIT))
-		.filter((mentor) => atRequiredCompany(mentor.company ?? "", mentor.title ?? ""))
-		.slice(0, limit);
+	const mentors = (await gateCandidates(env, candidates, source, why, MAX_PUBLIC_LIMIT, keep)).slice(0, limit);
 	return { output: { mentors }, meta: meta(mentors.length) };
 }
 
@@ -263,7 +264,7 @@ export async function publicSearchMentors(
 // then scored on its public title, disciplines and expertise: clear
 // mismatches (title in another role, whatever the labels say) are dropped,
 // title matches lead, ambiguous titles ("Director") follow. `keep` is the
-// company filter, applied as before.
+// company and field filters on the final card, applied as before.
 async function gateByRole(
 	env: Env,
 	candidates: Candidate[],
@@ -271,7 +272,7 @@ async function gateByRole(
 	why: WhyMatchContext,
 	limit: number,
 	roles: RoleFamily[],
-	keep: (mentor: PublicMentor) => boolean,
+	keep: KeepCard,
 ): Promise<PublicMentor[]> {
 	const labels = (value: unknown) => (Array.isArray(value) ? value.map(textOf) : []);
 	const queue = uniqueCandidates(candidates)
@@ -291,9 +292,9 @@ async function gateByRole(
 	for (let start = 0; start < queue.length; start += MAX_PUBLIC_LIMIT) {
 		if (kept.filter(({ score }) => score > 0).length >= limit) break;
 		const batch = queue.slice(start, start + MAX_PUBLIC_LIMIT);
-		for (const mentor of await gateCandidates(env, batch, source, why, MAX_PUBLIC_LIMIT)) {
+		for (const mentor of await gateCandidates(env, batch, source, why, MAX_PUBLIC_LIMIT, keep)) {
 			const key = mentor.slug.toLowerCase();
-			if (seen.has(key) || !keep(mentor)) continue;
+			if (seen.has(key)) continue;
 			seen.add(key);
 			const fit = roleFit(roles, mentor);
 			if (!fit.mismatch) kept.push({ mentor, score: fit.score });
@@ -324,14 +325,24 @@ export async function publicGetMentorProfile(
 	return mapPublicProfile(visibility.slug, visibility.record, stats, source);
 }
 
+// Whether a mapped card still meets the request. Receives the identity record
+// and search row the card was built from.
+type KeepCard = (
+	mentor: PublicMentor,
+	record: Record<string, unknown>,
+	row: SearchServiceMentor | null,
+) => boolean;
+
 // Gate up to MAX_PUBLIC_LIMIT unique candidates in parallel and keep the
-// visible ones, in order. A failed or hidden check simply drops the mentor.
+// visible ones that `keep` accepts, in order. A failed or hidden check simply
+// drops the mentor.
 async function gateCandidates(
 	env: Env,
 	candidates: Candidate[],
 	source: PublicSource,
 	why: WhyMatchContext,
 	limit: number,
+	keep: KeepCard,
 ): Promise<PublicMentor[]> {
 	const unique = uniqueCandidates(candidates).slice(0, MAX_PUBLIC_LIMIT);
 	const checks = await Promise.all(
@@ -350,15 +361,56 @@ async function gateCandidates(
 		}
 		const key = check.slug.toLowerCase();
 		if (emitted.has(key)) return;
+		const mentor = mapPublicSearchMentor(candidate.row, check.slug, check.record, source, {
+			...why,
+			nameMatch: candidate.nameMatch,
+		});
+		if (!keep(mentor, check.record, candidate.row)) return;
 		emitted.add(key);
-		mentors.push(
-			mapPublicSearchMentor(candidate.row, check.slug, check.record, source, {
-				...why,
-				nameMatch: candidate.nameMatch,
-			}),
-		);
+		mentors.push(mentor);
 	});
 	return mentors.slice(0, limit);
+}
+
+// The discipline, country and language filters, checked on the final card:
+// the search row matched them upstream, but the card takes these fields from
+// the identity record, which may have changed since the index was built.
+// Country compares the ISO code of whichever source the card's country came
+// from (the record, else the row), else the card's country name.
+function matchesCardFilters(
+	input: PublicSearchInput,
+	mentor: PublicMentor,
+	record: Record<string, unknown>,
+	row: SearchServiceMentor | null,
+): boolean {
+	const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+	const { discipline, language, country } = input;
+	if (
+		discipline &&
+		shouldUseDisciplineFilter(discipline) &&
+		!mentor.disciplines.some((item) => same(item, discipline))
+	) {
+		return false;
+	}
+	if (language && !mentor.languages.some((item) => same(item, language))) return false;
+	if (country) {
+		if (!mentor.country) return false;
+		const recordCountry = asRecord(record.country);
+		const searchRow = asRecord(row);
+		const iso = textOf(recordCountry.countryName) || textOf(recordCountry.iso)
+			? textOf(recordCountry.iso)
+			: textOf(searchRow.countryISO) || textOf(searchRow.country_iso) || textOf(asRecord(searchRow.country).iso);
+		return iso ? same(iso, country) : same(mentor.country, regionName(country));
+	}
+	return true;
+}
+
+function regionName(iso: string): string {
+	try {
+		return new Intl.DisplayNames(["en"], { type: "region" }).of(iso.toUpperCase()) ?? "";
+	} catch {
+		return "";
+	}
 }
 
 function uniqueCandidates(candidates: Candidate[]): Candidate[] {

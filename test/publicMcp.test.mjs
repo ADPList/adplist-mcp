@@ -17,11 +17,14 @@ import {
 	titleMarksEmployerPast,
 } from "../src/public/company.ts";
 import { requestedRoleFamilies, roleFit } from "../src/public/role.ts";
+import { employerCandidate, mapSearchMentorsResponse } from "../src/searchMentors.ts";
 import { checkField, FIELDS, pageTexts, verifyMentor } from "../scripts/verify-public-fields.mjs";
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 const wranglerSource = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 const previewSource = readFileSync(new URL("../wrangler.preview.jsonc", import.meta.url), "utf8");
+const readmeSource = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+const publicDocsSource = readFileSync(new URL("../docs/public-mcp.md", import.meta.url), "utf8");
 
 // ---------------------------------------------------------------------------
 // Fake upstream. Every record and row is stuffed with fields that must never
@@ -2840,4 +2843,277 @@ test("both configs bind the PublicRateLimiter DO with an appended SQLite migrati
 		assert.match(migrations.slice(first, added), /"new_sqlite_classes": \[\s*"MyMCP"\s*\]/, "existing migration unchanged");
 		assert.match(migrations.slice(added), /"new_sqlite_classes": \[\s*"PublicRateLimiter"\s*\]/);
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Greptile review regressions (ADPLIST-4479)
+// ---------------------------------------------------------------------------
+
+async function withPublicOverrides(overrides, run) {
+	Object.assign(PUBLIC_OVERRIDES, overrides);
+	try {
+		return await run();
+	} finally {
+		for (const slug of Object.keys(overrides)) delete PUBLIC_OVERRIDES[slug];
+	}
+}
+
+test("search cards are checked against the filters after the identity record replaces row fields", async () => {
+	// The search index still says SG / English / Product Design for Bob; his
+	// profile has since changed. The card shows the profile, so Bob must go.
+	const stale = {
+		country: { "bob-visible": { country: { iso: "US", countryName: "United States" } } },
+		language: { "bob-visible": { preferences: { languages: [{ legacyId: 2, language: "Spanish" }] } } },
+		discipline: {
+			"bob-visible": { experiences: { expertise: [], disciplines: [{ legacyId: 3, discipline: "UX Research" }] } },
+		},
+	};
+	const filters = { country: { country: "SG" }, language: { language: "English" }, discipline: { discipline: "Product Design" } };
+	await withFetch(fakeUpstream(), async () => {
+		for (const [name, override] of Object.entries(stale)) {
+			await withPublicOverrides(override, async () => {
+				const result = await callTool("search_mentors", { query: "mobile app design", limit: 9, ...filters[name] });
+				assertPublicOutputClean(result);
+				assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), ["alice-visible"], name);
+			});
+		}
+		// Unchanged profiles still pass every filter.
+		const all = await callTool("search_mentors", {
+			query: "mobile app design",
+			limit: 9,
+			country: "SG",
+			language: "English",
+			discipline: "Product Design",
+		});
+		assert.deepEqual(mentorsOf(all.body).map((mentor) => mentor.slug), ["alice-visible", "bob-visible"]);
+	});
+	// The literal-name path returns early; it is filtered on the final card too.
+	await withFetch(fakeUpstream(), () =>
+		withPublicOverrides({ "alice-visible": { country: { iso: "US", countryName: "United States" } } }, async () => {
+			const byName = await callTool("search_mentors", { query: "Alice Visible", country: "SG" });
+			assert.deepEqual(mentorsOf(byName.body), []);
+			const unfiltered = await callTool("search_mentors", { query: "Alice Visible", country: "US" });
+			assert.deepEqual(mentorsOf(unfiltered.body).map((mentor) => mentor.slug), ["alice-visible"]);
+		}),
+	);
+});
+
+test("the requester's past employer is never a mentor-employer filter", () => {
+	for (const query of [
+		"I was at Google, looking for a design mentor",
+		"I used to work at Google and want a career mentor",
+		"I worked at Google and need a PM mentor",
+		"I previously worked at Google, need a design mentor",
+		"I was previously at Google, need a design mentor",
+		"I was a PM at Google and want design mentorship",
+		"I used to be a designer at Google, looking for a mentor",
+		"we were at Google but need a mentor",
+		"I'm a designer, previously at Google, looking for a mentor",
+		"Previously at Google, now looking for a design mentor",
+	]) {
+		assert.equal(knownCompanyIn(query), "", query);
+		assert.ok(!companyCandidates(query).some((candidate) => /google/i.test(candidate)), query);
+	}
+	// The role asked for is still read, without the requester's own history.
+	assert.deepEqual(requestedRoleFamilies("I was a PM at Google, looking for a design mentor"), ["design"]);
+	// A mentor-employer request next to the requester's history still counts.
+	assert.equal(knownCompanyIn("I was at Stripe, looking for a PM at Google"), "Google");
+	assert.equal(knownCompanyIn("I used to work at Stripe and want mentors from Meta"), "Meta");
+	// "was" alone is not employment: what follows the stop word is the request.
+	assert.equal(knownCompanyIn("I was hoping to find a PM at Google"), "Google");
+});
+
+test("a past-marked title only makes the company field past when it names that company or none", () => {
+	for (const [title, company] of [
+		["Former Director at Acme", "Google"],
+		["Ex-Google PM | Design Lead at Meta", "Meta"],
+		["Ex-Google PM", "Meta"],
+		["Formerly at Stripe", "Google"],
+		["Retired from Google", "Meta"],
+	]) {
+		assert.ok(!titleMarksEmployerPast(title, company), `${title} @ ${company}`);
+		assert.ok(isCurrentEmployer(company, company, title), `${title} @ ${company}`);
+	}
+	for (const [title, company] of [
+		["Former Director at Google", "Google"],
+		["Ex-Google PM", "Google"],
+		["Ex-Google PM", "Google DeepMind"],
+		["Former Google PM", "Google"],
+		["Retired from Google", "Google"],
+		["Former Director of UX", "Meta"],
+		["Past President", "Meta"],
+	]) {
+		assert.ok(titleMarksEmployerPast(title, company), `${title} @ ${company}`);
+		assert.ok(!isCurrentEmployer(company, company, title), `${title} @ ${company}`);
+	}
+});
+
+test("a mentor whose past role was elsewhere stays in the current-employer search", async () => {
+	const mentors = {
+		"al-google": ["Al Alum", "Former Director at Acme", "Google", ["Product Design"], []],
+		"mae-meta": ["Mae Lead", "Ex-Google PM | Design Lead at Meta", "Meta", ["Product Design"], []],
+	};
+	const search = { ...DEFAULT_SEARCH, Google: ["al-google", "chris-google"], Meta: ["mae-meta"] };
+	await withRoleMentors(mentors, () =>
+		withFetch(fakeUpstream({ search }), async () => {
+			const google = await callTool("search_mentors", { query: "mentors", company: "Google", limit: 9 });
+			assertPublicOutputClean(google);
+			// chris-google is "Former Director of UX": a past role naming no company.
+			assert.deepEqual(mentorsOf(google.body).map((mentor) => mentor.slug), ["al-google"]);
+			const meta = await callTool("search_mentors", { query: "mentors", company: "Meta", limit: 9 });
+			assert.deepEqual(mentorsOf(meta.body).map((mentor) => mentor.slug), ["mae-meta"]);
+		}),
+	);
+});
+
+test("a place in an employer's office fragment never becomes a company filter", async () => {
+	for (const [employer, place] of [
+		["Acme (Canada)", "Canada"],
+		["Acme | Canada", "Canada"],
+		["Acme [Remote]", "Remote"],
+		["Acme (US)", "US"],
+		["Acme (Europe)", "Europe"],
+		["Acme (India)", "India"],
+	]) {
+		assert.equal(companyNamedByEmployers(`mentors from ${place}`, [employer]), "", employer);
+	}
+	// The employer itself, and a past one, still count.
+	assert.equal(companyNamedByEmployers("mentors at Initech", ["Former Initech (Canada)"]), "Initech");
+	assert.equal(companyNamedByEmployers("mentors from Acme", ["Acme (Canada)"]), "Acme");
+
+	const mentors = { "cam-acme": ["Cam Acme", "Product Designer", "Acme (Canada)", ["Product Design"], []] };
+	const search = { ...DEFAULT_SEARCH, Canada: ["cam-acme"], "mentors from Canada": ["cam-acme", "alice-visible"] };
+	await withRoleMentors(mentors, () =>
+		withFetch(fakeUpstream({ search }), async () => {
+			const result = await callTool("search_mentors", { query: "mentors from Canada", limit: 9 });
+			assertPublicOutputClean(result);
+			assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), ["cam-acme", "alice-visible"]);
+		}),
+	);
+});
+
+test("specialty searches keep the domain fit: a generic marketer is not a growth mentor", async () => {
+	const generalist = { name: "Gen", slug: "gen", title: "Marketing Manager", countryISO: "SG", expertise: ["Brand"], disciplines: ["Marketing"] };
+	const growth = { name: "Gro", slug: "gro", title: "Growth Marketing Lead", countryISO: "SG", expertise: ["Growth Marketing"], disciplines: ["Marketing"] };
+	const input = { intent: "growth marketing", filters: { max_results: 9 } };
+	const rank = (options) =>
+		mapSearchMentorsResponse({ results: [generalist, growth] }, input, false, options).mentors.map((mentor) => mentor.slug);
+	assert.deepEqual(rank(undefined), ["gro"], "signed-in");
+	assert.deepEqual(rank({ maxRows: 27, roleDecided: true }), ["gro"], "public role ranking");
+
+	const mentors = {
+		"gen-mkt": ["Gen Generalist", "Marketing Manager", "Acme Labs", ["Marketing"], ["Brand"]],
+		"gro-mkt": ["Gro Growth", "Growth Marketing Lead", "Acme Labs", ["Marketing"], ["Growth Marketing"]],
+	};
+	const upstream = fakeUpstream();
+	await withRoleMentors(mentors, () =>
+		withFetch(
+			async (request, init) => {
+				const url = new URL(String(request));
+				if (url.pathname === "/search" && url.searchParams.get("q").startsWith("growth marketing.")) {
+					return Response.json({ results: [searchRow("gen-mkt", 1), searchRow("gro-mkt", 2)] });
+				}
+				return upstream(request, init);
+			},
+			async () => {
+				const result = await callTool("search_mentors", { query: "growth marketing", limit: 9 });
+				assertPublicOutputClean(result);
+				assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), ["gro-mkt"]);
+			},
+		),
+	);
+});
+
+test("the signed-in employer phrase is unchanged; the public tier cuts it at a tool clause", () => {
+	// main (0e4d981) behaviour of the shared signed-in parser.
+	assert.equal(employerCandidate("mentors at Acme using Figma"), "Acme using Figma");
+	assert.equal(employerCandidate("mentors at Acme via Figma"), "Acme via Figma");
+	assert.equal(companyCandidates("mentors at Acme via Figma")[0], "Acme");
+});
+
+test("generic consultant titles are ambiguous: disciplines decide, a named field still rejects", () => {
+	const marketing = {
+		title: "Digital Strategy Consultant",
+		disciplines: ["marketing"],
+		expertise: ["digital marketing", "performance marketing"],
+	};
+	assert.deepEqual(roleFit(["marketing"], marketing), { score: 1, mismatch: false });
+	for (const title of ["Consultant", "Consultants", "Senior Consultant", "Independent Consultant"]) {
+		assert.equal(roleFit(["product"], { title, disciplines: PM }).mismatch, false, title);
+		assert.equal(roleFit(["product"], { title, disciplines: ["Back-end"] }).mismatch, true, title);
+	}
+	for (const title of ["Security Consultant", "HR Consultant", "Sales Consultant", "Technical Solutions Consultant"]) {
+		assert.equal(roleFit(["product"], { title, disciplines: PM }).mismatch, true, title);
+	}
+});
+
+test("a body without Content-Length is cut off at the byte limit while streaming", async () => {
+	const post = (body) =>
+		handlePublicRequest(
+			new Request("https://mcp.adplist.org/public/mcp", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.7" },
+				body,
+				duplex: "half",
+			}),
+			makeEnv(),
+			{ waitUntil() {} },
+		);
+	let pulled = 0;
+	const endless = new ReadableStream({
+		pull(controller) {
+			pulled += 1;
+			if (pulled > 1000) return controller.close();
+			controller.enqueue(new Uint8Array(16 * 1024).fill(0x20));
+		},
+	});
+	const tooBig = await post(endless);
+	assert.equal(tooBig.status, 413);
+	assert.ok(pulled <= 8, `read ${pulled} chunks of a body past the limit`);
+
+	// Bytes, not characters: 40k "é" is 80 KB of UTF-8.
+	const stream = (text) => new Blob([text]).stream();
+	const wide = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: { pad: "é".repeat(40_000) } });
+	assert.ok(wide.length < 64 * 1024);
+	assert.equal((await post(stream(wide))).status, 413);
+
+	// A small streamed body still works.
+	const ok = await post(stream(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })));
+	assert.equal(ok.status, 200);
+	assert.equal((await ok.json()).result.tools.length, 2);
+});
+
+test("verify script checks rating and review count against reviewStats, not any page number", () => {
+	// reviewStats says 12 reviews at 4.6; the bio mentions 31 projects and 4.9.
+	const nextData = { props: { pageProps: { mentor: { reviewStats: { avg: 4.61, count: 12 } } } } };
+	const withStats = pageTexts(`<p>Led 31 projects, rated 4.9 by peers</p><p>31 reviews</p>
+<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(nextData)}</script>`);
+	assert.equal(checkField("total_reviews", 31, withStats), "missing");
+	assert.equal(checkField("average_rating", 4.9, withStats), "missing");
+	assert.equal(checkField("total_reviews", 12, withStats), "embedded");
+	assert.equal(checkField("average_rating", 4.6, withStats), "embedded");
+
+	// No reviewStats: only a labelled number counts.
+	const bioOnly = pageTexts(`<p>Led 31 projects, rated 4.9 by peers</p>`);
+	assert.equal(checkField("total_reviews", 31, bioOnly), "missing");
+	assert.equal(checkField("average_rating", 4.9, bioOnly), "missing");
+	const labelled = pageTexts(`<p>★ 4.9</p><p>(31 reviews)</p><p>Led 12 projects</p>`);
+	assert.equal(checkField("average_rating", 4.9, labelled), "ok");
+	assert.equal(checkField("total_reviews", 31, labelled), "ok");
+	assert.equal(checkField("total_reviews", 12, labelled), "missing");
+});
+
+test("setup docs require IDENTITY_INTERNAL_API_KEY on preview and production", () => {
+	assert.match(readmeSource, /wrangler secret put IDENTITY_INTERNAL_API_KEY -c wrangler\.preview\.jsonc/);
+	assert.match(readmeSource, /wrangler secret put IDENTITY_INTERNAL_API_KEY\s+#/);
+	assert.match(readmeSource, /adplist\/internalApiKey/);
+	assert.match(readmeSource, /never (?:echo|print)/i);
+	assert.match(publicDocsSource, /IDENTITY_INTERNAL_API_KEY/);
+	assert.match(publicDocsSource, /\/internal\/users\/profile\/mentor\/\{slug\}/);
+	assert.match(publicDocsSource, /adplist\/internalApiKey/);
+	// The documented route is the one the code calls.
+	assert.equal(
+		internalVisibilityUrl("https://auth.test", "alice"),
+		"https://auth.test/internal/users/profile/mentor/alice",
+	);
 });

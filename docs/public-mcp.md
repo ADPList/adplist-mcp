@@ -125,28 +125,47 @@ One function, `checkMentorVisibility` (`src/public/visibility.ts`), gates all
 three paths: search results, literal-name lookups (slug guess and name search),
 and slug lookups.
 
-Anonymous `GET {AUTH_SERVICE_URL}/users/profile/mentor/{slug}` (3 s timeout),
-always the bare record URL: no query parameters (never `syncFromLegacy`), and
-the slug is percent-encoded so it cannot add its own.
+Two identity-service reads per mentor, in parallel (3 s timeout each), both
+the bare record URL: no query parameters (never `syncFromLegacy`), and the slug
+is percent-encoded so it cannot add its own. Neither follows redirects.
+
+- **Flags (keyed):** `GET {AUTH_SERVICE_URL}/internal/users/profile/mentor/{slug}`
+  with `x-api-key: IDENTITY_INTERNAL_API_KEY` (ADPLIST-4485). Authoritative
+  for `status`, the `is.*` flags, the listing flags, the canonical slug, and
+  the `userId` used for the stats lookup. Nothing from it is displayed.
+- **Display (anonymous):** `GET {AUTH_SERVICE_URL}/users/profile/mentor/{slug}`,
+  no `Authorization` header and no API key. The only source of card and
+  profile fields, including the current employer.
+
+`IDENTITY_INTERNAL_API_KEY` is a required Worker secret. Without it every
+check fails closed: `search_mentors` returns no mentors and every
+`get_mentor_profile` returns `NOT_FOUND`. Set it on each Worker (production
+and preview) with `wrangler secret put` from AWS Secrets Manager
+`adplist/internalApiKey`; see the README's public-tier setup. Never print it.
+
 A mentor is visible **only if**:
 
 ```
 data.status === "active" && is.active === true && is.mentor === true &&
 is.suspended, is.onBreak, is.aiSearchOptOut each absent or === false &&
+bookable, indexable (both records) each absent or === true &&
 slug (requested and canonical) not in PUBLIC_OPT_OUT_SLUGS
 ```
 
-Fail closed: non-200, network error, timeout, non-JSON, a body without
-`data.status` and an `data.is` object, or any present flag that is not a
-boolean (`"true"`, `1`, `null`) all omit the mentor. On profile lookup hidden,
+Fail closed: a missing API key, non-200 from either read, network error,
+timeout, non-JSON, a flags body without `data.status` and an `data.is`
+object, any present flag that is not a boolean (`"true"`, `1`, `null`), or a
+display record whose slug, name or profile is missing or does not match the
+canonical slug all omit the mentor. On profile lookup hidden,
 opted-out, on-break, missing, and unverifiable all return the same
 `NOT_FOUND`, byte for byte, so the response is not an oracle for why.
 Every public response is `no-store`.
 
 ### Decisions
 
-- **Visibility source:** the identity-service mentor profile record is
-  authoritative.
+- **Visibility source:** the identity-service internal mentor record
+  (keyed, `IDENTITY_INTERNAL_API_KEY`) is authoritative for the flags; the
+  anonymous public record is authoritative for what is displayed.
 - **Anonymous search:** confirmed as approved and verified for this tier (per
   the ADPLIST-4479 decision; the code never attaches a bearer token on this
   path, and tests assert no `Authorization` header).

@@ -20,6 +20,9 @@
  * there: average_rating must equal reviewStats.avg rounded to one decimal, as
  * the page displays it; total_reviews must equal reviewStats.count; country and
  * languages must appear in __NEXT_DATA__ or the script carrying reviewStats.
+ * Rating and review count are never matched against arbitrary page numbers:
+ * reviewStats decides when present, otherwise only a labelled visible number
+ * ("4.9 rating", "31 reviews") counts.
  *
  * Session totals are not checked or emitted: the public page does not show
  * them (ADPLIST-4360).
@@ -73,6 +76,8 @@ export const FIELDS = [
 const LIST_FIELDS = new Set(["expertise", "disciplines", "languages"]);
 // Rendered client-side by the page; an embedded-data match is not a failure.
 const EMBEDDED_FIELDS = new Set(["average_rating", "total_reviews", "country", "languages"]);
+// Compared with reviewStats or a labelled number, never any number on the page.
+const STAT_FIELDS = new Set(["average_rating", "total_reviews"]);
 const SOURCES = ["search", "profile"];
 const STATUSES = ["ok", "embedded", "absent", "missing", "script-only"];
 const FAILING = new Set(["missing", "script-only"]);
@@ -157,14 +162,9 @@ function parseReviewStats(text) {
 	return { avg: number("avg"), count: number("count") };
 }
 
-// Rating and review count only count as embedded when they equal reviewStats
-// as the page displays it (avg rounded to one decimal).
+// Country and languages count as embedded when the page's own mentor data
+// carries them (rating and review count go through checkStat).
 function embeddedMatch(field, item, page, match) {
-	if (field === "average_rating") {
-		const { avg } = page.reviewStats;
-		return typeof avg === "number" && Math.round(avg * 10) / 10 === item;
-	}
-	if (field === "total_reviews") return page.reviewStats.count === item;
 	return match(page.embedded);
 }
 
@@ -211,6 +211,7 @@ export function checkField(field, value, page) {
 		if (forms.some((form) => page.rawScripts.includes(form))) return "script-only";
 		return "missing";
 	}
+	if (STAT_FIELDS.has(field)) return checkStat(field, value, page);
 	const items = LIST_FIELDS.has(field) ? value : [value];
 	const statuses = items.map((item) => {
 		const candidates = typeof item === "number" ? numberForms(item) : [textForm(item)];
@@ -227,6 +228,34 @@ export function checkField(field, value, page) {
 		if (statuses.includes(status)) return status;
 	}
 	return "ok";
+}
+
+// Rating and review count are checked as statistics, never as any number in
+// the page text (a bio's "31 projects" is not 31 reviews). When the page data
+// carries reviewStats it decides: the value must equal it as the page shows
+// it, and is "ok" when that value is also visibly labelled, else "embedded".
+// Without reviewStats, only a labelled number in the visible text counts
+// ("4.9 rating", "★ 4.9", "31 reviews").
+function checkStat(field, value, page) {
+	const forms = numberForms(value);
+	const labelled = forms.some((form) => labelledStat(field, page.visible, form));
+	const { avg, count } = page.reviewStats;
+	const expected = field === "average_rating" ? (typeof avg === "number" ? Math.round(avg * 10) / 10 : undefined) : count;
+	if (expected !== undefined) {
+		if (expected === value) return labelled ? "ok" : "embedded";
+	} else if (labelled) {
+		return "ok";
+	}
+	return forms.some((form) => containsWord(page.scripts, form)) ? "script-only" : "missing";
+}
+
+function labelledStat(field, text, form) {
+	const number = `(?<![0-9a-z.,])${form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![0-9a-z]|[.,][0-9])`;
+	const pattern =
+		field === "average_rating"
+			? `(?:★|☆|⭐|\\brating:?|\\bstars?:?)\\s*${number}|${number}\\s*(?:/\\s*5\\s*)?(?:★|⭐|stars?\\b|rating\\b|average\\b)`
+			: `${number}\\s*(?:reviews?|ratings)\\b|\\breviews?:?\\s*\\(?${number}`;
+	return new RegExp(pattern, "i").test(text);
 }
 
 // Checks the search card and the profile output separately against one page.

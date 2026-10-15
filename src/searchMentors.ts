@@ -444,7 +444,7 @@ function stripResultCountLanguage(intent: string): string {
 		.trim();
 }
 
-function shouldUseDisciplineFilter(discipline: string): boolean {
+export function shouldUseDisciplineFilter(discipline: string): boolean {
 	const normalized = normalizeDiscipline(discipline);
 	return !BROAD_DISCIPLINE_TERMS.some((term) => normalized.includes(term));
 }
@@ -521,7 +521,9 @@ export function mapSearchMentorsResponse(
 	trimToRows = true,
 	// The public search ranks deeper pages (`maxRows` overrides the
 	// max_results cap) and, with `roleDecided`, applies its own role policy, so
-	// the product-management and domain fits here only order, never drop.
+	// the product-management fit here only orders, never drops. The domain fit
+	// still drops either way: a specialty request ("growth marketing") keeps
+	// excluding generalists. Signed-in callers pass no options.
 	options: { maxRows?: number; roleDecided?: boolean } = {},
 ): SearchMentorsOutput {
 	input = withInferredFilters(input);
@@ -530,7 +532,7 @@ export function mapSearchMentorsResponse(
 	const candidates = (response.results ?? [])
 		.filter((mentor) => matchesRequestedCountry(mentor, input.filters?.country))
 		.filter((mentor) => options.roleDecided || matchesProductManagementFit(mentor, input))
-		.filter((mentor) => options.roleDecided || matchesDomainFit(mentor, domainRule, input));
+		.filter((mentor) => matchesDomainFit(mentor, domainRule, input));
 	const mentors = rankMentorCandidates(candidates, domainRule, input)
 		.slice(0, resultCount)
 		.map((mentor) => {
@@ -1146,7 +1148,7 @@ async function searchMentorsByIntent(
 // so "mentors from Canada who work at Google" leaves Google for the next match.
 // Sentence punctuation ends it too: "…work at Google. Founder and CEO of…" is
 // what the model actually sends.
-const CLAUSE_WORD = String.raw`(?!(?:who|that|which|with|using|via|in|for|or|to|on|about|as|looking|seeking|wants?|needs?)\b)`;
+const CLAUSE_WORD = String.raw`(?!(?:who|that|which|with|in|for|or|to|on|about|as|looking|seeking|wants?|needs?)\b)`;
 const EMPLOYER_INTENT_PATTERN = new RegExp(
 	String.raw`\b(?:who|that|which|mentors|people|someone|anyone|folks|designers|engineers|developers|managers|leaders|founders|researchers|recruiters|experts|professionals|pms)\s+(?:[a-z']+\s+){0,2}?(?:work(?:s|ing)?\s+(?:at|for)|employed\s+(?:at|by)|at|from)\s+(?:the\s+)?(${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&'-]*(?:\s+${CLAUSE_WORD}[A-Za-z0-9][A-Za-z0-9&'-]*){0,3})`,
 	"gi",

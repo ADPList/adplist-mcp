@@ -57,12 +57,16 @@ const ROLE_FAMILIES: Record<RoleFamily, FamilyTerms> = {
 // Roles nobody searches for here but that still place a title clearly
 // outside the requested family ("Cyber Security Instructor", "Knowledge
 // Strategist"). Titles with none of these and no family term ("Director",
-// "Founder", "Product") are ambiguous, never a clear mismatch.
+// "Founder", "Product", "Digital Strategy Consultant") are ambiguous, never a
+// clear mismatch: their disciplines decide. "Consultant" alone names no field;
+// "Security Consultant", "HR Consultant" or "Technical Solutions Consultant"
+// is rejected by its field.
 const OTHER_ROLE_TERMS = [
 	"security", "cybersecurity", "infosec", "operations", "instructor", "teacher", "professor", "lecturer",
 	"educator", "trainer", "strategist", "sales", "account executive", "account manager", "business development",
+	"technical solutions", "solutions consultant", "solutions consultants",
 	"recruiter", "recruiting", "talent acquisition", "hr", "human resources", "finance", "accountant", "banker",
-	"lawyer", "attorney", "counsel", "consultant", "consultants", "program manager", "program management",
+	"lawyer", "attorney", "counsel", "program manager", "program management",
 	"project manager", "project management", "writer", "copywriter", "customer success", "community manager",
 	"enterprise applications",
 ];

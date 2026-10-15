@@ -30,18 +30,46 @@ export function currentEmployer(value: string): string {
 	return head.replace(/[\s|,;/·•([–—-]+$/, "").trim();
 }
 
+// The company a past-marked title segment names, as tokens, or "" when it
+// names none: "Former Director at Acme" → "acme", "Ex-Google PM" → "google",
+// "Retired from Google" → "google", "Former Google PM" → "google", "Former
+// Director of UX" and "Past President" → "". Right after "ex" or a connecting
+// word the leading non-role words are the company; after "Former", "Past" and
+// the like only a well-known company is.
+function pastSegmentCompany(segment: string): string {
+	const marker = segment.match(PAST_START)?.[0] ?? "";
+	const role = segment.slice(marker.length).trim();
+	const at = role.match(/(?:\s(?:at|with)\s+|@\s*)(.+)$/i);
+	if (at) return employerTokens(at[1]);
+	if (/^[\s\p{P}\p{S}]*ex\b|(?:\b(?:from|at|with)|@)\s*$/iu.test(marker)) {
+		const words = role.match(WORD) ?? [];
+		const lead = words.findIndex((word) => NON_COMPANY_WORDS.has(bare(word)));
+		return employerTokens(words.slice(0, lead < 0 ? words.length : lead).join(" "));
+	}
+	return employerTokens(knownCompanyPrefix(role));
+}
+
+// One employer contains the other on whole leading tokens ("Google" and
+// "Google DeepMind").
+const sameEmployer = (a: string, b: string) => a === b || a.startsWith(`${b} `) || b.startsWith(`${a} `);
+
 // True when the title says the company field is a past employer: the title
-// opens as past ("Former Director of UX", "Ex-Google PM"), or a later segment
-// does and names that company ("Advisor | Former Director at Google"). A past
-// segment about another company ("Design Lead | Ex-Meta") leaves the company
-// field current.
+// opens as a past role that names that company or no company at all ("Former
+// Director of UX", "Ex-Google PM" at Google), or a later segment is past and
+// names that company ("Advisor | Former Director at Google"). A past role at
+// another company ("Ex-Google PM | Design Lead at Meta", "Former Director at
+// Acme" at Google) leaves the company field current.
 export function titleMarksEmployerPast(title: string, companyText: string): boolean {
-	if (PAST_START.test(title)) return true;
 	const employer = employerTokens(currentEmployer(companyText));
+	const segments = title.split(TITLE_SEGMENT).filter((segment) => segment.trim());
+	if (PAST_START.test(title) && segments.length > 0) {
+		const named = pastSegmentCompany(segments[0]);
+		if (!named || !employer || sameEmployer(named, employer)) return true;
+	}
 	if (!employer) return false;
-	return title
-		.split(TITLE_SEGMENT)
-		.some((segment) => PAST_START.test(segment) && ` ${employerTokens(segment)} `.includes(` ${employer} `));
+	return segments.slice(1).some(
+		(segment) => PAST_START.test(segment) && ` ${employerTokens(segment)} `.includes(` ${employer} `),
+	);
 }
 
 // The company field as a current employer, or "" when the title marks it past.
@@ -130,16 +158,21 @@ const TOOL_WORDS = new Set(
 // Stripe", "my team is at Airbnb", "my company is Acme". The company there is
 // who is asking, never who they want. The clause ends at punctuation or a
 // clause word ("and", "but", "need", "looking"), so "I'm at Stripe, looking
-// for a PM at Google" still wants Google.
-const CLAUSE_STOP = String.raw`(?:and|but|so|need|needs|looking|seeking|want|wants|hoping|trying|interested|who|that|which|mentor|mentors|someone|anyone|people)\b`;
+// for a PM at Google" still wants Google. Past employment counts the same:
+// "I was at Google", "I used to work at Google", "I worked at Google", "I'm a
+// designer, previously at Google", or a query that opens "Previously at
+// Google, …" — the requester's history, never a mentor-employer filter.
+const CLAUSE_STOP = String.raw`(?:and|but|so|need|needs|looking|seeking|want|wants|hoping|trying|interested|find|finding|talk|speak|connect|meet|reach|who|that|which|mentor|mentors|someone|anyone|people)\b`;
 const CLAUSE_WORD = String.raw`[A-Za-z0-9&'-]+(?:\.[A-Za-z0-9&'-]+)*`;
 const CLAUSE_WORDS = String.raw`(?:\s+(?!${CLAUSE_STOP})${CLAUSE_WORD})`;
-const SELF_SUBJECT = String.raw`(?:i\s*'\s*m|i\s+am|im|we\s*'\s*re|we\s+are|(?:my|our)\s+team\s+is|(?:i|we)(?:\s*'\s*ve|\s+have)?(?:\s+been)?(?:\s+(?:currently|now))?\s+(?:work|works|working|worked|employed))`;
+const SELF_ADVERB = String.raw`(?:\s+(?:currently|now|previously|formerly|once|recently|also))?`;
+const SELF_SUBJECT = String.raw`(?:i\s*'\s*m|i\s+am|im|we\s*'\s*re|we\s+are|(?:my|our)\s+team\s+is|(?:i|we)(?:\s*'\s*ve|\s+have)?(?:\s+been)?${SELF_ADVERB}\s+(?:work|works|working|worked|employed)|(?:i|we)${SELF_ADVERB}\s+(?:was|were|used\s+to(?:\s+(?:work|be))?))`;
 const SELF_COMPANY = String.raw`(?:the\s+)?${CLAUSE_WORD}${CLAUSE_WORDS}*`;
 const SELF_EMPLOYMENT = new RegExp(
 	[
-		String.raw`\b${SELF_SUBJECT}${CLAUSE_WORDS}*?(?:\s+(?:at|for|with|by)\s+|\s*@\s*)${SELF_COMPANY}`,
+		String.raw`\b${SELF_SUBJECT}${CLAUSE_WORDS}*?(?:\s*[,(]?\s*(?:previously|formerly))?(?:\s+(?:at|for|with|by)\s+|\s*@\s*)${SELF_COMPANY}`,
 		String.raw`\b(?:my|our)\s+(?:current\s+)?(?:company|employer|workplace|org|organization|organisation)(?:\s+is|\s*[:,])?\s+${SELF_COMPANY}`,
+		String.raw`^\s*(?:previously|formerly)\s+(?:(?:at|with)\s+|@\s*)${SELF_COMPANY}`,
 	].join("|"),
 	"gi",
 );
@@ -158,6 +191,12 @@ const SKILL_PHRASE = new RegExp(
 const EMPLOYEE_WORDS = new Set(
 	`people folks someone anyone employees staff team experts professionals`.split(/\s+/),
 );
+
+// The signed-in search's employer phrase ("mentors at Acme"), cut before a
+// tool clause: "mentors at Acme using Figma" → "Acme", not "Acme using Figma".
+export function employerPhrase(query: string): string {
+	return employerCandidate(query).split(/(?:^|\s+)(?:using|via)\b/i)[0].trim();
+}
 
 // Typographic apostrophes and quotes to ASCII, so "I’m a PM at Google" reads
 // like "I'm a PM at Google".
@@ -210,7 +249,7 @@ function companyPhrases(query: string): { explicit: string[]; implied: string[] 
 	};
 	const explicit: string[] = [];
 	collect(explicit, wholeQueryCompany(text), false);
-	collect(explicit, employerCandidate(text), true);
+	collect(explicit, employerPhrase(text), true);
 	for (const match of text.matchAll(/(?:\b(?:at|from)\s+|@\s*)([A-Za-z0-9][A-Za-z0-9&.'-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.'-]*){0,2})/gi)) {
 		// Shrink from the right only past clause words: "Meta in London" → "Meta",
 		// but "Google DeepMind" stays whole and never also yields "Google".
@@ -277,17 +316,62 @@ export function companyConfirmedByEmployers(query: string, employers: string[]):
 const EMPLOYER_SEGMENTS = /[|,;/·•]|\s[–—-]\s|(?=\b(?:previously|formerly|former|prev|past|retired)\b|\bex[-–])/i;
 const EMPLOYER_FRAGMENTS = /[()[\]]|\sat\s/i;
 
+// Places that appear as an office or region next to an employer ("Acme
+// (Canada)", "Stripe | Remote", "Grab (APAC)"): every country name and ISO
+// code, regions, and common office cities. As a separate segment or fragment
+// they never name an employer, so "mentors from Canada" stays a place.
+const LOCATION_NAMES = new Set(
+	[
+		"usa", "uk", "uae", "eu", "europe", "emea", "apac", "asia", "asia pacific", "southeast asia",
+		"latam", "latin america", "north america", "south america", "americas", "africa", "middle east", "mena",
+		"anz", "nordics", "dach", "benelux", "remote", "global", "worldwide", "international", "hq", "hong kong",
+		"london", "new york", "nyc", "san francisco", "sf", "bay area", "silicon valley", "seattle", "austin",
+		"boston", "chicago", "los angeles", "toronto", "vancouver", "montreal", "berlin", "paris", "amsterdam",
+		"dublin", "lisbon", "madrid", "barcelona", "stockholm", "zurich", "munich", "tokyo", "seoul", "beijing",
+		"shanghai", "shenzhen", "jakarta", "kuala lumpur", "bangkok", "manila", "ho chi minh city", "bangalore",
+		"bengaluru", "mumbai", "delhi", "new delhi", "hyderabad", "pune", "chennai", "gurgaon", "gurugram", "noida",
+		"dubai", "lagos", "nairobi", "cape town", "sydney", "melbourne", "auckland", "sao paulo", "mexico city",
+		"bogota", "buenos aires",
+	].map(employerTokens),
+);
+let regionNames: Set<string> | undefined;
+function isLocationName(tokens: string): boolean {
+	if (!regionNames) {
+		regionNames = new Set();
+		const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+		let displayNames: Intl.DisplayNames | undefined;
+		try {
+			displayNames = new Intl.DisplayNames(["en"], { type: "region" });
+		} catch {
+			// No ICU region names: the fixed list above still applies.
+		}
+		for (const a of letters) {
+			for (const b of letters) {
+				const name = displayNames?.of(`${a}${b}`);
+				if (name && name !== `${a}${b}`) {
+					regionNames.add(employerTokens(`${a}${b}`));
+					regionNames.add(employerTokens(name));
+				}
+			}
+		}
+	}
+	return LOCATION_NAMES.has(tokens) || regionNames.has(tokens);
+}
+
 // The companies employer text names, current or past, each normalized to
 // tokens with its past marker and connecting words stripped ("Former Google",
 // "Retired from Google", "Ex @ Google" → "google"). Each whole segment is
 // kept, so "Former Acme (Europe)" still names "acme europe", then its
 // fragments. The whole text is kept too, for names with separators in them.
+// A segment or fragment that is only a place ("Canada" in "Acme (Canada)") is
+// an office, not an employer, and is dropped.
 function employerNames(employer: string): string[] {
 	const normalize = (part: string) => employerTokens(part.replace(PAST_START, ""));
 	const segments = employer.split(EMPLOYER_SEGMENTS).map((segment) => segment.replace(PAST_START, "").trim());
-	return [employer, ...segments, ...segments.flatMap((segment) => segment.split(EMPLOYER_FRAGMENTS))]
+	const parts = [...segments, ...segments.flatMap((segment) => segment.split(EMPLOYER_FRAGMENTS))]
 		.map(normalize)
-		.filter(Boolean);
+		.filter((part) => part && !isLocationName(part));
+	return [normalize(employer), ...parts].filter(Boolean);
 }
 
 // A candidate that some returned row names as an employer at all, past

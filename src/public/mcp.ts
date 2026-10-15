@@ -67,6 +67,33 @@ const RPC_ERRORS = {
 
 type WaitUntil = { waitUntil(promise: Promise<unknown>): void };
 
+// The body as UTF-8 text, or null once it exceeds `maxBytes`. Counts bytes as
+// they stream in and stops reading at the limit, so a body without (or lying
+// about) Content-Length is never buffered whole.
+async function readBodyWithinLimit(request: Request, maxBytes: number): Promise<string | null> {
+	if (!request.body) return "";
+	const reader = request.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		total += value.byteLength;
+		if (total > maxBytes) {
+			await reader.cancel().catch(() => {});
+			return null;
+		}
+		chunks.push(value);
+	}
+	const bytes = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return new TextDecoder().decode(bytes);
+}
+
 export function isPublicPath(pathname: string): boolean {
 	return pathname === "/public" || pathname.startsWith("/public/");
 }
@@ -105,8 +132,8 @@ async function routePublicRequest(
 	if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
 		return jsonResponse({ jsonrpc: "2.0", id: null, error: RPC_ERRORS.invalidRequest }, 413);
 	}
-	const raw = await request.text();
-	if (raw.length > MAX_BODY_BYTES) {
+	const raw = await readBodyWithinLimit(request, MAX_BODY_BYTES);
+	if (raw === null) {
 		return jsonResponse({ jsonrpc: "2.0", id: null, error: RPC_ERRORS.invalidRequest }, 413);
 	}
 	let body: unknown;
