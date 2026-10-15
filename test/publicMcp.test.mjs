@@ -1535,7 +1535,8 @@ test("role fit: title first, then disciplines; clear mismatches only when nothin
 	assert.deepEqual(roleFit(design, { title: "Director", disciplines: ["UX Design"] }), { score: 1, mismatch: false });
 	assert.deepEqual(roleFit(design, { title: "Founder", disciplines: [] }), { score: 0, mismatch: false });
 	assert.deepEqual(roleFit(design, { title: "Founder", disciplines: ["Back-end"] }), { score: 0, mismatch: true });
-	assert.deepEqual(roleFit(design, { title: "Software Engineer", disciplines: ["UX Engineering"] }), { score: 1, mismatch: false });
+	// A title in another role is a mismatch even with a matching label.
+	assert.deepEqual(roleFit(design, { title: "Software Engineer", disciplines: ["UX Engineering"] }), { score: 1, mismatch: true });
 	for (const [title, disciplines] of [
 		["Network Operations Engineer", ["Site Reliability"]],
 		["Hardware CAD Engineer", ["Hardware Design"]],
@@ -1543,6 +1544,13 @@ test("role fit: title first, then disciplines; clear mismatches only when nothin
 		["Knowledge Strategist", ["Content Strategy"]],
 	]) {
 		assert.equal(roleFit(design, { title, disciplines }).mismatch, true, title);
+	}
+	// Design-family titles that say "engineer" are design titles, not mismatches.
+	for (const title of [
+		"Human Factors Engineer", "UX Engineer", "Design Engineer", "Design Technologist", "Usability Engineer",
+	]) {
+		assert.deepEqual(roleFit(design, { title, disciplines: ["UX Research"] }), { score: 3, mismatch: false }, title);
+		assert.deepEqual(roleFit(design, { title, disciplines: [] }), { score: 2, mismatch: false }, title);
 	}
 	assert.equal(roleFit(["product"], { title: "Senior Product Designer", disciplines: ["Product Design"] }).mismatch, true);
 	assert.equal(roleFit(["product"], { title: "Product Marketing Manager", disciplines: [] }).mismatch, true);
@@ -1633,6 +1641,101 @@ test("'product manager' keeps unlabeled PM titles and ambiguous founders, like '
 			}
 		}),
 	);
+});
+
+// The live preview rows (ADPLIST-4479), every one labelled with the requested
+// discipline: labels rescue ambiguous titles only, never a title in another role.
+const PM = ["Generalist Product Management"];
+const LIVE_ROLE_MENTORS = {
+	"kieran-yi-moon": ["Kieran Yi Moon", "Product Manager", "Meta", PM, []],
+	"kunyu-lin": ["Kunyu Lin", "Technical Solutions Consultants", "Meta", PM, []],
+	"vaidehi-bhandari-jain": ["Vaidehi Bhandari Jain", "Director Program Management", "Meta", PM, []],
+	"deepak-k-phd": ["Deepak K", "Software Engineer", "Meta Inc", PM, []],
+	"david-goldenshluger": ["David Goldenshluger", "Principal Product & Program Manager", "Meta", PM, []],
+	"shahin-katebi": ["Shahin Katebi", "Lead Software Engineer", "Meta", PM, []],
+	"ramachandra-nalam": ["Ramachandra Nalam", "Data - AI/ML", "Meta", PM, []],
+	"meet-thakkar": ["Meet Thakkar", "Senior Software Engineer", "Meta platforms Inc", PM, []],
+	"deepika-nathany": ["Deepika Nathany", "Manager, Enterprise Applications", "Meta Inc", PM, []],
+	"kirsten-zverina-archer": ["Kirsten Zverina Archer", "Senior Product Manager", "Google", PM, []],
+	"edmur-huq": ["Edmur Huq", "Product Lead", "Google", PM, []],
+	"sophia-dhawan-mshg6g3v": ["Sophia Dhawan", "Technical Product Lead", "Google", PM, []],
+	"nikhil-mohanlal": ["Nikhil Mohanlal", "Cyber Security Instructor", "Google", PM, []],
+	"yogeshree-tawde": ["Yogeshree Tawde", "Product", "Google", PM, []],
+	"terry-toh": ["Terry Toh", "Product Strategy & Operations, APAC Go-To Market", "Google", PM, []],
+	"zhongying-alex-wu": ["Zhongying Alex Wu", "Senior Account Manager", "Google", PM, []],
+	"chandan-agarwal": ["Chandan Agarwal", "Engineering Manager 2", "Google", PM, []],
+	"somet-kipchilat": ["Somet Kipchilat", "Program Manager", "Google", PM, []],
+	"lead-knowledge-airbnb": ["Lena Knowledge", "Lead Knowledge Strategist", "Airbnb", ["UX Design"], ["Design Systems"]],
+	"una-ux-airbnb": ["Una Ux", "UX Designer", "Airbnb", ["UX Design"], []],
+};
+
+const LIVE_ROLE_SEARCH = {
+	...DEFAULT_SEARCH,
+	Meta: [
+		"kieran-yi-moon", "kunyu-lin", "vaidehi-bhandari-jain", "deepak-k-phd", "david-goldenshluger",
+		"shahin-katebi", "ramachandra-nalam", "meet-thakkar", "deepika-nathany",
+	],
+	Google: [
+		"kirsten-zverina-archer", "edmur-huq", "sophia-dhawan-mshg6g3v", "nikhil-mohanlal", "yogeshree-tawde",
+		"terry-toh", "zhongying-alex-wu", "chandan-agarwal", "somet-kipchilat",
+	],
+	Airbnb: ["lead-knowledge-airbnb", "una-ux-airbnb"],
+};
+
+test("a title in another role is dropped whatever its disciplines (live preview rows)", async () => {
+	await withRoleMentors(LIVE_ROLE_MENTORS, () =>
+		withFetch(fakeUpstream({ search: LIVE_ROLE_SEARCH }), async () => {
+			for (const [args, expected] of [
+				[{ query: "product manager at Meta", limit: 9 }, ["kieran-yi-moon", "david-goldenshluger"]],
+				[
+					{ query: "product manager", company: "Google", limit: 9 },
+					// "Product" alone is ambiguous: its PM label keeps it, after the PM titles.
+					["kirsten-zverina-archer", "edmur-huq", "sophia-dhawan-mshg6g3v", "yogeshree-tawde"],
+				],
+				[{ query: "designer from Airbnb", limit: 9 }, ["una-ux-airbnb"]],
+			]) {
+				const result = await callTool("search_mentors", args);
+				assertPublicOutputClean(result);
+				assert.deepEqual(mentorsOf(result.body).map((mentor) => mentor.slug), expected, args.query);
+			}
+		}),
+	);
+});
+
+test("role fit: PM titles stay; titles in other families drop despite a PM label", () => {
+	const product = ["product"];
+	for (const title of [
+		"Product Lead", "Technical Product Lead", "Senior PM", "Product Owner", "Group PM",
+		"Principal Product & Program Manager", "Senior Product Manager",
+	]) {
+		assert.equal(roleFit(product, { title, disciplines: [] }).mismatch, false, title);
+	}
+	// "and", "&", "+" and "/" join a combined title the same way.
+	for (const title of [
+		"Principal Product & Program Manager", "Principal Product and Program Manager",
+		"Principal Product + Program Manager", "Product / Program Manager",
+	]) {
+		assert.deepEqual(
+			roleFit(product, { title, disciplines: ["Generalist Product Management"] }),
+			{ score: 3, mismatch: false },
+			title,
+		);
+	}
+	for (const title of ["UX & Product Designer", "UX and Product Designer", "UX/Product Designer"]) {
+		assert.deepEqual(roleFit(["design"], { title, disciplines: [] }), { score: 2, mismatch: false }, title);
+	}
+	for (const title of ["Director", "Founder", "Head", "Lead", "Manager", "Product"]) {
+		assert.equal(roleFit(product, { title, disciplines: PM }).mismatch, false, title);
+		assert.equal(roleFit(product, { title, disciplines: ["Back-end"] }).mismatch, true, title);
+	}
+	for (const title of [
+		"Software Engineer", "Security Engineer", "Data Engineer", "ML Engineer", "Engineering Manager 2",
+		"Senior Account Manager", "Sales Manager", "Technical Solutions Consultants", "Cyber Security Instructor",
+		"Program Manager", "Director Program Management", "Lead Knowledge Strategist",
+		"Product Strategy & Operations, APAC Go-To Market", "Manager, Enterprise Applications", "Data - AI/ML",
+	]) {
+		assert.equal(roleFit(product, { title, disciplines: PM }).mismatch, true, title);
+	}
 });
 
 test("role filtering keeps the company, Former and visibility filters", async () => {

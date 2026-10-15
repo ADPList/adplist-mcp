@@ -261,7 +261,7 @@ export async function publicSearchMentors(
 // first, in batches of MAX_PUBLIC_LIMIT, until `limit` visible mentors fit or
 // ROLE_CHECKS_PER_RESULT × limit candidates have been checked. Each card is
 // then scored on its public title, disciplines and expertise: clear
-// mismatches (title in another role, nothing else matching) are dropped,
+// mismatches (title in another role, whatever the labels say) are dropped,
 // title matches lead, ambiguous titles ("Director") follow. `keep` is the
 // company filter, applied as before.
 async function gateByRole(

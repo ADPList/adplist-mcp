@@ -6,7 +6,9 @@ import { withoutRequesterEmployment } from "./company.ts";
 // and hardware engineers), so the role the query asks for is parsed into
 // families and each card is scored on its title first, then its disciplines
 // and expertise. Terms are matched as whole words on lowercased text with
-// punctuation as spaces ("UX/UI" → "ux ui", "Front-end" → "front end").
+// punctuation as spaces ("UX/UI" → "ux ui", "Front-end" → "front end") and
+// "and" dropped like "&", "+" and "/" ("Product and Program Manager" →
+// "product program manager").
 
 export type RoleFamily = "design" | "product" | "engineering" | "data" | "marketing";
 
@@ -19,7 +21,7 @@ const ROLE_FAMILIES: Record<RoleFamily, FamilyTerms> = {
 		terms: [
 			"design", "designer", "designers", "ux", "ui", "uxr", "user experience", "user research",
 			"user researcher", "researcher", "researchers", "interaction", "visual", "creative director",
-			"art director", "illustrator",
+			"art director", "illustrator", "human factors", "usability",
 		],
 		not: ["hardware design", "system design", "systems design", "chip design", "circuit design"],
 	},
@@ -28,7 +30,7 @@ const ROLE_FAMILIES: Record<RoleFamily, FamilyTerms> = {
 			"product manager", "product managers", "product management", "pm", "pms", "apm", "gpm", "group pm",
 			"product lead", "product owner", "head of product", "vp product", "vp of product",
 			"director of product", "product director", "cpo", "chief product officer", "tpm",
-			"technical program manager",
+			"technical program manager", "product program manager",
 		],
 	},
 	engineering: {
@@ -55,18 +57,20 @@ const ROLE_FAMILIES: Record<RoleFamily, FamilyTerms> = {
 // Roles nobody searches for here but that still place a title clearly
 // outside the requested family ("Cyber Security Instructor", "Knowledge
 // Strategist"). Titles with none of these and no family term ("Director",
-// "Founder") are ambiguous, never a clear mismatch.
+// "Founder", "Product") are ambiguous, never a clear mismatch.
 const OTHER_ROLE_TERMS = [
 	"security", "cybersecurity", "infosec", "operations", "instructor", "teacher", "professor", "lecturer",
-	"educator", "trainer", "strategist", "sales", "account executive", "business development", "recruiter",
-	"recruiting", "talent acquisition", "hr", "human resources", "finance", "accountant", "banker", "lawyer",
-	"attorney", "counsel", "program manager", "project manager", "writer", "copywriter", "customer success",
-	"community manager",
+	"educator", "trainer", "strategist", "sales", "account executive", "account manager", "business development",
+	"recruiter", "recruiting", "talent acquisition", "hr", "human resources", "finance", "accountant", "banker",
+	"lawyer", "attorney", "counsel", "consultant", "consultants", "program manager", "program management",
+	"project manager", "project management", "writer", "copywriter", "customer success", "community manager",
+	"enterprise applications",
 ];
 
 const FAMILY_NAMES = Object.keys(ROLE_FAMILIES) as RoleFamily[];
 
-const normalize = (value: string) => ` ${value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+const normalize = (value: string) =>
+	` ${value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\band\b/g, " ").replace(/ +/g, " ").trim()} `;
 const hasTerm = (text: string, terms: string[]) => terms.some((term) => text.includes(` ${term} `));
 
 function inFamily(family: RoleFamily, value: string): boolean {
@@ -91,7 +95,8 @@ export type RoleFit = {
 	// 2 for a title in a requested family, +1 for a matching discipline or
 	// expertise; higher sorts first.
 	score: number;
-	// Nothing matches and the title belongs to another role, or the title is
+	// The title belongs to another role, whatever the disciplines say
+	// ("Software Engineer" labelled Product Management), or the title is
 	// ambiguous ("Director") and the disciplines/expertise belong to another.
 	mismatch: boolean;
 };
@@ -106,8 +111,10 @@ export function roleFit(
 	const labelMatch = labels.some((label) => families.some((family) => inFamily(family, label)));
 	const elsewhere = (value: string) =>
 		FAMILY_NAMES.some((family) => inFamily(family, value)) || hasTerm(normalize(value), OTHER_ROLE_TERMS);
+	// Labels only rescue an ambiguous title: mentors list disciplines they
+	// coach on, not only the job they do.
 	return {
 		score: (titleMatch ? 2 : 0) + (labelMatch ? 1 : 0),
-		mismatch: !titleMatch && !labelMatch && (elsewhere(title) || labels.some(elsewhere)),
+		mismatch: !titleMatch && (elsewhere(title) || (!labelMatch && labels.some(elsewhere))),
 	};
 }
