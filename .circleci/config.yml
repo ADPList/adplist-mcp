@@ -1,10 +1,10 @@
 version: 2.1
 
-# Tests need Node >= 22.6 (node --test loads .ts sources via type stripping).
+# Tests need Node >= 22.18 (type stripping on by default; 22.6-22.17 need --experimental-strip-types).
 jobs:
   test:
     docker:
-      - image: cimg/node:22.12
+      - image: cimg/node:22.18
     steps:
       - checkout
       - run: node --version
