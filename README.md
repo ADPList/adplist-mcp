@@ -202,12 +202,28 @@ Configured in `wrangler.jsonc`:
 - `PUBLIC_RATE_LIMITER` — Workers Rate Limiting binding for the public tier (30 `tools/call` per minute per IP), a cheap first gate
 - `PUBLIC_RATE_LIMIT_DO` — `PublicRateLimiter` Durable Object (SQLite, migration `v2`): the strict per-IP public limit, 10 calls / 10 s and 30 calls / 60 s
 - `PUBLIC_OPT_OUT_SLUGS` — comma-separated mentor slugs hidden from the public tier
-- `AMPLITUDE_API_KEY` (secret, optional) — sends public-tier events to Amplitude
+- `AMPLITUDE_API_KEY` (secret, optional) — sends public-tier events and `mcp_tool_call` to Amplitude; unset, they are only logged
 - `IDENTITY_INTERNAL_API_KEY` (secret, **required** for the public tier) — `x-api-key` for identity-service's keyed `/internal/users/profile/mentor/{slug}`, the source of the visibility flags. Without it every visibility check fails closed: searches return no mentors and every profile is `NOT_FOUND`. Set it on production with `npx wrangler secret put IDENTITY_INTERNAL_API_KEY` (and on preview as below), pasting the value from AWS Secrets Manager `adplist/internalApiKey`. Never print, log, or commit it.
 
 ### Public no-login tier
 
 `/public/mcp` and `/public/{chatgpt|claude|mcp|api}/mcp` serve a stateless, read-only MCP endpoint with two tools (`search_mentors`, `get_mentor_profile`) and no sign-in. It runs before the OAuth provider and never touches KV, D1, or the MCP session Durable Object; its only Durable Object is the per-IP `PublicRateLimiter`. Allowlist, visibility rules, errors, reporting, and the WAF plan: [`docs/public-mcp.md`](docs/public-mcp.md).
+
+### Usage event: `mcp_tool_call`
+
+Every `search_mentors` and `get_mentor_profile` call, on both tiers, emits one aggregate `mcp_tool_call` event (`src/toolCallEvent.ts`). The same JSON is written with `console.log` (Workers Logs, kept 7 days) and, when `AMPLITUDE_API_KEY` is set, posted to Amplitude via `waitUntil`. Telemetry never throws and never changes the tool response.
+
+| Property | Values |
+| --- | --- |
+| `tool` | `search_mentors` \| `get_mentor_profile` |
+| `tier` | `authenticated` \| `public` |
+| `client` | `claude` \| `chatgpt` \| `cursor` \| `other`, mapped from `initialize.clientInfo.name` (the raw name is never sent) |
+| `status` | `ok` \| `error` (tool errors, including rate limits and expired auth) |
+| `result_count` | mentor cards returned for search; `1`/`0` for a profile |
+| `latency_ms` | server-side handler time |
+| `is_internal_test` | `true` if the request has `X-ADPList-Test: 1` or `clientInfo.name` starts with `adplist-test` |
+
+There is no user id, email, slug, query text, IP, session id, or token. Amplitude's `device_id` is the constant `mcp-<tier>-<client>`, and `insert_id` is a random UUID for dedupe. On the public tier, `tools/call` is stateless, so `client` comes from the attribution source (`cursor` reports as `other`) and only the header sets `is_internal_test`. The public tier still emits its existing `ai_mentor_*` events as well.
 
 ### Public tier preview
 

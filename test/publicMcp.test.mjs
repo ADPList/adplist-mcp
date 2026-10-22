@@ -2655,10 +2655,27 @@ test("analytics events carry no query, IP, or slug and never block the response"
 	} finally {
 		console.log = originalLog;
 	}
-	const events = logs.map((line) => JSON.parse(line));
+	const logged = logs.map((line) => JSON.parse(line));
+	const toolCalls = logged.filter((event) => event.event === "mcp_tool_call");
+	const events = logged.filter((event) => event.event !== "mcp_tool_call");
 	assert.deepEqual(
 		events.map((event) => event.event),
 		["ai_mentor_search_query", "ai_mentor_profile_view", "ai_mentor_profile_view"],
+	);
+	assert.deepEqual(
+		toolCalls.map(({ tool, tier, client, status, result_count, is_internal_test }) => ({
+			tool,
+			tier,
+			client,
+			status,
+			result_count,
+			is_internal_test,
+		})),
+		[
+			{ tool: "search_mentors", tier: "public", client: "claude", status: "ok", result_count: 2, is_internal_test: false },
+			{ tool: "get_mentor_profile", tier: "public", client: "other", status: "ok", result_count: 1, is_internal_test: false },
+			{ tool: "get_mentor_profile", tier: "public", client: "other", status: "error", result_count: 0, is_internal_test: false },
+		],
 	);
 	assert.deepEqual(Object.keys(events[0]).sort(), [
 		"event",
@@ -2677,10 +2694,12 @@ test("analytics events carry no query, IP, or slug and never block the response"
 	assert.equal(events[2].found, false);
 
 	const amplitude = calls.filter(({ url }) => url.hostname === "api2.amplitude.com");
-	assert.equal(amplitude.length, 3);
+	assert.equal(amplitude.length, 6);
 	const sent = amplitude.map(({ init }) => JSON.parse(init.body));
 	assert.equal(sent[0].events[0].device_id, "ai-mcp-claude");
 	assert.equal(sent[0].events[0].event_type, "ai_mentor_search_query");
+	assert.equal(sent[1].events[0].device_id, "mcp-public-claude");
+	assert.equal(sent[1].events[0].event_type, "mcp_tool_call");
 	const everything = JSON.stringify({ logs, sent });
 	for (const forbidden of ["Google", "203.0.113.7", "alice-visible", "onbreak-mentor", "adplist-public-"]) {
 		assert.ok(!everything.includes(forbidden), forbidden);
