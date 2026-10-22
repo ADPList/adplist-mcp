@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { clientFromPublicSource, trackToolCall } from "../toolCallEvent.ts";
 import { emitPublicEvent } from "./analytics.ts";
 import { formatPublicError, publicErrorCode, type PublicErrorBody } from "./errors.ts";
 import { enforcePublicRateLimit, type RateLimitSignal } from "./rateLimit.ts";
@@ -229,6 +230,29 @@ export async function callPublicTool(
 	ctx: WaitUntil | undefined,
 	source: PublicSource,
 	rateLimit: RateLimitSignal = {},
+) {
+	const startedAt = Date.now();
+	const result = await runPublicTool(name, args, request, env, ctx, source, rateLimit);
+	// No clientInfo on a stateless tools/call; the test flag comes from the header only.
+	trackToolCall(env, ctx, {
+		tool: name,
+		tier: "public",
+		client: clientFromPublicSource(source),
+		headers: request.headers,
+		result,
+		startedAt,
+	});
+	return result;
+}
+
+async function runPublicTool(
+	name: "search_mentors" | "get_mentor_profile",
+	args: unknown,
+	request: Request,
+	env: Env,
+	ctx: WaitUntil | undefined,
+	source: PublicSource,
+	rateLimit: RateLimitSignal,
 ) {
 	try {
 		await enforcePublicRateLimit(env, request, rateLimit);

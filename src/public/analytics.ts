@@ -23,21 +23,35 @@ export type PublicAnalyticsEvent =
 			latency_ms: number;
 	  };
 
-type WaitUntil = { waitUntil(promise: Promise<unknown>): void };
+export type WaitUntil = { waitUntil(promise: Promise<unknown>): void };
 
 export function emitPublicEvent(
 	env: Env,
 	ctx: WaitUntil | undefined,
 	event: PublicAnalyticsEvent,
 ): void {
+	const { event: eventType, ...properties } = event;
+	// Non-identifying constant per source, never a person or client.
+	emitAggregateEvent(env, ctx, eventType, `ai-mcp-${event.source}`, event, properties);
+}
+
+// Logs `logged` as one JSON line, then posts the event to Amplitude when a key
+// and waitUntil are available. Never throws and never awaits the network.
+export function emitAggregateEvent(
+	env: Env,
+	ctx: WaitUntil | undefined,
+	eventType: string,
+	deviceId: string,
+	logged: object,
+	properties: Record<string, unknown>,
+): void {
 	try {
-		console.log(JSON.stringify(event));
+		console.log(JSON.stringify(logged));
 	} catch {
 		// Logging must never affect the response.
 	}
 	const apiKey = env.AMPLITUDE_API_KEY;
 	if (!apiKey || !ctx) return;
-	const { event: eventType, ...properties } = event;
 	try {
 		ctx.waitUntil(
 			fetch(AMPLITUDE_ENDPOINT, {
@@ -48,9 +62,9 @@ export function emitPublicEvent(
 					events: [
 						{
 							event_type: eventType,
-							// Non-identifying constant per source, never a person or client.
-							device_id: `ai-mcp-${event.source}`,
+							device_id: deviceId,
 							time: Date.now(),
+							insert_id: crypto.randomUUID(),
 							event_properties: properties,
 						},
 					],

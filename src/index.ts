@@ -33,6 +33,7 @@ import {
 import { toolResponse } from "./errors";
 import { enforceToolCallRateLimit } from "./rateLimit";
 import { handlePublicRequest } from "./public/mcp";
+import { trackToolCall, type TrackedTool } from "./toolCallEvent";
 import type { McpUserProps } from "./types";
 
 // Strict per-IP limiter for the public tier (binding PUBLIC_RATE_LIMIT_DO).
@@ -58,6 +59,30 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 		},
 	) {
 		return toolResponse(() => runWithToolRateLimit(this.env, this.props, run), app);
+	}
+
+	// Emits mcp_tool_call once the response is settled, so rate-limit and auth
+	// failures count as errors too. Headers come from extra.requestInfo.
+	private async trackedToolResponse<R>(
+		tool: TrackedTool,
+		extra: { requestInfo?: { headers?: unknown } } | undefined,
+		respond: () => Promise<R>,
+	): Promise<R> {
+		const startedAt = Date.now();
+		const result = await respond();
+		try {
+			trackToolCall(this.env, this.ctx, {
+				tool,
+				tier: "authenticated",
+				clientName: this.server.server.getClientVersion()?.name,
+				headers: extra?.requestInfo?.headers,
+				result,
+				startedAt,
+			});
+		} catch {
+			// Reading client metadata must never change the tool response.
+		}
+		return result;
 	}
 
 	private registerAppResource(name: string, uri: string, kind: AppViewKind, description: string) {
@@ -182,14 +207,16 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						.optional(),
 				},
 			},
-			async (input) =>
-				this.toolResponse(() => searchMentors(this.env, this.props, input), {
-					resourceUri: UI_RESOURCES.mentorCards,
-					name: "adplist-mentor-cards",
-					title: "ADPList mentor cards",
-					description: "Interactive ADPList mentor results with profile photos.",
-					shouldRender: (result: SearchMentorsOutput) => result.mentors.length > 0,
-				}),
+			async (input, extra) =>
+				this.trackedToolResponse("search_mentors", extra, () =>
+					this.toolResponse(() => searchMentors(this.env, this.props, input), {
+						resourceUri: UI_RESOURCES.mentorCards,
+						name: "adplist-mentor-cards",
+						title: "ADPList mentor cards",
+						description: "Interactive ADPList mentor results with profile photos.",
+						shouldRender: (result: SearchMentorsOutput) => result.mentors.length > 0,
+					}),
+				),
 		);
 
 		this.server.registerTool(
@@ -214,7 +241,10 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 						),
 				},
 			},
-			async (input) => this.toolResponse(() => getMentorProfile(this.env, input)),
+			async (input, extra) =>
+				this.trackedToolResponse("get_mentor_profile", extra, () =>
+					this.toolResponse(() => getMentorProfile(this.env, input)),
+				),
 		);
 
 		this.server.registerTool(
