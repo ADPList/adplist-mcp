@@ -138,8 +138,10 @@ is percent-encoded so it cannot add its own. Neither follows redirects.
   profile fields, including the current employer.
 
 `IDENTITY_INTERNAL_API_KEY` is a required Worker secret. Without it every
-check fails closed: `search_mentors` returns no mentors and every
-`get_mentor_profile` returns `NOT_FOUND`. Set it on each Worker (production
+check fails closed as unreachable: `get_mentor_profile`, and any
+`search_mentors` call with candidates to check, returns `UNAVAILABLE`.
+Opted-out slugs are still `NOT_FOUND`, and a search with no candidates to
+check (no rows, no literal name to look up) is still an empty list. Set it on each Worker (production
 and preview) with `wrangler secret put` from AWS Secrets Manager
 `adplist/internalApiKey`; see the README's public-tier setup. Never print it.
 
@@ -159,6 +161,16 @@ display record whose slug, name or profile is missing or does not match the
 canonical slug all omit the mentor. On profile lookup hidden,
 opted-out, on-break, missing, and unverifiable all return the same
 `NOT_FOUND`, byte for byte, so the response is not an oracle for why.
+
+Identity being unreachable is the exception (ADPLIST-4479): a network error,
+timeout (including one mid-body), 429 or 5xx from either read, or a missing
+`AUTH_SERVICE_URL` / `IDENTITY_INTERNAL_API_KEY`. If the other read already
+shows the mentor hidden, missing or malformed, that verdict wins and the
+mentor is simply `NOT_FOUND` / dropped. Otherwise it still shows nothing, but it is not reported
+as "no such mentor": `get_mentor_profile` returns `UNAVAILABLE`, and
+`search_mentors` does too when identity was unreachable for every candidate
+it checked, including a name lookup whose fallback search found nobody. A
+partial outage still returns the mentors that could be verified. No retries.
 Every public response is `no-store`.
 
 ### Decisions

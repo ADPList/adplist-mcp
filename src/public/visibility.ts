@@ -9,7 +9,11 @@ import { textOf } from "../profile.ts";
 //  - GET /users/profile/mentor/{slug} (anonymous) carries the display fields
 //    and current employer, but no longer the is.* flags.
 // Anything short of two well-formed records with a clearly visible verdict
-// omits the mentor (fail closed).
+// omits the mentor (fail closed). A failure to reach identity (network error,
+// timeout, 429/5xx, missing config) that the other read does not already
+// settle as hidden or malformed is also marked `unreachable`, so a
+// caller can tell an outage from a hidden or malformed mentor; it still shows
+// nothing.
 export const VISIBILITY_TIMEOUT_MS = 3000;
 
 export type VisibilityResult =
@@ -21,10 +25,11 @@ export type VisibilityResult =
 			// The anonymous public profile: the only source of display fields.
 			record: Record<string, unknown>;
 	  }
-	| { visible: false; failed: boolean };
+	| { visible: false; failed: boolean; unreachable?: true };
 
 const HIDDEN: VisibilityResult = { visible: false, failed: false };
 const FAILED: VisibilityResult = { visible: false, failed: true };
+const UNREACHABLE: VisibilityResult = { visible: false, failed: true, unreachable: true };
 
 export function optOutSlugs(env: Env): Set<string> {
 	return new Set(
@@ -94,23 +99,34 @@ export function publicVisibilityUrl(baseUrl: string, slug: string): string {
 	return url.toString();
 }
 
-type Fetched = Record<string, unknown> | "hidden" | "failed";
+type Fetched = Record<string, unknown> | "hidden" | "failed" | "unreachable";
 
-// 200 with an object `data` → the record; 404 → hidden; anything else, a 3xx
-// included, has failed.
+// 200 with an object `data` → the record; 404 → hidden; a thrown fetch
+// (timeout included), 429 or 5xx, or a body whose read is cut short →
+// unreachable; anything else, a 3xx or a body that is not valid JSON included,
+// has failed: identity answered, so a bad body is malformed, not an outage.
 async function fetchRecord(url: string, init: RequestInit): Promise<Fetched> {
+	let response: Response;
 	try {
-		const response = await fetch(url, { ...init, signal: AbortSignal.timeout(VISIBILITY_TIMEOUT_MS) });
-		if (response.status === 404) return "hidden";
-		if (response.status !== 200) return "failed";
-		const body = (await response.json()) as unknown;
-		if (!body || typeof body !== "object" || Array.isArray(body)) return "failed";
-		const rawData = (body as { data?: unknown }).data;
-		if (!rawData || typeof rawData !== "object" || Array.isArray(rawData)) return "failed";
-		return rawData as Record<string, unknown>;
+		response = await fetch(url, { ...init, signal: AbortSignal.timeout(VISIBILITY_TIMEOUT_MS) });
 	} catch {
-		return "failed";
+		return "unreachable";
 	}
+	if (response.status === 404) return "hidden";
+	if (response.status === 429 || response.status >= 500) return "unreachable";
+	if (response.status !== 200) return "failed";
+	let body: unknown;
+	try {
+		body = await response.json();
+	} catch (error) {
+		// Only invalid JSON is identity answering badly; a body read cut short
+		// (timeout or abort DOMException, stream TypeError) is unreachable.
+		return error instanceof SyntaxError ? "failed" : "unreachable";
+	}
+	if (!body || typeof body !== "object" || Array.isArray(body)) return "failed";
+	const rawData = (body as { data?: unknown }).data;
+	if (!rawData || typeof rawData !== "object" || Array.isArray(rawData)) return "failed";
+	return rawData as Record<string, unknown>;
 }
 
 export async function checkMentorVisibility(env: Env, slug: string): Promise<VisibilityResult> {
@@ -119,14 +135,14 @@ export async function checkMentorVisibility(env: Env, slug: string): Promise<Vis
 	const denied = optOutSlugs(env);
 	if (denied.has(requested.toLowerCase())) return HIDDEN;
 	const baseUrl = env.AUTH_SERVICE_URL;
-	if (!baseUrl) return FAILED;
+	if (!baseUrl) return UNREACHABLE;
 	// Required Worker secret for the keyed internal record below. Unset, every
-	// mentor fails closed: searches come back empty, every profile NOT_FOUND.
+	// mentor past the opt-out list fails closed as unreachable (UNAVAILABLE).
 	// Setup, preview and production: README.md "Required Worker configuration"
 	// and "Public tier preview" (`wrangler secret put IDENTITY_INTERNAL_API_KEY`);
 	// the endpoint and the rules: docs/public-mcp.md "Visibility".
 	const apiKey = env.IDENTITY_INTERNAL_API_KEY;
-	if (!apiKey) return FAILED;
+	if (!apiKey) return UNREACHABLE;
 
 	const [flags, display] = await Promise.all([
 		fetchRecord(internalVisibilityUrl(baseUrl, requested), {
@@ -142,13 +158,24 @@ export async function checkMentorVisibility(env: Env, slug: string): Promise<Vis
 	]);
 	if (flags === "failed" || display === "failed") return FAILED;
 	if (flags === "hidden" || display === "hidden") return HIDDEN;
+	// One read may be unreachable while the other already proves the mentor
+	// hidden or malformed. Everything either record settles on its own is
+	// checked first; only a verdict that still needs the missing record is
+	// `unreachable`.
+	const internal = typeof flags === "object" ? flags : null;
+	const shown = typeof display === "object" ? display : null;
 
-	const is = flagsOf(flags);
-	if (typeof flags.status !== "string" || !is || !hasWellFormedFlags(is)) return FAILED;
-	if (!hasWellFormedListingFlags(flags) || !hasWellFormedListingFlags(display)) return FAILED;
-	if (display.status !== undefined && typeof display.status !== "string") return FAILED;
-	if (!isVisibleMentorRecord(flags)) return HIDDEN;
-	if (!isListed(display) || (display.status !== undefined && display.status !== "active")) {
+	if (internal) {
+		const is = flagsOf(internal);
+		if (typeof internal.status !== "string" || !is || !hasWellFormedFlags(is)) return FAILED;
+		if (!hasWellFormedListingFlags(internal)) return FAILED;
+	}
+	if (shown) {
+		if (!hasWellFormedListingFlags(shown)) return FAILED;
+		if (shown.status !== undefined && typeof shown.status !== "string") return FAILED;
+	}
+	if (internal && !isVisibleMentorRecord(internal)) return HIDDEN;
+	if (shown && (!isListed(shown) || (shown.status !== undefined && shown.status !== "active"))) {
 		return HIDDEN;
 	}
 
@@ -159,14 +186,21 @@ export async function checkMentorVisibility(env: Env, slug: string): Promise<Vis
 	// the same mentor and carry the display fields mapping relies on; a
 	// missing or malformed slug, name or profile fails closed rather than
 	// falling back to search-row data.
-	if (typeof flags.slug !== "string") return FAILED;
-	const canonical = flags.slug.trim();
-	if (!canonical) return FAILED;
-	if (denied.has(canonical.toLowerCase())) return HIDDEN;
-	const displaySlug = textOf(display.slug);
-	if (!displaySlug || displaySlug.toLowerCase() !== canonical.toLowerCase()) return FAILED;
-	if (!textOf(display.fullName)) return FAILED;
-	const profile = display.profile;
-	if (!profile || typeof profile !== "object" || Array.isArray(profile)) return FAILED;
-	return { visible: true, slug: canonical, userId: textOf(flags.userId), record: display };
+	let canonical = "";
+	if (internal) {
+		if (typeof internal.slug !== "string") return FAILED;
+		canonical = internal.slug.trim();
+		if (!canonical) return FAILED;
+		if (denied.has(canonical.toLowerCase())) return HIDDEN;
+	}
+	let displaySlug = "";
+	if (shown) {
+		displaySlug = textOf(shown.slug);
+		if (!displaySlug || !textOf(shown.fullName)) return FAILED;
+		const profile = shown.profile;
+		if (!profile || typeof profile !== "object" || Array.isArray(profile)) return FAILED;
+	}
+	if (!internal || !shown) return UNREACHABLE;
+	if (displaySlug.toLowerCase() !== canonical.toLowerCase()) return FAILED;
+	return { visible: true, slug: canonical, userId: textOf(internal.userId), record: shown };
 }
