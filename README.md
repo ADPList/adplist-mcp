@@ -203,7 +203,7 @@ Configured in `wrangler.jsonc`:
 - `PUBLIC_RATE_LIMIT_DO` — `PublicRateLimiter` Durable Object (SQLite, migration `v2`): the strict per-IP public limit, 10 calls / 10 s and 30 calls / 60 s
 - `PUBLIC_OPT_OUT_SLUGS` — comma-separated mentor slugs hidden from the public tier
 - `AMPLITUDE_API_KEY` (secret, optional) — sends public-tier events and `mcp_tool_call` to Amplitude; unset, they are only logged
-- `IDENTITY_INTERNAL_API_KEY` (secret, **required** for the public tier) — `x-api-key` for identity-service's keyed `/internal/users/profile/mentor/{slug}`, the source of the visibility flags. Without it every visibility check fails closed: searches return no mentors and every profile is `NOT_FOUND`. Set it on production with `npx wrangler secret put IDENTITY_INTERNAL_API_KEY` (and on preview as below), pasting the value from AWS Secrets Manager `adplist/internalApiKey`. Never print, log, or commit it.
+- `IDENTITY_INTERNAL_API_KEY` (secret, **required** for the public tier) — `x-api-key` for identity-service's keyed `/internal/users/profile/mentor/{slug}`, the source of the visibility flags. Without it every visibility check fails closed as unreachable: a profile lookup or a search with candidates returns `UNAVAILABLE`. Opted-out slugs are still `NOT_FOUND`, and a search with no candidates to check (no rows, no literal name to look up) is still an empty list. Set it on production with `npx wrangler secret put IDENTITY_INTERNAL_API_KEY` (and on preview as below), pasting the value from AWS Secrets Manager `adplist/internalApiKey`. Never print, log, or commit it.
 
 ### Public no-login tier
 
