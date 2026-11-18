@@ -6,11 +6,18 @@ export type SendOtpResult = {
 	challengeName?: string;
 };
 
-export type VerifyOtpResult = {
-	accessToken: string;
-	refreshToken?: string;
-	userId: string;
-};
+// auth-service answers /auth/verify-challenge with distinct shapes, and the
+// sign-in page needs to tell them apart:
+// - 401 with a `session`: wrong code. Cognito rotates the challenge session but the
+//   emailed code stays valid on the replacement, so the user can simply retry.
+// - `code: "CODE_EXPIRED"`: the session is dead (15-minute expiry, or already consumed
+//   by an earlier successful verify).
+// - anything else (network, 5xx, 403 blocked, 401 without session after 3 wrong codes).
+export type VerifyOtpResult =
+	| { kind: "verified"; accessToken: string; refreshToken?: string; userId: string }
+	| { kind: "wrong_code"; session: string }
+	| { kind: "expired" }
+	| { kind: "failed" };
 
 function authBaseUrl(env: Env): string {
 	return requiredEnv(env, "AUTH_SERVICE_URL").replace(/\/$/, "");
@@ -45,20 +52,48 @@ export async function sendOtp(env: Env, email: string): Promise<SendOtpResult> {
 	};
 }
 
-// Step 2: verify the code. Returns the ADPList token (oid) used as the API bearer.
+// Step 2: verify the code. On success returns the ADPList token (oid) used as the
+// API bearer. Never throws; never logs the code, session or tokens.
 export async function verifyOtp(
 	env: Env,
 	params: { code: string; cognitoUserId: string; session: string },
 ): Promise<VerifyOtpResult> {
-	const data = (await postJson(`${authBaseUrl(env)}/auth/verify-challenge`, {
-		challengeAnswer: params.code,
-		userId: params.cognitoUserId,
-		session: params.session,
-	})) as { accessToken?: unknown; refreshToken?: unknown; id?: unknown };
+	let response: Response;
+	let data: {
+		accessToken?: unknown;
+		refreshToken?: unknown;
+		id?: unknown;
+		session?: unknown;
+		code?: unknown;
+	};
+	try {
+		response = await fetch(`${authBaseUrl(env)}/auth/verify-challenge`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json", Accept: "application/json" },
+			body: JSON.stringify({
+				challengeAnswer: params.code,
+				userId: params.cognitoUserId,
+				session: params.session,
+			}),
+		});
+		const parsed: unknown = await response.json().catch(() => null);
+		data = (parsed && typeof parsed === "object" ? parsed : {}) as typeof data;
+	} catch {
+		return { kind: "failed" };
+	}
+
+	if (!response.ok) {
+		if (data.code === "CODE_EXPIRED") return { kind: "expired" };
+		if (response.status === 401 && typeof data.session === "string" && data.session.length > 0) {
+			return { kind: "wrong_code", session: data.session };
+		}
+		return { kind: "failed" };
+	}
 	if (typeof data.accessToken !== "string" || data.accessToken.length === 0) {
-		throw new Error("ADPList /auth/verify-challenge did not return an access token");
+		return { kind: "failed" };
 	}
 	return {
+		kind: "verified",
 		accessToken: data.accessToken,
 		refreshToken: typeof data.refreshToken === "string" ? data.refreshToken : undefined,
 		userId: typeof data.id === "string" && data.id.length > 0 ? data.id : params.cognitoUserId,

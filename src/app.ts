@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { html, raw } from "hono/html";
 import { MCP_SCOPES } from "./config.ts";
 import { sendOtp, verifyOtp } from "./adplistAuth.ts";
@@ -17,6 +18,15 @@ const OTP_EMAIL_RATE_WINDOW_SECONDS = 60 * 60;
 // depth: the app no longer relies on the upstream Cognito challenge session
 // becoming single-use to bound brute-forcing of the 6-digit code.
 const OTP_VERIFY_MAX_ATTEMPTS = 5;
+const TOO_MANY_CODES_MESSAGE =
+	"Too many incorrect codes. Close this window and click Connect again to retry.";
+// Duplicate-submit handling for /oauth/verify. The in-flight marker covers a slow
+// upstream verify (KV's minimum TTL is 60 s); the completion record lets a
+// duplicate replay the first request's redirect.
+const VERIFY_INFLIGHT_TTL_SECONDS = 60;
+const VERIFY_DONE_TTL_SECONDS = 10 * 60;
+const VERIFY_DUPLICATE_WAIT_MS = 8000;
+const VERIFY_DONE_POLL_INTERVAL_MS = 250;
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -114,14 +124,12 @@ app.post("/account/revoke/verify", async (c) => {
 		);
 	}
 
-	let verified;
-	try {
-		verified = await verifyOtp(c.env, {
-			code,
-			cognitoUserId: stored.cognitoUserId,
-			session: stored.cognitoSession,
-		});
-	} catch {
+	const verified = await verifyOtp(c.env, {
+		code,
+		cognitoUserId: stored.cognitoUserId,
+		session: stored.cognitoSession,
+	});
+	if (verified.kind !== "verified") {
 		if ((await registerFailedOtpAttempt(c.env, attemptsKey)) >= OTP_VERIFY_MAX_ATTEMPTS) {
 			await c.env.OAUTH_KV.delete(`oauth_revoke:${revokeId}`);
 			await c.env.OAUTH_KV.delete(attemptsKey);
@@ -219,8 +227,35 @@ app.post("/oauth/verify", async (c) => {
 		return c.html(renderErrorPage("Please enter the 6-digit code."), 400);
 	}
 
+	// Duplicate submits (a second click or Enter while the first POST is still
+	// running) are common: the browser cancels the first request, losing its
+	// redirect, and the second finds the Cognito session already consumed. Answer
+	// duplicates with the first request's redirect instead of an error. The
+	// completion record is bound to the code, so replaying it still needs both
+	// the loginId and the correct code, and a wrong code deletes it (see getVerifyDone).
+	const codeDigest = await verifyCodeDigest(loginId, code);
+	const done = await getVerifyDone(c.env, loginId, codeDigest);
+	if (done === "mismatch") {
+		return c.html(renderErrorPage("Your sign-in session expired. Please start again."), 400);
+	}
+	if (done) return c.redirect(done.redirectTo, 302);
+
+	const inflightKey = `oauth_verify_inflight:${loginId}`;
+	let waitedForDuplicate = false;
+	const awaitDuplicate = async () => {
+		if (waitedForDuplicate) return null;
+		waitedForDuplicate = true;
+		return waitForVerifyDone(c.env, loginId, codeDigest);
+	};
+	if (await c.env.OAUTH_KV.get(inflightKey)) {
+		const redirectTo = await awaitDuplicate();
+		if (redirectTo) return c.redirect(redirectTo, 302);
+	}
+
 	const stored = await getLogin(c.env, loginId);
 	if (!stored?.cognitoSession || !stored.cognitoUserId) {
+		const redirectTo = await awaitDuplicate();
+		if (redirectTo) return c.redirect(redirectTo, 302);
 		return c.html(renderErrorPage("Your sign-in session expired. Please start again."), 400);
 	}
 
@@ -228,32 +263,92 @@ app.post("/oauth/verify", async (c) => {
 	if (await otpAttemptsExhausted(c.env, attemptsKey)) {
 		await c.env.OAUTH_KV.delete(`oauth_login:${loginId}`);
 		await c.env.OAUTH_KV.delete(attemptsKey);
-		return c.html(
-			renderErrorPage(
-				"Too many incorrect codes. Close this window and click Connect again to retry.",
-			),
-			429,
-		);
+		return c.html(renderErrorPage(TOO_MANY_CODES_MESSAGE), 429);
 	}
 
-	let verified;
-	try {
-		verified = await verifyOtp(c.env, {
-			code,
-			cognitoUserId: stored.cognitoUserId,
-			session: stored.cognitoSession,
-		});
-	} catch {
-		if ((await registerFailedOtpAttempt(c.env, attemptsKey)) >= OTP_VERIFY_MAX_ATTEMPTS) {
-			await c.env.OAUTH_KV.delete(`oauth_login:${loginId}`);
-			await c.env.OAUTH_KV.delete(attemptsKey);
-		}
+	// Run the upstream verify and everything after it under waitUntil as well as
+	// awaiting it, so a request the browser cancels still finishes and records its
+	// redirect for the duplicate that replaced it.
+	await c.env.OAUTH_KV.put(inflightKey, "1", { expirationTtl: VERIFY_INFLIGHT_TTL_SECONDS });
+	const attempt = verifyAndCompleteLogin(c, loginId, code, codeDigest, stored, {
+		session: stored.cognitoSession,
+		userId: stored.cognitoUserId,
+	}).finally(() => c.env.OAUTH_KV.delete(inflightKey));
+	keepAlive(c, attempt);
+	const result = await attempt;
+
+	if (result.kind === "verified") return c.redirect(result.redirectTo, 302);
+	if (result.kind === "wrong_code") {
+		if (result.exhausted) return c.html(renderErrorPage(TOO_MANY_CODES_MESSAGE), 429);
 		return c.html(
-			renderErrorPage(
-				"That code was incorrect or expired. Close this window and click Connect again to retry.",
+			renderOtpPage(
+				loginId,
+				stored.email ?? "",
+				stored.clientName,
+				"That code is incorrect. Check the latest email and try again.",
 			),
 			400,
 		);
+	}
+	if (result.kind === "expired") {
+		const redirectTo = await awaitDuplicate();
+		if (redirectTo) return c.redirect(redirectTo, 302);
+		return c.html(
+			renderErrorPage(
+				"This code has expired. Close this window and click Connect again to get a new code.",
+			),
+			400,
+		);
+	}
+	return c.html(
+		renderErrorPage(
+			"That code was incorrect or expired. Close this window and click Connect again to retry.",
+		),
+		400,
+	);
+});
+
+export default app;
+
+type VerifyAttemptResult =
+	| { kind: "verified"; redirectTo: string }
+	| { kind: "wrong_code"; exhausted: boolean }
+	| { kind: "expired" }
+	| { kind: "failed" };
+
+async function verifyAndCompleteLogin(
+	c: Context<{ Bindings: Bindings }>,
+	loginId: string,
+	code: string,
+	codeDigest: string,
+	stored: StoredLogin,
+	cognito: { session: string; userId: string },
+): Promise<VerifyAttemptResult> {
+	const attemptsKey = `oauth_verify_attempts:${loginId}`;
+	const verified = await verifyOtp(c.env, {
+		code,
+		cognitoUserId: cognito.userId,
+		session: cognito.session,
+	});
+	if (verified.kind === "expired") return verified;
+	if (verified.kind !== "verified") {
+		if ((await registerFailedOtpAttempt(c.env, attemptsKey)) >= OTP_VERIFY_MAX_ATTEMPTS) {
+			await c.env.OAUTH_KV.delete(`oauth_login:${loginId}`);
+			await c.env.OAUTH_KV.delete(attemptsKey);
+			return verified.kind === "wrong_code" ? { kind: "wrong_code", exhausted: true } : verified;
+		}
+		if (verified.kind === "failed") return verified;
+		// auth-service rotated the challenge session; the emailed code stays valid on
+		// the replacement, so keep it for the retry. A concurrent request may have
+		// burned or completed the login while this one waited on upstream; re-read
+		// right before writing so a stale write can't bring it back. KV has no
+		// compare-and-set, so this narrows the window rather than closing it.
+		const current = await getLogin(c.env, loginId);
+		if (!current || (await c.env.OAUTH_KV.get(`oauth_verify_done:${loginId}`))) {
+			return { kind: "failed" };
+		}
+		await putLogin(c.env, loginId, { ...current, cognitoSession: verified.session });
+		return { kind: "wrong_code", exhausted: false };
 	}
 	await c.env.OAUTH_KV.delete(attemptsKey);
 
@@ -262,7 +357,8 @@ app.post("/oauth/verify", async (c) => {
 		email: stored.email,
 	});
 	if (stored.email) {
-		c.executionCtx.waitUntil(
+		keepAlive(
+			c,
 			sendWelcomeEmailOnce(c.env, {
 				userId: verified.userId,
 				email: stored.email,
@@ -300,11 +396,83 @@ app.post("/oauth/verify", async (c) => {
 		scope: stored.oauthReqInfo.scope.length > 0 ? stored.oauthReqInfo.scope : [...MCP_SCOPES],
 		props,
 	});
+	await c.env.OAUTH_KV.put(
+		`oauth_verify_done:${loginId}`,
+		JSON.stringify({ redirectTo, codeDigest }),
+		{ expirationTtl: VERIFY_DONE_TTL_SECONDS },
+	);
 
-	return c.redirect(redirectTo, 302);
-});
+	return { kind: "verified", redirectTo };
+}
 
-export default app;
+async function verifyCodeDigest(loginId: string, code: string): Promise<string> {
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(`${loginId}:${code}`),
+	);
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// The redirect a completed verify of this loginId recorded, if it was for the same
+// code. A genuine duplicate always resubmits the code that succeeded, so a record
+// for a different code is deleted on sight: one wrong guess ends replay for this
+// loginId, and the record can't serve as a code-guessing oracle.
+async function getVerifyDone(
+	env: Bindings,
+	loginId: string,
+	codeDigest: string,
+): Promise<{ redirectTo: string } | "mismatch" | null> {
+	const doneKey = `oauth_verify_done:${loginId}`;
+	const stored = await env.OAUTH_KV.get(doneKey);
+	if (!stored) return null;
+	let done: { redirectTo?: unknown; codeDigest?: unknown };
+	try {
+		done = JSON.parse(stored) as typeof done;
+	} catch {
+		return null;
+	}
+	if (done.codeDigest !== codeDigest) {
+		await env.OAUTH_KV.delete(doneKey);
+		return "mismatch";
+	}
+	return typeof done.redirectTo === "string" ? { redirectTo: done.redirectTo } : null;
+}
+
+// Poll for the redirect recorded by a concurrent verify of the same loginId.
+async function waitForVerifyDone(
+	env: Bindings,
+	loginId: string,
+	codeDigest: string,
+): Promise<string | null> {
+	const deadline = Date.now() + duplicateVerifyWaitMs(env);
+	for (;;) {
+		const done = await getVerifyDone(env, loginId, codeDigest);
+		if (done === "mismatch") return null;
+		if (done) return done.redirectTo;
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) return null;
+		await new Promise((resolve) =>
+			setTimeout(resolve, Math.min(VERIFY_DONE_POLL_INTERVAL_MS, remaining)),
+		);
+	}
+}
+
+// Tests shorten the duplicate-submit wait; unset in production.
+function duplicateVerifyWaitMs(env: Bindings): number {
+	const raw = (env as unknown as Record<string, unknown>).OTP_VERIFY_DUPLICATE_WAIT_MS;
+	const parsed = typeof raw === "string" || typeof raw === "number" ? Number(raw) : Number.NaN;
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : VERIFY_DUPLICATE_WAIT_MS;
+}
+
+// Keep work running if the browser cancels the request. Under app.request in
+// tests there is no ExecutionContext; callers that need the result await it.
+function keepAlive(c: Context<{ Bindings: Bindings }>, promise: Promise<unknown>): void {
+	try {
+		c.executionCtx.waitUntil(promise);
+	} catch {
+		// No ExecutionContext available.
+	}
+}
 
 async function putLogin(env: Bindings, loginId: string, value: StoredLogin): Promise<void> {
 	await env.OAUTH_KV.put(`oauth_login:${loginId}`, JSON.stringify(value), {
@@ -399,7 +567,12 @@ function emailField(value: unknown): string | undefined {
 	return email;
 }
 
-const STYLES = `:root{color-scheme:light}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#f3f4f6;color:#111827;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem}.card{background:#fff;max-width:25rem;width:100%;border-radius:.875rem;box-shadow:0 1px 3px rgba(0,0,0,.08),0 12px 28px rgba(0,0,0,.07);padding:2rem;box-sizing:border-box}.brand{font-weight:700;font-size:1.05rem;letter-spacing:-.01em}h1{font-size:1.3rem;margin:1.1rem 0 .35rem}p{color:#4b5563;line-height:1.55;margin:.35rem 0;font-size:.95rem}label{display:block;font-weight:600;font-size:.85rem;margin:1.2rem 0 .4rem}input{width:100%;box-sizing:border-box;padding:.7rem .8rem;border:1px solid #d1d5db;border-radius:.55rem;font-size:1rem}input:focus{outline:2px solid #111827;outline-offset:0;border-color:#111827}button,.button{display:block;text-align:center;text-decoration:none;box-sizing:border-box;width:100%;margin-top:1.3rem;border:0;border-radius:.55rem;padding:.8rem 1rem;font-weight:600;font-size:1rem;background:#111827;color:#fff;cursor:pointer}button:hover,.button:hover{background:#1f2937}.scopes{background:#f9fafb;border:1px solid #e5e7eb;border-radius:.55rem;padding:.7rem .85rem;margin-top:1.1rem;font-size:.85rem;color:#4b5563}.scopes div{margin-top:.25rem}.muted{font-size:.82rem;color:#6b7280;margin-top:1.1rem}`;
+const STYLES = `:root{color-scheme:light}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#f3f4f6;color:#111827;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem}.card{background:#fff;max-width:25rem;width:100%;border-radius:.875rem;box-shadow:0 1px 3px rgba(0,0,0,.08),0 12px 28px rgba(0,0,0,.07);padding:2rem;box-sizing:border-box}.brand{font-weight:700;font-size:1.05rem;letter-spacing:-.01em}h1{font-size:1.3rem;margin:1.1rem 0 .35rem}p{color:#4b5563;line-height:1.55;margin:.35rem 0;font-size:.95rem}label{display:block;font-weight:600;font-size:.85rem;margin:1.2rem 0 .4rem}input{width:100%;box-sizing:border-box;padding:.7rem .8rem;border:1px solid #d1d5db;border-radius:.55rem;font-size:1rem}input:focus{outline:2px solid #111827;outline-offset:0;border-color:#111827}button,.button{display:block;text-align:center;text-decoration:none;box-sizing:border-box;width:100%;margin-top:1.3rem;border:0;border-radius:.55rem;padding:.8rem 1rem;font-weight:600;font-size:1rem;background:#111827;color:#fff;cursor:pointer}button:hover,.button:hover{background:#1f2937}.scopes{background:#f9fafb;border:1px solid #e5e7eb;border-radius:.55rem;padding:.7rem .85rem;margin-top:1.1rem;font-size:.85rem;color:#4b5563}.scopes div{margin-top:.25rem}.muted{font-size:.82rem;color:#6b7280;margin-top:1.1rem}.error{color:#b91c1c;font-size:.88rem;margin:0 0 .5rem}button:disabled{background:#6b7280;cursor:default}`;
+
+// Verifying a code takes seconds. Disable the button on submit so a second click or
+// Enter can't send a duplicate POST; re-enable if the page is restored from the
+// back/forward cache. The form still works without JS.
+const OTP_SUBMIT_ONCE_SCRIPT = `(function(){var f=document.getElementById("verify-form");var b=f.querySelector("button[type=submit]");var t=b.textContent;f.addEventListener("submit",function(e){if(b.disabled){e.preventDefault();return}b.disabled=true;b.textContent="Verifying..."});window.addEventListener("pageshow",function(e){if(e.persisted){b.disabled=false;b.textContent=t}})})();`;
 
 function renderInfoPage(title: string, message: string, linkText: string, href: string) {
 	return html`<!doctype html>
@@ -567,7 +740,7 @@ function renderEmailPage(loginId: string, clientName?: string) {
 		</html>`;
 }
 
-function renderOtpPage(loginId: string, email: string, clientName?: string) {
+function renderOtpPage(loginId: string, email: string, clientName?: string, error?: string) {
 	const client = clientName ?? "an AI client";
 	return html`<!doctype html>
 		<html lang="en">
@@ -584,9 +757,10 @@ function renderOtpPage(loginId: string, email: string, clientName?: string) {
 					<div class="brand">ADPList</div>
 					<h1>Enter your sign-in code</h1>
 					<p>We emailed a 6-digit code to <strong>${email}</strong>.</p>
-					<form method="post" action="/oauth/verify">
+					<form id="verify-form" method="post" action="/oauth/verify">
 						<input type="hidden" name="loginId" value="${loginId}" />
 						<label for="code">6-digit code</label>
+						${error ? html`<p class="error" role="alert">${error}</p>` : ""}
 						<input
 							id="code"
 							name="code"
@@ -609,6 +783,9 @@ function renderOtpPage(loginId: string, email: string, clientName?: string) {
 						Didn't get the email? Close this window and click Connect again.
 					</p>
 				</div>
+				<script>
+					${raw(OTP_SUBMIT_ONCE_SCRIPT)}
+				</script>
 			</body>
 		</html>`;
 }
