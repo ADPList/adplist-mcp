@@ -388,9 +388,9 @@ export function buildSearchMentorsUrl(
 	if (inferFilters) input = withInferredFilters(input, inferCountry);
 	const url = new URL("/search", baseUrl);
 	const filters = input.filters ?? {};
-	const expandedIntent = expandIntentForSearch(input);
+	const intent = stripResultCountLanguage(input.intent).trim();
 	url.searchParams.set("provider", "explore");
-	url.searchParams.set("q", clampUtf8Bytes(expandedIntent, ALGOLIA_QUERY_MAX_BYTES));
+	url.searchParams.set("q", clampUtf8Bytes(intent, ALGOLIA_QUERY_MAX_BYTES));
 	url.searchParams.set("page", "1");
 	url.searchParams.set("pageSize", String(searchPageSize(input)));
 	if (filters.discipline && shouldUseDisciplineFilter(filters.discipline))

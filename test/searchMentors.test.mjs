@@ -41,7 +41,7 @@ test("search_mentors calls search-service Explore with compact filters", () => {
 	assert.match(source, /languages/);
 });
 
-test("search_mentors expands weak taxonomy intents instead of forcing brittle discipline facets", () => {
+test("search_mentors drops weak taxonomy discipline facets and sends only the intent as q", () => {
 	const growthUrl = new URL(
 		buildUrl({
 			intent: "need a growth marketing mentor for activation and retention",
@@ -49,7 +49,10 @@ test("search_mentors expands weak taxonomy intents instead of forcing brittle di
 		}),
 	);
 	assert.equal(growthUrl.searchParams.has("disciplines"), false);
-	assert.match(growthUrl.searchParams.get("q"), /growth marketing acquisition/i);
+	assert.equal(
+		growthUrl.searchParams.get("q"),
+		"need a growth marketing mentor for activation and retention",
+	);
 
 	const broadGrowthUrl = new URL(
 		buildUrl({
@@ -58,7 +61,7 @@ test("search_mentors expands weak taxonomy intents instead of forcing brittle di
 		}),
 	);
 	assert.equal(broadGrowthUrl.searchParams.has("disciplines"), false);
-	assert.match(broadGrowthUrl.searchParams.get("q"), /growth marketing acquisition/i);
+	assert.equal(broadGrowthUrl.searchParams.get("q"), "US growth mentors");
 
 	const leadershipGrowthUrl = new URL(
 		buildUrl({
@@ -75,7 +78,10 @@ test("search_mentors expands weak taxonomy intents instead of forcing brittle di
 		}),
 	);
 	assert.equal(returnshipUrl.searchParams.has("disciplines"), false);
-	assert.match(returnshipUrl.searchParams.get("q"), /return to work/i);
+	assert.equal(
+		returnshipUrl.searchParams.get("q"),
+		"career coach for returnship after a career break",
+	);
 
 	const productUrl = new URL(
 		buildUrl({
@@ -441,7 +447,7 @@ test("search_mentors overfetches candidates when a domain-fit gate is active", (
 		}),
 	);
 	assert.equal(gtmUrl.searchParams.get("pageSize"), "72");
-	assert.match(gtmUrl.searchParams.get("q"), /product marketing launch strategy/i);
+	assert.equal(gtmUrl.searchParams.get("q"), "go-to-market mentor for a startup launch");
 
 	const productUrl = new URL(
 		buildUrl({
@@ -518,7 +524,7 @@ test("search_mentors validates taxonomy discipline values before search", async 
 	}
 });
 
-test("search_mentors preserves broad non-taxonomy discipline prompts as keyword expansion", () => {
+test("search_mentors drops broad non-taxonomy discipline facets without expanding q", () => {
 	const url = new URL(
 		buildUrl({
 			intent: "need a growth marketing mentor",
@@ -526,7 +532,7 @@ test("search_mentors preserves broad non-taxonomy discipline prompts as keyword 
 		}),
 	);
 	assert.equal(url.searchParams.has("disciplines"), false);
-	assert.match(url.searchParams.get("q"), /growth marketing acquisition/i);
+	assert.equal(url.searchParams.get("q"), "need a growth marketing mentor");
 });
 
 test("search_mentors dedupes and diversifies unknown discipline suggestions", async () => {
@@ -2031,19 +2037,17 @@ function intentMentor(slug) {
 	};
 }
 
-test("search_mentors sends only the intent as q when the user has a stored profile (ADPLIST-4623)", async () => {
+async function searchQueriesWithStoredProfile(intent, resultsByQ, toMentor = intentMentor) {
 	const originalFetch = globalThis.fetch;
-	const searchCalls = [];
+	const queries = [];
 	globalThis.fetch = async (url) => {
 		const href = String(url);
 		if (href.includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
 		if (!href.includes("/search?")) return jsonResponse({ message: "Not found" }, 404);
-		searchCalls.push(href);
 		const q = new URL(href).searchParams.get("q");
-		const slugs = q.includes("Stored ADPList career context")
-			? ["profile-a", "profile-b", "profile-c"]
-			: ["intent-c", "intent-a", "intent-b"];
-		return jsonResponse({ results: slugs.map(intentMentor), queryID: "q", indexUsed: "explore" });
+		queries.push(q);
+		const results = (resultsByQ[q] ?? []).map(toMentor);
+		return jsonResponse({ results, queryID: "q", indexUsed: "explore" });
 	};
 
 	try {
@@ -2054,19 +2058,61 @@ test("search_mentors sends only the intent as q when the user has a stored profi
 				PROFILE_DB: STORED_PROFILE_DB,
 			},
 			AUTHED_PROPS,
-			{ intent: "help running first discovery interviews", filters: { max_results: 3 } },
+			{ intent, filters: { max_results: 3 } },
 		);
-
-		const q = new URL(searchCalls[0]).searchParams.get("q");
-		assert.match(q, /^help running first discovery interviews/);
-		assert.doesNotMatch(q, /Stored ADPList career context/);
-		assert.deepEqual(
-			result.mentors.map((mentor) => mentor.slug),
-			["intent-c", "intent-a", "intent-b"],
-		);
+		return { queries, slugs: result.mentors.map((mentor) => mentor.slug) };
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
+}
+
+function growthMarketer(slug) {
+	return { ...intentMentor(slug), title: "Growth Marketing Lead", expertise: ["growth marketing", "retention"] };
+}
+
+const MARKETING_TOP_UP_Q =
+	"growth marketing acquisition retention lifecycle product marketing go-to-market demand generation";
+
+test("search_mentors sends only the intent as q when the user has a stored profile (ADPLIST-4623)", async () => {
+	const { queries, slugs } = await searchQueriesWithStoredProfile("help running first discovery interviews", {
+		"help running first discovery interviews": ["intent-c", "intent-a", "intent-b"],
+	});
+	assert.deepEqual(queries, ["help running first discovery interviews"]);
+	assert.deepEqual(slugs, ["intent-c", "intent-a", "intent-b"]);
+});
+
+test("search_mentors sends a short taxonomy intent as q without expansions (ADPLIST-4623)", async () => {
+	const first = ["m-i", "m-c", "m-a", "m-h", "m-b", "m-g", "m-d", "m-f", "m-e"];
+	const { queries, slugs } = await searchQueriesWithStoredProfile(
+		"growth marketing",
+		{ "growth marketing": first },
+		growthMarketer,
+	);
+	assert.deepEqual(queries, ["growth marketing"]);
+	assert.deepEqual(slugs, first);
+});
+
+test("search_mentors tops up a sparse intent result with the bare canonical q (ADPLIST-4623)", async () => {
+	const { queries, slugs } = await searchQueriesWithStoredProfile(
+		"growth marketing",
+		{
+			"growth marketing": ["m-c", "m-a", "m-b"],
+			[MARKETING_TOP_UP_Q]: ["m-a", "t-c", "t-a", "t-b", "t-d", "t-e"],
+		},
+		growthMarketer,
+	);
+	assert.deepEqual(queries, ["growth marketing", MARKETING_TOP_UP_Q]);
+	assert.deepEqual(slugs, ["m-c", "m-a", "m-b", "t-c", "t-a", "t-b"]);
+});
+
+test("search_mentors goes from an empty intent result straight to the top-up (ADPLIST-4623)", async () => {
+	const { queries, slugs } = await searchQueriesWithStoredProfile(
+		"growth marketing",
+		{ [MARKETING_TOP_UP_Q]: ["t-c", "t-a", "t-b"] },
+		growthMarketer,
+	);
+	assert.deepEqual(queries, ["growth marketing", MARKETING_TOP_UP_Q]);
+	assert.deepEqual(slugs, ["t-c", "t-a", "t-b"]);
 });
 
 test("search_mentors clamps long intents below Algolia's byte limit", async () => {

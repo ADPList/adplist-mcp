@@ -3052,7 +3052,7 @@ test("specialty searches keep the domain fit: a generic marketer is not a growth
 		withFetch(
 			async (request, init) => {
 				const url = new URL(String(request));
-				if (url.pathname === "/search" && url.searchParams.get("q").startsWith("growth marketing.")) {
+				if (url.pathname === "/search" && url.searchParams.get("q") === "growth marketing") {
 					return Response.json({ results: [searchRow("gen-mkt", 1), searchRow("gro-mkt", 2)] });
 				}
 				return upstream(request, init);
