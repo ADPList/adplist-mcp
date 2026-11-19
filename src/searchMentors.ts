@@ -1,10 +1,4 @@
-import {
-	asRecord,
-	combineIntentWithProfile,
-	getProfileTextForSearch,
-	labelsOf,
-	textOf,
-} from "./profile.ts";
+import { asRecord, labelsOf, textOf } from "./profile.ts";
 import type { McpUserProps } from "./types";
 
 export type SearchMentorsFilters = {
@@ -394,9 +388,9 @@ export function buildSearchMentorsUrl(
 	if (inferFilters) input = withInferredFilters(input, inferCountry);
 	const url = new URL("/search", baseUrl);
 	const filters = input.filters ?? {};
-	const expandedIntent = expandIntentForSearch(input);
+	const intent = stripResultCountLanguage(input.intent).trim();
 	url.searchParams.set("provider", "explore");
-	url.searchParams.set("q", clampUtf8Bytes(expandedIntent, ALGOLIA_QUERY_MAX_BYTES));
+	url.searchParams.set("q", clampUtf8Bytes(intent, ALGOLIA_QUERY_MAX_BYTES));
 	url.searchParams.set("page", "1");
 	url.searchParams.set("pageSize", String(searchPageSize(input)));
 	if (filters.discipline && shouldUseDisciplineFilter(filters.discipline))
@@ -1037,13 +1031,9 @@ async function searchMentorsByIntent(
 	input: SearchMentorsInput,
 ): Promise<SearchMentorsOutput> {
 	const baseUrl = env.SEARCH_SERVICE_URL as string;
-	const profileText = await getProfileTextForSearch(env, props).catch(() => "");
-	const searchInput = {
-		...input,
-		intent: combineIntentWithProfile(input.intent, profileText),
-	};
-
-	const firstResult = await fetchAndMapSearchMentors(baseUrl, props, searchInput, input);
+	// q is the intent alone: search-service keeps only its first 8 tokens and
+	// requires every one, so a stored-profile prefix crowded the request out.
+	const firstResult = await fetchAndMapSearchMentors(baseUrl, props, input, input);
 	let bestResult = firstResult;
 	const targetResultCount = resultMaxResults(input);
 	const shouldTopUpSparseResults = Boolean(
@@ -1059,14 +1049,10 @@ async function searchMentorsByIntent(
 	const relaxedInput = inputWithoutDiscipline(input);
 	let emptyRelaxedResult: SearchMentorsOutput | null = null;
 	if (relaxedInput) {
-		const relaxedSearchInput = {
-			...searchInput,
-			filters: relaxedInput.filters,
-		};
 		const relaxedResult = await fetchAndMapSearchMentors(
 			baseUrl,
 			props,
-			relaxedSearchInput,
+			relaxedInput,
 			relaxedInput,
 		);
 		if (relaxedResult.mentors.length > 0) {
@@ -1078,36 +1064,6 @@ async function searchMentorsByIntent(
 		} else {
 			emptyRelaxedResult = relaxedResult;
 		}
-	}
-
-	if (!profileText.trim()) {
-		bestResult = await topUpWithCanonicalMarketing(
-			baseUrl,
-			props,
-			input,
-			bestResult,
-			targetResultCount,
-		);
-		bestResult = await topUpWithCanonicalProductManagement(
-			baseUrl,
-			props,
-			input,
-			bestResult,
-			targetResultCount,
-		);
-		if (bestResult.mentors.length > 0) return bestResult;
-		return emptyRelaxedResult
-			? { ...emptyRelaxedResult, relaxed_filters: ["discipline"] }
-			: firstResult;
-	}
-
-	const bareResult = await fetchAndMapSearchMentors(baseUrl, props, input, input);
-	if (bareResult.mentors.length > 0) {
-		bestResult = mergeSearchMentorOutputs(input, [
-			bestResult,
-			{ ...bareResult, relaxed_filters: ["profile_context"] },
-		]);
-		if (bestResult.mentors.length >= targetResultCount) return bestResult;
 	}
 
 	bestResult = await topUpWithCanonicalMarketing(
@@ -1124,24 +1080,10 @@ async function searchMentorsByIntent(
 		bestResult,
 		targetResultCount,
 	);
-	if (bestResult.mentors.length >= targetResultCount) return bestResult;
-
-	if (!relaxedInput) {
-		return bestResult.mentors.length > 0
-			? bestResult
-			: { ...bareResult, relaxed_filters: ["profile_context"] };
-	}
-
-	const bareRelaxedResult = await fetchAndMapSearchMentors(
-		baseUrl,
-		props,
-		relaxedInput,
-		relaxedInput,
-	);
-	return mergeSearchMentorOutputs(input, [
-		bestResult,
-		{ ...bareRelaxedResult, relaxed_filters: ["profile_context", "discipline"] },
-	]);
+	if (bestResult.mentors.length > 0) return bestResult;
+	return emptyRelaxedResult
+		? { ...emptyRelaxedResult, relaxed_filters: ["discipline"] }
+		: firstResult;
 }
 
 // "mentors who work at Google": Algolia scores by matched words, so filler and

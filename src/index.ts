@@ -131,7 +131,7 @@ export class MyMCP extends McpAgent<Env, unknown, McpUserProps> {
 			"manage_my_context",
 			{
 				description:
-					"Read, update, or clear the user's stored career context on ADPList: role, focus area, goals, and the skills they want to develop. The context persists across sessions and improves mentor recommendations. With no arguments it returns what is currently stored. action 'merge' shallow-merges the updates object; action 'clear' removes everything. This is an explicit-only store, holding what the user has asked ADPList to remember.",
+					"Read, update, or clear the user's stored career context on ADPList: role, focus area, goals, and the skills they want to develop. The context persists across sessions. With no arguments it returns what is currently stored. action 'merge' shallow-merges the updates object; action 'clear' removes everything. This is an explicit-only store, holding what the user has asked ADPList to remember.",
 				annotations: {
 					title: "Manage ADPList context",
 					readOnlyHint: false,
