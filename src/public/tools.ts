@@ -24,7 +24,7 @@ import {
 	requestedAfterSelfReference,
 	withoutPlaces,
 } from "./company.ts";
-import { PublicError } from "./errors.ts";
+import { PublicError, publicErrorCode } from "./errors.ts";
 import {
 	mapPublicProfile,
 	mapPublicSearchMentor,
@@ -211,6 +211,7 @@ export async function publicSearchMentors(
 	};
 	const filterInput = placeCountry ? { ...input, country: placeCountry } : input;
 	const matchesFilters: KeepCard = (mentor, record, row) => matchesCardFilters(filterInput, mentor, record, row);
+	let nameUnavailable = false;
 
 	if (nameCandidate) {
 		// Only the caller's own explicit filters, and only against fields the
@@ -235,9 +236,21 @@ export async function publicSearchMentors(
 				nameCandidates.push({ slug: textOf(row.slug), row, nameMatch: true });
 			}
 		}
-		const named = await gateCandidates(env, nameCandidates, source, why, limit, matchesNamedFilters);
+		// Identity unreachable for every name candidate: still try the search
+		// below, but an empty result there cannot stand for "no such mentor".
+		const named = await gateCandidates(env, nameCandidates, source, why, limit, matchesNamedFilters).catch(
+			(error: unknown) => {
+				if (publicErrorCode(error) !== "UNAVAILABLE") throw error;
+				nameUnavailable = true;
+				return [];
+			},
+		);
 		if (named.length > 0) return { output: { mentors: named }, meta: meta(named.length, true) };
 	}
+	const found = (mentors: PublicMentor[]) => {
+		if (mentors.length === 0 && nameUnavailable) throw new PublicError("UNAVAILABLE");
+		return { output: { mentors }, meta: meta(mentors.length) };
+	};
 
 	// With a role, ranking keeps the deeper page instead of cutting it to nine.
 	const rankDepth = roles.length > 0 ? ROLE_PAGE_SIZE : undefined;
@@ -300,11 +313,9 @@ export async function publicSearchMentors(
 		.filter((row) => textOf(row.slug))
 		.map((row) => ({ slug: textOf(row.slug), row }));
 	if (roles.length > 0) {
-		const mentors = await gateByRole(env, candidates, source, why, limit, roles, keep);
-		return { output: { mentors }, meta: meta(mentors.length) };
+		return found(await gateByRole(env, candidates, source, why, limit, roles, keep));
 	}
-	const mentors = (await gateCandidates(env, candidates, source, why, MAX_PUBLIC_LIMIT, keep)).slice(0, limit);
-	return { output: { mentors }, meta: meta(mentors.length) };
+	return found((await gateCandidates(env, candidates, source, why, MAX_PUBLIC_LIMIT, keep)).slice(0, limit));
 }
 
 // A role was requested. Candidates whose search row fits the role are gated
@@ -313,7 +324,8 @@ export async function publicSearchMentors(
 // then scored on its public title, disciplines and expertise: clear
 // mismatches (title in another role, whatever the labels say) are dropped,
 // title matches lead, ambiguous titles ("Director") follow. `keep` is the
-// company and field filters on the final card, applied as before.
+// company and field filters on the final card, applied as before. UNAVAILABLE
+// only when identity was unreachable for every batch checked.
 async function gateByRole(
 	env: Env,
 	candidates: Candidate[],
@@ -338,10 +350,19 @@ async function gateByRole(
 		.slice(0, ROLE_CHECKS_PER_RESULT * limit);
 	const kept: Array<{ mentor: PublicMentor; score: number }> = [];
 	const seen = new Set<string>();
+	let reached = queue.length === 0;
 	for (let start = 0; start < queue.length; start += MAX_PUBLIC_LIMIT) {
 		if (kept.filter(({ score }) => score > 0).length >= limit) break;
 		const batch = queue.slice(start, start + MAX_PUBLIC_LIMIT);
-		for (const mentor of await gateCandidates(env, batch, source, why, MAX_PUBLIC_LIMIT, keep)) {
+		let gated: PublicMentor[];
+		try {
+			gated = await gateCandidates(env, batch, source, why, MAX_PUBLIC_LIMIT, keep);
+		} catch (error) {
+			if (publicErrorCode(error) !== "UNAVAILABLE") throw error;
+			continue;
+		}
+		reached = true;
+		for (const mentor of gated) {
 			const key = mentor.slug.toLowerCase();
 			if (seen.has(key)) continue;
 			seen.add(key);
@@ -349,6 +370,7 @@ async function gateByRole(
 			if (!fit.mismatch) kept.push({ mentor, score: fit.score });
 		}
 	}
+	if (!reached) throw new PublicError("UNAVAILABLE");
 	return kept
 		.sort((a, b) => b.score - a.score)
 		.slice(0, limit)
@@ -367,8 +389,9 @@ export async function publicGetMentorProfile(
 	if (!env.AUTH_SERVICE_URL) throw new PublicError("UNAVAILABLE");
 
 	// Hidden, opted out, on break, missing, and unverifiable all look the same.
+	// Only identity being unreachable differs: the retryable UNAVAILABLE.
 	const visibility = await checkMentorVisibility(env, slug);
-	if (!visibility.visible) throw new PublicError("NOT_FOUND");
+	if (!visibility.visible) throw new PublicError(visibility.unreachable ? "UNAVAILABLE" : "NOT_FOUND");
 	const userId = visibility.userId;
 	const stats = userId ? await fetchPublicStats(env.AUTH_SERVICE_URL, userId) : {};
 	return mapPublicProfile(visibility.slug, visibility.record, stats, source);
@@ -384,7 +407,8 @@ type KeepCard = (
 
 // Gate up to MAX_PUBLIC_LIMIT unique candidates in parallel and keep the
 // visible ones that `keep` accepts, in order. A failed or hidden check simply
-// drops the mentor.
+// drops the mentor, but when identity was unreachable for every candidate the
+// result is UNAVAILABLE: an outage must not read as "no mentors".
 async function gateCandidates(
 	env: Env,
 	candidates: Candidate[],
@@ -397,6 +421,9 @@ async function gateCandidates(
 	const checks = await Promise.all(
 		unique.map((candidate) => checkMentorVisibility(env, candidate.slug).catch(() => null)),
 	);
+	if (unique.length > 0 && checks.every((check) => !check || (!check.visible && check.unreachable))) {
+		throw new PublicError("UNAVAILABLE");
+	}
 	const mentors: PublicMentor[] = [];
 	const emitted = new Set<string>();
 	unique.forEach((candidate, index) => {

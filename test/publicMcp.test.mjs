@@ -1931,8 +1931,6 @@ const HIDDEN_SLUGS = [
 	"optout-mentor",
 	"denied-mentor",
 	"DENIED-MENTOR",
-	"profile-500",
-	"profile-throws",
 	"profile-malformed",
 	"profile-noshape",
 	"no-such-mentor",
@@ -1957,11 +1955,11 @@ test("search where every result is hidden returns an empty list", async () => {
 	});
 });
 
-test("search fails closed when every visibility check throws", async () => {
+test("search returns UNAVAILABLE, not an empty list, when every visibility check throws", async () => {
 	await withFetch(fakeUpstream({ profileFails: true }), async () => {
 		const result = await callTool("search_mentors", { query: "mobile app design" });
 		assertPublicOutputClean(result);
-		assert.deepEqual(mentorsOf(result.body), []);
+		assert.equal(errorCodeOf(result.body), "UNAVAILABLE");
 		assert.equal(result.response.headers.get("Cache-Control"), "no-store");
 	});
 });
@@ -2208,7 +2206,7 @@ test("bookable or indexable false on either record hides the mentor; non-boolean
 test("a failed or missing public profile omits an otherwise visible mentor", async () => {
 	const env = makeEnv();
 	for (const [status, expected] of [
-		[500, { visible: false, failed: true }],
+		[500, { visible: false, failed: true, unreachable: true }],
 		[302, { visible: false, failed: true }],
 		[404, { visible: false, failed: false }],
 	]) {
@@ -2222,7 +2220,9 @@ test("a failed or missing public profile omits an otherwise visible mentor", asy
 		}, async () => {
 			assert.deepEqual(await checkMentorVisibility(env, "alice-visible"), expected, String(status));
 			const search = await callTool("search_mentors", { query: "mobile app design" });
-			assert.deepEqual(mentorsOf(search.body), [], String(status));
+			// Identity down for every candidate is an outage, not "no mentors".
+			if (expected.unreachable) assert.equal(errorCodeOf(search.body), "UNAVAILABLE", String(status));
+			else assert.deepEqual(mentorsOf(search.body), [], String(status));
 		});
 	}
 });
@@ -2327,13 +2327,298 @@ test("visibility check times out after 3s and fails closed", async () => {
 		await withFetch(fakeUpstream(), async () => {
 			const started = Date.now();
 			const result = await callTool("get_mentor_profile", { mentor_slug: "profile-timeout" });
-			assert.equal(errorCodeOf(result.body), "NOT_FOUND");
+			assert.equal(errorCodeOf(result.body), "UNAVAILABLE");
 			assert.ok(Date.now() - started < 4500);
 			assertPublicOutputClean(result);
 		});
 	} finally {
 		clearTimeout(keepAlive);
 	}
+});
+
+// Live (2026-10-27, 14:11 PT): search succeeded, every identity read timed
+// out, and search_mentors returned { mentors: [] } with status ok. An identity
+// outage must be the retryable UNAVAILABLE; a hidden or malformed mentor stays
+// indistinguishable from a missing one.
+function unreachableFor(slugs, upstream = fakeUpstream(), hits = []) {
+	return async (input, init) => {
+		const url = new URL(String(input));
+		const match = url.pathname.match(/^\/(?:internal\/)?users\/profile\/mentor\/(.+)$/);
+		if (match && slugs.has(decodeURIComponent(match[1]))) {
+			hits.push(decodeURIComponent(match[1]));
+			throw new Error(`timeout ${FAKE_HOST} ${FAKE_TOKEN} ${FAKE_ID}`);
+		}
+		return upstream(input, init);
+	};
+}
+
+async function withLoggedEvents(run) {
+	const logs = [];
+	const originalLog = console.log;
+	console.log = (line) => logs.push(JSON.parse(String(line)));
+	try {
+		await run();
+	} finally {
+		console.log = originalLog;
+	}
+	return logs;
+}
+
+test("identity unreachable (throw, timeout, 5xx, 429, missing key) is marked unreachable", async () => {
+	const unreachable = { visible: false, failed: true, unreachable: true };
+	await withFetch(fakeUpstream(), async () => {
+		assert.deepEqual(await checkMentorVisibility(makeEnv(), "profile-500"), unreachable);
+		assert.deepEqual(await checkMentorVisibility(makeEnv(), "profile-throws"), unreachable);
+		assert.deepEqual(
+			await checkMentorVisibility(makeEnv({ IDENTITY_INTERNAL_API_KEY: undefined }), "alice-visible"),
+			unreachable,
+		);
+		// Malformed records are not an outage.
+		assert.deepEqual(await checkMentorVisibility(makeEnv(), "profile-malformed"), { visible: false, failed: true });
+		assert.deepEqual(await checkMentorVisibility(makeEnv(), "stringy-break"), { visible: false, failed: true });
+	});
+	for (const status of [429, 502, 503]) {
+		await withFetch(async () => new Response("busy", { status }), async () => {
+			assert.deepEqual(await checkMentorVisibility(makeEnv(), "alice-visible"), unreachable, String(status));
+		});
+	}
+});
+
+test("search with identity unreachable for every candidate is UNAVAILABLE and logs status error", async () => {
+	const everyone = new Set(Object.keys(NAMES));
+	for (const query of ["mobile app design", "Google", "mentors at Google"]) {
+		const logs = await withLoggedEvents(() =>
+			withFetch(unreachableFor(everyone), async () => {
+				const result = await callTool("search_mentors", { query });
+				assertPublicOutputClean(result);
+				assert.equal(errorCodeOf(result.body), "UNAVAILABLE", query);
+				assert.deepEqual(Object.keys(result.body.result.structuredContent.error).sort(), ["code", "message"]);
+			}),
+		);
+		const search = logs.find((event) => event.event === "ai_mentor_search_query");
+		assert.equal(search.status, "error", query);
+		assert.equal(search.result_count, 0, query);
+	}
+});
+
+test("search with identity unreachable for only some candidates still returns the visible ones", async () => {
+	await withFetch(unreachableFor(new Set(["bob-visible"])), async () => {
+		const result = await callTool("search_mentors", { query: "mobile app design" });
+		assert.deepEqual(
+			mentorsOf(result.body).map((mentor) => mentor.slug),
+			["alice-visible"],
+		);
+	});
+	// Unreachable (profile-500, profile-throws) mixed with hidden is still just
+	// empty: identity answered for the rest.
+	await withFetch(fakeUpstream(), async () => {
+		const result = await callTool("search_mentors", { query: "everyone hidden", limit: 9 });
+		assert.deepEqual(mentorsOf(result.body), []);
+	});
+});
+
+test("an unreachable name lookup falls through to the search and only errors if that is empty too", async () => {
+	const search = { ...DEFAULT_SEARCH, "Zed Unknown": ["bob-visible"], "Zed Nobody": ["jane-hidden"] };
+	const hits = [];
+	const upstream = unreachableFor(new Set(["zed-unknown", "zed-nobody"]), fakeUpstream({ search }), hits);
+	await withFetch(upstream, async () => {
+		const fellThrough = await callTool("search_mentors", { query: "Zed Unknown" });
+		assertPublicOutputClean(fellThrough);
+		assert.deepEqual(
+			mentorsOf(fellThrough.body).map((mentor) => mentor.slug),
+			["bob-visible"],
+		);
+
+		const logs = await withLoggedEvents(async () => {
+			const empty = await callTool("search_mentors", { query: "Zed Nobody" });
+			assertPublicOutputClean(empty);
+			assert.equal(errorCodeOf(empty.body), "UNAVAILABLE");
+		});
+		assert.equal(logs.find((event) => event.event === "ai_mentor_search_query").status, "error");
+	});
+	// The slug guesses were checked: both queries really took the name path.
+	assert.ok(hits.includes("zed-unknown"));
+	assert.ok(hits.includes("zed-nobody"));
+	// A reachable miss is still a plain empty result.
+	await withFetch(fakeUpstream({ search }), async () => {
+		const result = await callTool("search_mentors", { query: "Zed Nobody" });
+		assert.deepEqual(mentorsOf(result.body), []);
+	});
+});
+
+test("profile lookup with identity unreachable is UNAVAILABLE, and logs status error", async () => {
+	for (const slug of ["profile-500", "profile-throws"]) {
+		const logs = await withLoggedEvents(() =>
+			withFetch(fakeUpstream(), async () => {
+				const result = await callTool("get_mentor_profile", { mentor_slug: slug });
+				assertPublicOutputClean(result);
+				assert.equal(errorCodeOf(result.body), "UNAVAILABLE", slug);
+			}),
+		);
+		const view = logs.find((event) => event.event === "ai_mentor_profile_view");
+		assert.equal(view.status, "error", slug);
+		assert.equal(view.found, false, slug);
+	}
+	await withFetch(fakeUpstream({ profileFails: true }), async () => {
+		const result = await callTool("get_mentor_profile", { mentor_slug: "alice-visible" });
+		assert.equal(errorCodeOf(result.body), "UNAVAILABLE");
+	});
+});
+
+// One of the two visibility reads replaced by `respond` (a Response, or a
+// function that throws); the other is the normal fake.
+function oneReadFails(route, respond, upstream = fakeUpstream()) {
+	const prefix = route === "internal" ? "/internal/users/profile/mentor/" : "/users/profile/mentor/";
+	return async (input, init) => {
+		if (new URL(String(input)).pathname.startsWith(prefix)) {
+			return typeof respond === "function" ? respond() : respond.clone();
+		}
+		return upstream(input, init);
+	};
+}
+
+const busy = () => new Response("busy", { status: 503 });
+const hangUp = () => {
+	throw new TypeError(`fetch failed ${FAKE_HOST} ${FAKE_TOKEN}`);
+};
+
+test("one read unreachable does not mask the other read proving the mentor hidden or malformed", async () => {
+	const hidden = { visible: false, failed: false };
+	const failed = { visible: false, failed: true };
+	const unreachable = { visible: false, failed: true, unreachable: true };
+	const cases = [
+		// Internal flags definitive, display read down.
+		["internal says suspended", "public", busy, "suspended-mentor", hidden],
+		["internal says on break", "public", hangUp, "onbreak-mentor", hidden],
+		["internal says opted out", "public", busy, "optout-mentor", hidden],
+		["internal 404", "public", busy, "no-such-mentor", hidden],
+		["internal malformed flags", "public", hangUp, "stringy-break", failed],
+		["internal flags array", "public", busy, "array-flags", failed],
+		["internal not JSON", "public", busy, "profile-malformed", failed],
+		// Display record definitive, internal read down.
+		["display 404", "internal", hangUp, "no-such-mentor", hidden],
+		["display not JSON", "internal", busy, "profile-malformed", failed],
+		["display without profile", "internal", busy, "profile-noshape", failed],
+		// Neither settles it: genuinely unresolved.
+		["display down, internal visible", "public", busy, "alice-visible", unreachable],
+		["internal down, display visible", "internal", hangUp, "alice-visible", unreachable],
+	];
+	for (const [label, route, respond, slug, expected] of cases) {
+		await withFetch(oneReadFails(route, respond), async () => {
+			assert.deepEqual(await checkMentorVisibility(makeEnv(), slug), expected, label);
+			const profile = await callTool("get_mentor_profile", { mentor_slug: slug });
+			assertPublicOutputClean(profile);
+			assert.equal(errorCodeOf(profile.body), expected.unreachable ? "UNAVAILABLE" : "NOT_FOUND", label);
+		});
+	}
+
+	// Display-record verdicts, internal read down.
+	for (const [override, expected] of [
+		[{ bookable: false }, hidden],
+		[{ status: "inactive" }, hidden],
+		[{ indexable: "false" }, failed],
+		[{ fullName: "  " }, failed],
+	]) {
+		PUBLIC_OVERRIDES["alice-visible"] = override;
+		try {
+			await withFetch(oneReadFails("internal", busy), async () => {
+				assert.deepEqual(await checkMentorVisibility(makeEnv(), "alice-visible"), expected, JSON.stringify(override));
+			});
+		} finally {
+			delete PUBLIC_OVERRIDES["alice-visible"];
+		}
+	}
+	// A canonical slug on the kill list is hidden even with the display read down.
+	INTERNAL_OVERRIDES["alice-visible"] = { slug: "Denied-Mentor" };
+	try {
+		await withFetch(oneReadFails("public", busy), async () => {
+			assert.deepEqual(await checkMentorVisibility(makeEnv(), "alice-visible"), hidden);
+		});
+	} finally {
+		delete INTERNAL_OVERRIDES["alice-visible"];
+	}
+
+	// On search, those mentors are dropped: an empty list, not UNAVAILABLE.
+	const search = { ...DEFAULT_SEARCH, "hidden flags": ["suspended-mentor", "onbreak-mentor", "stringy-break"] };
+	await withFetch(oneReadFails("public", busy, fakeUpstream({ search })), async () => {
+		const result = await callTool("search_mentors", { query: "hidden flags", limit: 9 });
+		assertPublicOutputClean(result);
+		assert.deepEqual(mentorsOf(result.body), []);
+	});
+});
+
+test("a body read cut short is unreachable; only invalid JSON is malformed", async () => {
+	const brokenBody = (error) => () =>
+		new Response(
+			new ReadableStream({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode('{"data":{"slug":'));
+				},
+				pull(controller) {
+					controller.error(error);
+				},
+			}),
+			{ status: 200, headers: { "Content-Type": "application/json" } },
+		);
+	const unreachable = { visible: false, failed: true, unreachable: true };
+	for (const [label, error] of [
+		["timeout", new DOMException(`signal timed out ${FAKE_HOST}`, "TimeoutError")],
+		["abort", new DOMException(`aborted ${FAKE_TOKEN}`, "AbortError")],
+		["connection reset", new TypeError(`terminated ${FAKE_HOST}`)],
+	]) {
+		for (const route of ["internal", "public"]) {
+			await withFetch(oneReadFails(route, brokenBody(error)), async () => {
+				assert.deepEqual(await checkMentorVisibility(makeEnv(), "alice-visible"), unreachable, `${label} ${route}`);
+				const profile = await callTool("get_mentor_profile", { mentor_slug: "alice-visible" });
+				assertPublicOutputClean(profile);
+				assert.equal(errorCodeOf(profile.body), "UNAVAILABLE", `${label} ${route}`);
+			});
+		}
+	}
+	for (const route of ["internal", "public"]) {
+		for (const body of ["<html>not json", '{"data":', ""]) {
+			const invalid = () => new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
+			await withFetch(oneReadFails(route, invalid), async () => {
+				assert.deepEqual(
+					await checkMentorVisibility(makeEnv(), "alice-visible"),
+					{ visible: false, failed: true },
+					`${route} ${JSON.stringify(body)}`,
+				);
+				const profile = await callTool("get_mentor_profile", { mentor_slug: "alice-visible" });
+				assert.equal(errorCodeOf(profile.body), "NOT_FOUND");
+			});
+		}
+	}
+});
+
+test("an unreachable name lookup whose fallback search returns no rows at all is UNAVAILABLE", async () => {
+	// No search entry: the fallback search returns zero rows, not hidden ones.
+	const hits = [];
+	await withFetch(unreachableFor(new Set(["zed-empty"]), fakeUpstream(), hits), async () => {
+		const result = await callTool("search_mentors", { query: "Zed Empty" });
+		assertPublicOutputClean(result);
+		assert.equal(errorCodeOf(result.body), "UNAVAILABLE");
+	});
+	assert.ok(hits.includes("zed-empty"));
+	await withFetch(fakeUpstream(), async () => {
+		const result = await callTool("search_mentors", { query: "Zed Empty" });
+		assert.deepEqual(mentorsOf(result.body), []);
+	});
+});
+
+test("without IDENTITY_INTERNAL_API_KEY, opt-outs stay NOT_FOUND and candidate-less searches stay empty", async () => {
+	const env = makeEnv({ IDENTITY_INTERNAL_API_KEY: undefined });
+	await withFetch(fakeUpstream(), async () => {
+		const optedOut = await callTool("get_mentor_profile", { mentor_slug: "denied-mentor" }, { env });
+		assert.equal(errorCodeOf(optedOut.body), "NOT_FOUND");
+		const visible = await callTool("get_mentor_profile", { mentor_slug: "alice-visible" }, { env });
+		assert.equal(errorCodeOf(visible.body), "UNAVAILABLE");
+		const withCandidates = await callTool("search_mentors", { query: "mobile app design" }, { env });
+		assert.equal(errorCodeOf(withCandidates.body), "UNAVAILABLE");
+		// One word: no literal-name guess, and the search service returns no rows.
+		const noCandidates = await callTool("search_mentors", { query: "zzyzx" }, { env });
+		assert.deepEqual(mentorsOf(noCandidates.body), []);
+	});
 });
 
 // ---------------------------------------------------------------------------
