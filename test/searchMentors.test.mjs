@@ -1840,8 +1840,8 @@ test("search_mentors falls through to the intent path when no Explore hit carrie
 			.filter((c) => c.includes("/search?"))
 			.map((c) => new URL(c).searchParams.get("q"));
 		assert.equal(queries[0], "Portfolio Review");
-		assert.match(queries[1], /Stored ADPList career context/);
-		assert.match(queries[1], /Current request: Portfolio Review/);
+		assert.match(queries[1], /^Portfolio Review/);
+		assert.doesNotMatch(queries[1], /Stored ADPList career context/);
 		assert.equal(result.mentors.length, 2);
 		assert.notEqual(result.mentors[0].why_match, 'Name matches "Portfolio Review".');
 	} finally {
@@ -2004,71 +2004,46 @@ const EMPTY_PROFILE_DB = {
 	prepare: () => ({ bind: () => ({ first: async () => null }) }),
 };
 
-test("search_mentors merges the user's own ADPList profile into the search query", async () => {
-	const originalFetch = globalThis.fetch;
-	const calls = [];
-	globalThis.fetch = async (url, init) => {
-		calls.push({ url: String(url), init });
-		if (String(url).includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
-		return jsonResponse({ results: [], queryID: "q", indexUsed: "explore" });
+// PROFILE_DB stub: user has stored D1 context.
+const STORED_PROFILE_DB = {
+	prepare: () => ({
+		bind: () => ({
+			first: async () => ({
+				profile_json: JSON.stringify({
+					career_stage: "Senior PM",
+					current_focus: "moving into UX research",
+				}),
+				updated_at: 1,
+			}),
+		}),
+	}),
+};
+
+function intentMentor(slug) {
+	return {
+		name: slug,
+		slug,
+		title: "UX Research Lead",
+		employer: "Acme",
+		expertise: ["user research", "discovery interviews"],
+		total_sessions: 10,
+		next_7_day_slots_count: 1,
 	};
+}
 
-	try {
-		await searchMentors(
-			{
-				SEARCH_SERVICE_URL: "https://search.example",
-				AUTH_SERVICE_URL: "https://auth.example",
-				PROFILE_DB: EMPTY_PROFILE_DB,
-			},
-			AUTHED_PROPS,
-			{ intent: "help running first discovery interviews" },
-		);
-
-		const profileCall = calls.find((c) => c.url.includes("/users/profile/me"));
-		assert.ok(profileCall, "expected a /users/profile/me fetch");
-		assert.equal(profileCall.init.headers.Authorization, "Bearer cognito-token");
-
-		const searchCall = calls.find((c) => c.url.includes("/search?"));
-		const searchCalls = calls.filter((c) => c.url.includes("/search?"));
-		assert.equal(searchCalls.length, 2);
-		const q = new URL(searchCall.url).searchParams.get("q");
-		assert.match(q, /Senior Product Manager at Finch Fintech/);
-		assert.match(q, /product management/);
-		assert.match(q, /transition into UX research/);
-		assert.match(q, /Current request: help running first discovery interviews/);
-	} finally {
-		globalThis.fetch = originalFetch;
-	}
-});
-
-test("search_mentors retries the bare intent when profile enrichment returns no mentors", async () => {
+test("search_mentors sends only the intent as q when the user has a stored profile (ADPLIST-4623)", async () => {
 	const originalFetch = globalThis.fetch;
 	const searchCalls = [];
 	globalThis.fetch = async (url) => {
 		const href = String(url);
 		if (href.includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
-
+		if (!href.includes("/search?")) return jsonResponse({ message: "Not found" }, 404);
 		searchCalls.push(href);
 		const q = new URL(href).searchParams.get("q");
-		if (q.includes("Current request:")) {
-			return jsonResponse({ results: [], queryID: "profile-query", indexUsed: "explore" });
-		}
-		return jsonResponse({
-			results: [
-				{
-					name: "Growth Mentor",
-					slug: "growth-mentor",
-					title: "Head of Growth Marketing",
-					employer: "Acme",
-					countryISO: "US",
-					expertise: ["marketing"],
-					total_sessions: 22,
-					next_7_day_slots_count: 1,
-				},
-			],
-			queryID: "bare-query",
-			indexUsed: "explore",
-		});
+		const slugs = q.includes("Stored ADPList career context")
+			? ["profile-a", "profile-b", "profile-c"]
+			: ["intent-c", "intent-a", "intent-b"];
+		return jsonResponse({ results: slugs.map(intentMentor), queryID: "q", indexUsed: "explore" });
 	};
 
 	try {
@@ -2076,34 +2051,25 @@ test("search_mentors retries the bare intent when profile enrichment returns no 
 			{
 				SEARCH_SERVICE_URL: "https://search.example",
 				AUTH_SERVICE_URL: "https://auth.example",
-				PROFILE_DB: EMPTY_PROFILE_DB,
+				PROFILE_DB: STORED_PROFILE_DB,
 			},
 			AUTHED_PROPS,
-			{
-				intent: "US growth marketing mentor for retention and lifecycle",
-				filters: { country: "US", max_results: 6 },
-			},
+			{ intent: "help running first discovery interviews", filters: { max_results: 3 } },
 		);
 
-		assert.equal(searchCalls.length, 3);
-		assert.match(new URL(searchCalls[0]).searchParams.get("q"), /Current request:/);
-		const bareQuery = new URL(searchCalls[1]).searchParams.get("q");
-		assert.match(bareQuery, /^US growth marketing mentor for retention and lifecycle/);
-		assert.doesNotMatch(bareQuery, /Current request:/);
-		assert.match(
-			new URL(searchCalls[2]).searchParams.get("q"),
-			/^growth marketing acquisition/,
+		const q = new URL(searchCalls[0]).searchParams.get("q");
+		assert.match(q, /^help running first discovery interviews/);
+		assert.doesNotMatch(q, /Stored ADPList career context/);
+		assert.deepEqual(
+			result.mentors.map((mentor) => mentor.slug),
+			["intent-c", "intent-a", "intent-b"],
 		);
-		assert.equal(result.mentors.length, 1);
-		assert.equal(result.mentors[0].slug, "growth-mentor");
-		assert.equal(result.queryID, "bare-query");
-		assert.deepEqual(result.relaxed_filters, ["profile_context", "query"]);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
 });
 
-test("search_mentors clamps profile-enriched queries below Algolia's byte limit", async () => {
+test("search_mentors clamps long intents below Algolia's byte limit", async () => {
 	const originalFetch = globalThis.fetch;
 	const searchCalls = [];
 	globalThis.fetch = async (url) => {
@@ -2117,7 +2083,7 @@ test("search_mentors clamps profile-enriched queries below Algolia's byte limit"
 			{
 				SEARCH_SERVICE_URL: "https://search.example",
 				AUTH_SERVICE_URL: "https://auth.example",
-				PROFILE_DB: EMPTY_PROFILE_DB,
+				PROFILE_DB: STORED_PROFILE_DB,
 			},
 			AUTHED_PROPS,
 			{
@@ -2127,79 +2093,12 @@ test("search_mentors clamps profile-enriched queries below Algolia's byte limit"
 		);
 
 		// "experience at top tech companies" also trips the employer detector,
-		// which costs one bare search that matches nobody; assert on the enriched call.
+		// which costs one bare search that matches nobody; assert on the intent call.
 		const q = searchCalls
 			.map((url) => new URL(url).searchParams.get("q"))
-			.find((value) => value.includes("Current request:"));
+			.find((value) => value.startsWith("product designer based in san francisco"));
 		assert.ok(Buffer.byteLength(q, "utf8") <= 500);
-		assert.match(q, /Stored ADPList career context:/);
-		assert.match(q, /Current request:/);
-	} finally {
-		globalThis.fetch = originalFetch;
-	}
-});
-
-test("search_mentors fails open to the bare intent when the profile fetch errors", async () => {
-	const originalFetch = globalThis.fetch;
-	const searchCalls = [];
-	globalThis.fetch = async (url) => {
-		if (String(url).includes("/users/profile/me")) {
-			return new Response("upstream broke", { status: 500 });
-		}
-		searchCalls.push(String(url));
-		return jsonResponse({ results: [], queryID: "q", indexUsed: "explore" });
-	};
-
-	try {
-		await searchMentors(
-			{
-				SEARCH_SERVICE_URL: "https://search.example",
-				AUTH_SERVICE_URL: "https://auth.example",
-				PROFILE_DB: EMPTY_PROFILE_DB,
-			},
-			AUTHED_PROPS,
-			{ intent: "bare intent survives" },
-		);
-		// bare-name probe, then the intent search with no profile prefix
-		assert.equal(searchCalls.length, 2);
-		assert.equal(new URL(searchCalls.at(-1)).searchParams.get("q"), "bare intent survives");
-	} finally {
-		globalThis.fetch = originalFetch;
-	}
-});
-
-test("search_mentors keeps the ADPList profile when the D1 stored-context read throws", async () => {
-	const originalFetch = globalThis.fetch;
-	const searchCalls = [];
-	globalThis.fetch = async (url) => {
-		if (String(url).includes("/users/profile/me")) return jsonResponse(PROFILE_ME_RESPONSE);
-		searchCalls.push(String(url));
-		return jsonResponse({ results: [], queryID: "q", indexUsed: "explore" });
-	};
-	const throwingDb = {
-		prepare: () => ({
-			bind: () => ({
-				first: async () => {
-					throw new Error("D1 hiccup");
-				},
-			}),
-		}),
-	};
-
-	try {
-		await searchMentors(
-			{
-				SEARCH_SERVICE_URL: "https://search.example",
-				AUTH_SERVICE_URL: "https://auth.example",
-				PROFILE_DB: throwingDb,
-			},
-			AUTHED_PROPS,
-			{ intent: "discovery interview help" },
-		);
-		// [0] bare-name probe, [1] profile-enriched search, [2] bare retry
-		const q = new URL(searchCalls[1]).searchParams.get("q");
-		assert.match(q, /Senior Product Manager at Finch Fintech/);
-		assert.match(q, /Current request: discovery interview help/);
+		assert.doesNotMatch(q, /Stored ADPList career context/);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

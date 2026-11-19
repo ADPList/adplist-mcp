@@ -5,7 +5,6 @@ import { adplistProfileToSearchText, fetchAdplistProfileText } from "../src/prof
 
 const indexSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 const profileSource = readFileSync(new URL("../src/profile.ts", import.meta.url), "utf8");
-const searchSource = readFileSync(new URL("../src/searchMentors.ts", import.meta.url), "utf8");
 const wranglerSource = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 const migrationSource = readFileSync(
 	new URL("../migrations/0001_user_mcp_profile.sql", import.meta.url),
@@ -41,14 +40,6 @@ test("manage_my_context implements read, shallow merge, and clear", () => {
 	assert.match(profileSource, /\.\.\.\(existing\?\.profile \?\? \{\}\), \.\.\.updates/);
 	assert.match(profileSource, /ON CONFLICT\(user_id\) DO UPDATE/);
 	assert.match(profileSource, /action !== "read"/);
-});
-
-test("search_mentors prepends stored profile context without new embeddings", () => {
-	assert.match(searchSource, /getProfileTextForSearch/);
-	assert.match(searchSource, /combineIntentWithProfile/);
-	assert.match(profileSource, /Stored ADPList career context:/);
-	assert.match(profileSource, /Current request:/);
-	assert.match(profileSource, /PROFILE_TEXT_SOFT_LIMIT = 1000/);
 });
 
 test("search_mentors description nudges rich who-the-user-is intents (ADPLIST-3202)", () => {

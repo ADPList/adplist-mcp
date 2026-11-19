@@ -90,44 +90,8 @@ export async function manageMyContext(
 	);
 }
 
-export async function getProfileTextForSearch(
-	env: Env,
-	props: McpUserProps | undefined,
-): Promise<string> {
-	// Each source fails open independently so a D1 hiccup can't discard a
-	// successfully-fetched ADPList profile (and vice versa).
-	const [adplistProfile, storedContext] = await Promise.all([
-		fetchAdplistProfileText(env, props),
-		getStoredContextText(env, props).catch((error) => {
-			console.warn(
-				JSON.stringify({ event: "stored_context_read_error", error: String(error) }),
-			);
-			return "";
-		}),
-	]);
-	if (adplistProfile.length > 0 || storedContext.length > 0) {
-		console.log(
-			JSON.stringify({
-				event: "search_profile_merge",
-				profile_chars: adplistProfile.length,
-				stored_chars: storedContext.length,
-			}),
-		);
-	}
-	return [adplistProfile, storedContext].filter(Boolean).join(". ");
-}
-
-async function getStoredContextText(env: Env, props: McpUserProps | undefined): Promise<string> {
-	const userId = props?.userId;
-	if (!userId) return "";
-	const existing = await readUserProfile(env, userId);
-	if (!existing) return "";
-	return synthesizeProfileText(existing.profile).text;
-}
-
-// The user's own ADPList profile (identity-service /users/profile/me). v1 D1
-// memory is explicit-only and empty for nearly everyone, so this is what makes
-// search queries personal for most users. Always fails open to "".
+// The user's own ADPList profile (identity-service /users/profile/me) as text.
+// No longer sent as search q (ADPLIST-4623). Always fails open to "".
 export async function fetchAdplistProfileText(
 	env: Env,
 	props: McpUserProps | undefined,
@@ -224,13 +188,6 @@ export function labelsOf(value: unknown): string {
 		})
 		.filter(Boolean);
 	return labels.join(", ");
-}
-
-export function combineIntentWithProfile(intent: string, profileText: string): string {
-	const cleanIntent = intent.trim();
-	const cleanProfile = profileText.trim();
-	if (!cleanProfile) return cleanIntent;
-	return `Stored ADPList career context: ${cleanProfile}\nCurrent request: ${cleanIntent}`;
 }
 
 export function synthesizeProfileText(profile: UserMcpProfile): { text: string; warning?: string } {
